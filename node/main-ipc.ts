@@ -399,9 +399,9 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
    */
   trustedIpcOn('regenerate-thumbnails', (event, item: ImageElement) => {
     regenerateThumbnails(item)
-      .then(() => {
+      .then((screenshotCount: number) => {
         event.sender.send('thumbnail-replaced');
-        event.sender.send('thumbnail-regeneration-complete', item.hash);
+        event.sender.send('thumbnail-regeneration-complete', item.hash, screenshotCount);
       })
       .catch((error: Error) => {
         console.error('Unable to regenerate thumbnails:', error);

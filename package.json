@@ -55,11 +55,12 @@
     "media:source:test": "sh ./bin/package-media-source.sh ./release-test",
     "ng:serve": "ng serve",
     "postinstall": "electron-builder install-app-deps",
-    "test": "npm-run-all -s test:persistence test:local-safety test:import-resilience test:media-toolchain",
+    "test": "npm-run-all -s test:persistence test:local-safety test:import-resilience test:thumbnail-count test:media-toolchain",
     "test:import-resilience": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/media-import-resilience.test.ts",
     "test:local-safety": "ts-node --project tsconfig.persistence-tests.json node/local-operation-safety.test.ts",
     "test:media-toolchain": "ts-node --project tsconfig.persistence-tests.json node/media-toolchain.test.ts",
     "test:persistence": "ts-node --project tsconfig.persistence-tests.json node/vha-file-persistence.test.ts",
+    "test:thumbnail-count": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/thumbnail-count.test.ts",
     "verify:mac:release": "node ./bin/verify-packaged-app.mjs './release/mac-arm64/Video Hub App SIN.app'",
     "verify:mac:test": "node ./bin/verify-packaged-app.mjs './release-test/mac-arm64/Video Hub App SIN.app'"
   },

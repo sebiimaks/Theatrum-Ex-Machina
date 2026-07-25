@@ -15,6 +15,8 @@
     "node/media-import-resilience.test.ts",
     "node/media-tool-paths.ts",
     "node/media-toolchain.test.ts",
+    "node/thumbnail-count.ts",
+    "node/thumbnail-count.test.ts",
     "node/vha-file-persistence.ts",
     "node/vha-file-persistence.test.ts"
   ]

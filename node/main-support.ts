@@ -24,6 +24,7 @@ import { startFileSystemWatching, resetWatchers } from './main-extract-async';
 import { writeVhaJsonAtomically } from './vha-file-persistence';
 import { buildFfprobeArguments } from './local-operation-safety';
 import { getFfprobeTimeoutMs } from './media-import-resilience';
+import { calculateScreenshotCount } from './thumbnail-count';
 
 interface ResolutionMeta {
   label: ResolutionString;
@@ -384,40 +385,6 @@ function getBitrate(fileSize: number, duration: number): number {
 // ===========================================================================================
 
 /**
- * Compute the number of screenshots to extract for a particular video
- * @param screenshotSettings
- * @param duration - number of seconds in a video
- */
-function computeNumberOfScreenshots(screenshotSettings: ScreenshotSettings, duration: number): number {
-  let total: number;
-
-  // fixed or per minute
-  if (screenshotSettings.fixed) {
-    total = screenshotSettings.n;
-  } else {
-    total = Math.ceil(duration / 60 / screenshotSettings.n);
-  }
-
-  // never fewer than 3 screenshots
-  if (total < 3) {
-    total = 3;
-  }
-
-  // never more than would fit in a JPG
-  const screenWidth: number = screenshotSettings.height * (16 / 9);
-  if (total * screenWidth > 65535) {
-    total = Math.floor(65535 / screenWidth);
-  }
-
-  // never more screenshots than seconds in a clip
-  if (duration < total) {
-    total = Math.max(2, Math.floor(duration));
-  }
-
-  return total;
-}
-
-/**
  * Hash a given file using its size
  * @param pathToFile  -- path to file
  * @param stats -- Stats from `fs.stat(pathToFile)`
@@ -516,7 +483,7 @@ export function extractMetadataAsync(
           imageElement.fileSize  = fileStat.size;
           imageElement.height    = origHeight;
           imageElement.mtime     = Math.round(fileStat.mtimeMs);
-          imageElement.screens   = computeNumberOfScreenshots(screenshotSettings, duration);
+          imageElement.screens   = calculateScreenshotCount(screenshotSettings, duration);
           imageElement.width     = origWidth;
           imageElement.fps       = realFps;
 
@@ -628,7 +595,7 @@ export function upgradeToVersion3(finalObject: FinalObject): void {
     finalObject.version = 3;
     finalObject.images.forEach((element: ImageElement) => {
       element.inputSource = 0;
-      element.screens = computeNumberOfScreenshots(finalObject.screenshotSettings, element.duration);
+      element.screens = calculateScreenshotCount(finalObject.screenshotSettings, element.duration);
       // update number of screens to account for too-many or too-few cases
       // as they were not handlede prior to version 3 release
     });

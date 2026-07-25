@@ -30,6 +30,7 @@ import type { ContextMenuCoordinate } from '../../../interfaces/shared-interface
 import type { FinalObject, ImageElement, ScreenshotSettings, ResolutionString } from '../../../interfaces/final-object.interface';
 import { IMPORT_ERROR_TAG, isMetadataImportFailure } from '../../../interfaces/final-object.interface';
 import type { ImportStage } from '../../../node/main-support';
+import { applyRegeneratedScreenshotCount } from '../../../node/thumbnail-count';
 import type { ServerDetails } from './statistics/statistics.component';
 import type { RemoteSettings, SettingsButtonSavedProperties, SettingsObject } from '../../../interfaces/settings-object.interface';
 import type { SortType } from '../pipes/sorting.pipe';
@@ -578,14 +579,24 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.electronService.webFrame.clearCache();
     });
 
-    this.electronService.ipcRenderer.on('thumbnail-regeneration-complete', (event, fileHash: string) => {
+    this.electronService.ipcRenderer.on(
+      'thumbnail-regeneration-complete',
+      (event, fileHash: string, screenshotCount: number) => {
       this.zone.run(() => {
+        const catalogueChanged = applyRegeneratedScreenshotCount(
+          this.imageElementService.imageElements,
+          fileHash,
+          screenshotCount,
+        );
         this.imageElementService.imageElements
           .filter((element: ImageElement) => element.hash === fileHash)
           .forEach((element: ImageElement) => {
             element.uuid = `${element.uuid}-thumbnail-${Date.now()}`;
           });
         this.imageElementService.imageElements = this.imageElementService.imageElements.slice();
+        if (catalogueChanged) {
+          this.imageElementService.finalArrayNeedsSaving = true;
+        }
 
         if (this.currentClickedItem && this.currentClickedItem.hash === fileHash) {
           this.updateCurrentClickedItem(this.currentClickedItem);

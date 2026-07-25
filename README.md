@@ -5,13 +5,19 @@ This is an unsupported personal fork of [Video Hub App 3](http://www.videohubapp
 **All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
 
 - Current fork version: `v3.3.0-sin.8`
-- Change summary updated: 24/07/2026
+- Change summary updated: 25/07/2026
 
 # Fork Changelog
 
 This changelog covers fork-specific commits made after the upstream baseline at [`dcb3229`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/dcb3229) and groups them under the first tagged fork release that contains them.
 
 Uncommitted test work is not included here.
+
+## Unreleased
+
+### Correct thumbnail regeneration counts
+
+Thumbnail regeneration now calculates the required screenshot count from the current hub extraction settings instead of reusing potentially outdated metadata from the selected video. Only the exact queued regeneration job can complete the request, preventing older thumbnail work for the same file from reporting a false success with the wrong count. After successful extraction, the generated count is synchronised to every catalogue entry sharing the preview hash and marked for saving, while an invalid default screenshot selection is cleared; failed or cancelled regeneration leaves catalogue metadata unchanged. Focused tests cover the count calculation, queue identity, and successful metadata update.
 
 ## [v3.3.0-sin.8](https://github.com/sebiimaks/Video-Hub-App-SIN/releases/tag/v3.3.0-sin.8) — 24 July 2026
 
