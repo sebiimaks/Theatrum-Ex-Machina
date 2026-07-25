@@ -1,3 +1,11 @@
+@use "../variables";
+
+:host {
+  display: flex;
+  min-width: 0;
+  width: 100%;
+}
+
 .settings-buttons-group {
   float: left;
   margin-bottom: 10px; // if ever app width is too small, buttons spill over; this pushes them below cutoff
@@ -19,5 +27,61 @@
 
   &:empty {
     display: none;
+  }
+
+  button:focus-visible {
+    outline: 2px solid variables.$gray-90;
+    outline-offset: 1px;
+    position: relative;
+    z-index: 3;
+  }
+}
+
+.ribbon-hover-label {
+  align-items: center;
+  box-sizing: border-box;
+  color: variables.$gray-70;
+  display: flex;
+  flex: 1 1 180px;
+  float: left;
+  font-size: 13px;
+  font-weight: 400;
+  height: 25px;
+  margin-left: 2px;
+  opacity: 0;
+  overflow: hidden;
+  padding: 0 8px;
+  pointer-events: none;
+  transition: opacity 100ms ease-in-out;
+  min-width: 0;
+  max-width: 360px;
+}
+
+.ribbon-hover-label-visible {
+  opacity: 1;
+}
+
+.ribbon-hover-label-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:host-context(.all-settings-dark-mode) {
+  .settings-buttons-group button:focus-visible {
+    outline-color: variables.$pretty-blue;
+  }
+
+  .ribbon-hover-label {
+    color: variables.$gray-10;
+  }
+}
+
+:host-context(.all-settings-flat-icons) {
+  .ribbon-hover-label {
+    height: 18px;
+    line-height: 18px;
+    margin-top: 2px;
   }
 }

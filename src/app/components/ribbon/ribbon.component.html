@@ -8,10 +8,16 @@
 
     @if (!settingsButtons[buttonKey].hidden && settingsButtons[buttonKey].iconName) {
       <button
+        (blur)="clearFocusedButtonLabel(buttonKey)"
         (click)="toggleButton.emit(buttonKey)"
+        (focus)="showFocusedButtonLabel(buttonKey, $event)"
+        (mouseenter)="showHoveredButtonLabel(buttonKey)"
+        (mouseleave)="clearHoveredButtonLabel(buttonKey)"
+        (pointerdown)="clearFocusedButtonLabel(buttonKey)"
+        [attr.aria-label]="settingsButtons[buttonKey].title | translate"
         [ngClass]="settingsButtons[buttonKey].toggled | buttonStylePipe : settingsButtons['darkMode'].toggled
                                                                         : settingsButtons['flatIcons'].toggled"
-        title="{{ settingsButtons[buttonKey].title | translate }}"
+        type="button"
         @buttonAnimation
       >
         <app-icon class="icon" [icon]="settingsButtons[buttonKey].iconName" [size]="18" />
@@ -25,3 +31,16 @@
   }
 
 }
+
+<div
+  aria-hidden="true"
+  class="ribbon-hover-label"
+  [class.ribbon-hover-label-visible]="activeButtonKey !== null"
+  dir="auto"
+>
+  @if (activeButtonKey; as buttonKey) {
+    <span class="ribbon-hover-label-text">
+      {{ settingsButtons[buttonKey].title | translate }}
+    </span>
+  }
+</div>

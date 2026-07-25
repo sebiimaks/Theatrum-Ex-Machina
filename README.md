@@ -15,6 +15,10 @@ Uncommitted test work is not included here.
 
 ## Unreleased
 
+### Show Toolbar Descriptions Beside the Ribbon
+
+Replaced the main ribbon icons' native hover tooltips with a translated description displayed in a reserved area immediately to the right of the toolbar. Descriptions appear on pointer hover and keyboard focus without shifting the surrounding layout, while translated accessible names and a visible keyboard-focus outline are retained. The label uses regular-weight text and adapts to both light and dark themes and the standard and flat icon modes.
+
 ### Correct thumbnail regeneration counts
 
 Thumbnail regeneration now calculates the required screenshot count from the current hub extraction settings instead of reusing potentially outdated metadata from the selected video. Only the exact queued regeneration job can complete the request, preventing older thumbnail work for the same file from reporting a false success with the wrong count. After successful extraction, the generated count is synchronised to every catalogue entry sharing the preview hash and marked for saving, while an invalid default screenshot selection is cleared; failed or cancelled regeneration leaves catalogue metadata unchanged. Focused tests cover the count calculation, queue identity, and successful metadata update.
