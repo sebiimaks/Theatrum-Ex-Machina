@@ -7,37 +7,135 @@ This is an unsupported personal fork of [Video Hub App 3](http://www.videohubapp
 - Current fork version: `v3.3.0-sin.8`
 - Change summary updated: 24/07/2026
 
-## Changes from the Upstream App
+# Fork Changelog
 
-| Change Location | Change | Justification |
-| --- | --- | --- |
-| Core Functionality<br>↳ Catalogue Editor | Added an in-app catalogue JSON editor with tag autocomplete, normalized comma-separated tag fields, batch tagging for displayed search results, support for new custom tags, copyable file hashes, automatic main-view refresh after closing the editor, and higher-contrast entry rows with alternating backgrounds and active-row highlighting. | Provides a practical way to inspect and repair hub catalogue metadata, makes individual and large-scale tag maintenance faster, exposes hashes for use outside the app, and keeps dense catalogue entries visually distinct. |
-| Core Functionality<br>↳ Catalogue Persistence | Replaced direct catalogue and settings writes with validated atomic saves, serialized overlapping catalogue updates, and added confirmation-based recovery from a valid `.vha2.bak` file. Invalid, empty, unreadable, or unavailable catalogues now produce controlled errors instead of crashing or being overwritten, and failed startup opens the normal hub wizard. | Protects catalogue data during editor saves, hub switching, shutdown, interrupted writes, malformed JSON, and disconnected storage while retaining a safe path back into the application. |
-| Core Functionality<br>↳ Local Operation Safety | Restricted privileged application messages to the active main window, replaced shell-built player commands with discrete process arguments, limited external links to ordinary web addresses, validated absolute paths, confined rename and deletion to configured source folders, and made shutdown wait for successful settings and catalogue saves. | Reduces command-injection, path-traversal, symlink-escape, unintended file-operation, and shutdown data-loss risks without changing normal local workflows. |
-| Core Functionality<br>↳ Media Extraction | Increased thumbnail and filmstrip extraction time allowances to four times their upstream values. | Reduces failed thumbnail generation for slow files, high-resolution videos, and media stored on network drives. |
-| Core Functionality<br>↳ Media Import | Added longer mounted-volume probe timeouts, one delayed retry for temporary failures, and path-only catalogue entries tagged 'import_error' when metadata remains unreadable. A failed file no longer stops the rest of the import. | Improves reliability with slow or temporarily incomplete network files, preserves a usable catalogue entry for later recovery, and allows bulk imports to continue past damaged media. |
-| Core Functionality<br>↳ Thumbnail Management | Added a 'Regenerate thumbnails' context-menu action that recreates the selected video's thumbnail, filmstrip, and enabled preview-clip assets through the existing extraction queue, refreshes the displayed item, and reports success or failure. | Allows stale or damaged preview assets to be repaired for one video without rescanning or rebuilding the entire hub. |
-| Core Functionality<br>↳ Media Toolchain | Replaced opaque downloaded FFmpeg packages with locally built FFmpeg 8.1.2 and a pinned x264 source revision. Network support is disabled in the media tools, and packaged applications resolve only their own verified copies. | Retains broad local-media compatibility while giving the fork controlled source provenance, exact checksums, a macOS 12 compatibility floor, and protection from unexpected packaged-tool overrides. |
-| Core Functionality<br>↳ Playback Statistics | Added a 'Reset Times Played' option and made the times-played filter handle missing values safely. | Allows playback statistics to be cleared without recreating a hub and prevents absent legacy values from producing invalid filter ranges. |
-| Core Functionality<br>↳ Tag Management | Added confirmation-protected catalogue-wide tag removal from the Tags tray, including cleanup of the associated tag count and colour metadata. | Allows obsolete tags to be removed from every video in one controlled operation while reducing accidental catalogue-wide changes. |
-| File Management<br>↳ Deletion | Added confirmation dialogs to both normal and permanent deletion from the context menu. | Reduces accidental file loss and makes the irreversible permanent-delete path explicit before it runs. |
-| Development<br>↳ Code Quality | Repaired the lint workflow to use the repository's declared ESLint tooling instead of the removed, undeclared TSLint command. Modernised CodeQL with current actions, explicit code-scanning permissions, and JavaScript and TypeScript analysis. | Restores working local static analysis and reliable GitHub code scanning for contributors without changing application behaviour at runtime. |
-| Development<br>↳ Automated Verification | Expanded the test suite to cover catalogue persistence and recovery, privileged local operations, difficult filenames, FFmpeg and FFprobe versions, metadata probing, thumbnails, filmstrips, preview clips, packaged resources, binary architecture, deployment targets, checksums, and dynamic-library boundaries. Test and production Mac builds now verify the corresponding-source archive from their own output directory. | Detects regressions in the app's highest-risk local workflows and verifies that packaged media and licensing resources match the controlled build without depending on stale test artifacts. |
-| Build and Packaging | Replaced broad Electron packaging rules with an explicit runtime-file allowlist. | Prevents build caches, source files, and other development-only content from being bundled, avoiding packages that can grow to approximately 1 GB. |
-| Build and Packaging<br>↳ Public Distribution | Changed the fork's GitHub releases to source-only distribution and removed previously attached application binaries. Prebuilt packages are kept outside the repository and are not attached to releases. | Minimizes public binary distribution and licensing risk while retaining the complete fork history and versioned source snapshots. |
-| Build and Packaging<br>↳ Application Identity | Renamed packaged applications to 'Video Hub App SIN' and assigned fork-specific macOS and Debian identifiers. | Clearly distinguishes this unsupported personal fork from installations of the original supported application. |
-| Build and Packaging<br>↳ Debian AMD64 | Added a production Debian package target for native local builds on Debian 13 AMD64. | Provides a native Debian installation and upgrade path without publishing application binaries from GitHub-hosted workflows. |
-| Build and Packaging<br>↳ macOS ARM64 | Configured repeatable unsigned Apple Silicon DMG packaging for local builds. | Provides a consistent ARM64 macOS package with the correct architecture-specific FFmpeg binaries while keeping generated applications private to the local system. |
-| Licensing and Attribution<br>↳ Binary Packages | Added the upstream MIT licence to packaged application resources and corrected the displayed upstream copyright year to 2022. | Ensures redistributed binaries carry the copyright and permission notice required by the original licence. |
-| Licensing and Attribution<br>↳ Third-Party Components | Added generated notices for packaged runtime dependencies; included Electron and Chromium notices; corrected the in-app FFmpeg licence statement; and added exact FFmpeg, x264, licence, build-manifest, build-script, and corresponding-source packaging for locally produced applications. | Preserves upstream rights and provides the materials needed to satisfy the separate licences if a locally built package is ever redistributed. |
-| User Interface<br>↳ Top Toolbar | Increased the top toolbar to 40 px and enlarged its controls and icons by approximately 20% at every app zoom level. | Improves usability and target visibility on high-resolution displays while preserving the existing app-wide zoom feature. |
-| User Interface<br>↳ Dark Mode | Improved dark-mode colours and contrast across the Tags tray, Settings tabs, Settings buttons, folder controls, Video Details controls, tag-removal controls, and related text. | Makes labels and controls readable against dark backgrounds and resolves low-contrast active, inactive, disabled, and hover states. |
-| User Interface<br>↳ Settings | Standardised English Settings wording: tabs, headings, and subsection headings use title case. Options and buttons use title case. Ampersands were replaced and small copy errors were corrected. | Gives the Settings interface a clearer and more consistent visual hierarchy. |
-| User Interface<br>↳ Current Hub | Improved grouping around 'Videos Located Here', 'Edit Folders', and 'Server'; removed the trailing punctuation from the source heading; removed added spacing between source-folder rows; and made the final folder in each path white in dark mode. | Separates major control groups while keeping long source lists compact and making each folder destination easier to identify. |
-| User Interface<br>↳ Main Settings | Reduced the 'Reset Zoom' label size and made the plus and minus icons light in dark mode. | Keeps the zoom controls visually balanced with their heading and ensures the icon shapes remain visible. |
-| User Interface<br>↳ Search Sidebar | Added automatic readable foreground colours to custom filter chips throughout the sidebar. | Keeps typed filter values legible across the different chip background colours used by video-name, tag, folder-name, and fuzzy-search filters. |
-| User Interface<br>↳ Video Details | Moved video notes to the right side of the details header and restyled the zoom controls to match the Main Settings controls. | Prevents notes from overlapping the video path, improves use of horizontal space, and gives zoom controls a consistent and readable appearance. |
-| Fork Maintenance<br>↳ Version and Updates | Removed the upstream 'Check for New Version' function, displayed the fork version, linked the unsupported-build warning to this repository, and added a separate link to the original supported app. | Prevents a personal fork from presenting upstream releases as compatible fork updates while preserving clear attribution and a route to the supported project. |
+This changelog covers fork-specific commits made after the upstream baseline at [`dcb3229`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/dcb3229) and groups them under the first tagged fork release that contains them.
+
+Uncommitted test work is not included here.
+
+## [v3.3.0-sin.8](https://github.com/sebiimaks/Video-Hub-App-SIN/releases/tag/v3.3.0-sin.8) — 24 July 2026
+
+### [`bfca319`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/bfca319) — Prepare v3.3.0-sin.8 release
+
+Updated the version consistently across the application, package metadata, lockfile, and README. The release documentation now covers resilient media imports, thumbnail regeneration, file-hash copying, Current Hub refinements, CodeQL maintenance, and improved Catalogue Editor contrast. Production macOS packaging also gained the same packaged-application verification used by test builds, including verification of the corresponding media-source archive beside the build being checked.
+
+### [`0e48891`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/0e48891) — Improve JSON editor entry contrast
+
+Made dense Catalogue Editor results easier to distinguish by adding alternating row backgrounds, stronger borders, and a clearer divider beside the action controls. Hovered, keyboard-focused, deleted, light-mode, and dark-mode rows each receive an appropriate visual state, reducing the chance of editing the wrong entry.
+
+### [`55af515`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/55af515) — Add thumbnail regeneration and hash copying
+
+Added a context-menu command that deletes and recreates the selected video's thumbnail, filmstrip, and enabled preview-clip files through the existing extraction queue. The visible item is refreshed afterward and the app reports whether the operation succeeded or failed. The Catalogue Editor also gained an accessible control for copying a file hash, while the remaining added spacing between Current Hub folder rows was removed.
+
+### [`15f1c14`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/15f1c14) — Fix CodeQL workflow
+
+Modernised the GitHub CodeQL workflow to use current checkout and CodeQL actions and to analyse JavaScript and TypeScript explicitly. It also grants the permissions required to publish code-scanning results and removes obsolete checkout and autobuild steps, restoring a smaller and more reliable security-analysis workflow. This changes repository checks rather than application behaviour.
+
+### [`6008b94`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/6008b94) — Refine Current Hub folder list
+
+Reduced the vertical gap between source folders from 18 pixels to 8 pixels so hubs containing several locations use space more efficiently. The final folder name in every path is now marked separately and rendered white in dark mode, making the actual destination easier to identify without hiding the parent path.
+
+### [`4b0cb25`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/4b0cb25) — Handle media import failures gracefully
+
+Made imports tolerant of damaged, incomplete, slow, or temporarily unavailable media, particularly on mounted and network storage. FFprobe now receives a five-minute local timeout or an eight-minute mounted-volume timeout, and quick failures are retried once after the file has had time to settle. If probing still fails, the app creates a path-only catalogue entry tagged `import_error`, skips thumbnail extraction for that entry, shows a clear placeholder, and continues importing the remaining files instead of stopping the whole operation. Focused tests cover timeout selection, retry behaviour, and fallback-entry creation.
+
+## [v3.3.0-sin.7](https://github.com/sebiimaks/Video-Hub-App-SIN/releases/tag/v3.3.0-sin.7) — 22 July 2026
+
+### [`822e274`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/822e274) — Prepare v3.3.0-sin.7
+
+Introduced a substantial local-security and packaging upgrade. Privileged application requests are accepted only from the active window; media paths, external links, renames, deletions, and custom-player launches are validated and handled without assembling shell commands; and shutdown waits for catalogue and settings saves to finish. The app now packages locally built FFmpeg 8.1.2 and a pinned x264 revision with network support disabled, corresponding source code, licence notices, checksums, and automated verification of architecture, deployment target, linkage, and extraction behaviour. Public binary-building workflows were removed in favour of source-only GitHub releases and controlled local builds.
+
+## [v3.3.0-sin.6](https://github.com/sebiimaks/Video-Hub-App-SIN/releases/tag/v3.3.0-sin.6) — 21 July 2026
+
+### [`baa9229`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/baa9229) — Prepare v3.3.0-sin.6
+
+Synchronised the `v3.3.0-sin.6` version across the runtime, package metadata, lockfile, and README. The release documentation was updated to describe the new atomic-save and backup-recovery protections and to show the matching Debian and macOS package names. This was a release-preparation change and introduced no additional runtime logic.
+
+### [`dfbf7d0`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/dfbf7d0) — Harden catalogue saves and recovery
+
+Replaced direct catalogue and settings writes with validated atomic saves that run one at a time. New data is written to a temporary file, forced to disk, checked by reading it back, and then moved into place; the previous valid catalogue is retained as a `.vha2.bak` backup. Opening a malformed, empty, unreadable, missing, or disconnected catalogue now produces a controlled explanation instead of crashing, offers recovery when a valid backup exists, and preserves a non-empty damaged file for inspection. Save failures are shown to the user and prevent unsafe hub switching, editor closure, or application shutdown, while focused persistence tests exercise the main recovery and overlapping-write cases.
+
+## [v3.3.0-sin.5](https://github.com/sebiimaks/Video-Hub-App-SIN/releases/tag/v3.3.0-sin.5) — 20 July 2026
+
+### [`0a5e92c`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/0a5e92c) — Add JSON editor tag workflows
+
+Expanded the Catalogue Editor with normalised comma-separated tag fields, case-insensitive duplicate prevention, support for new custom tags, and autocomplete that can be accepted with the Tab key. A batch toolbar can add tags to every result currently displayed by the editor's search, and closing the editor now refreshes the main gallery, Details tray, and scrolling results list immediately. This commit also promoted the fork to `v3.3.0-sin.5`, updated package names and installation guidance, and documented that the macOS build is unsigned and unnotarized.
+
+### [`e4fa163`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/e4fa163) — Improve global tag removal controls
+
+Added a catalogue-wide removal control to manual tags in the Tags tray. Before anything changes, the confirmation dialog names the tag and reports how many videos use it. Confirming removes the tag from every affected video, clears its count and colour metadata, marks the catalogue for saving, and refreshes any open details view, allowing obsolete tags to be cleaned up without an easy accidental bulk operation.
+
+### [`1417549`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/1417549) — Improve dark-mode details and sidebar contrast
+
+Moved Video Details notes into a dedicated area on the right so they no longer overlap the file path, and restyled the local zoom controls to match the clearer Main Settings design. Search-sidebar filter chips now choose black or white foreground text according to their background colour, keeping video-name, tag, folder-name, and fuzzy-search values readable in dark mode. This was a user-interface change only.
+
+## [v3.3.0-sin.4](https://github.com/sebiimaks/Video-Hub-App-SIN/releases/tag/v3.3.0-sin.4) — 19 July 2026
+
+### [`8f2da37`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/8f2da37) — Standardise release filenames
+
+Standardised macOS package names and GitHub Actions artifact names on the lowercase `video-hub-app-sin` convention already used by the Debian package. This makes files easier to identify and reference consistently in documentation and automation. Package contents, application behaviour, and version numbers were unchanged.
+
+### [`217b6d9`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/217b6d9) — Promote fork-specific sin.4 packages
+
+Promoted the fork to `v3.3.0-sin.4` and consistently renamed its application, metadata, visible interface, file association, repository links, and platform identifiers to `Video Hub App SIN`. Added a native Debian package target and an unsigned macOS ARM64 workflow, with checksums and retained build artifacts, and included the upstream MIT licence in packaged applications. Installation, manual-update, attribution, and security-reporting documentation was rewritten so the unsupported fork could not easily be confused with the original supported application.
+
+### [`96e52a8`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/96e52a8) — Use Linux icon set for Debian packaging
+
+Changed Linux packaging to use the project's PNG icon set instead of the macOS `.icns` file. This supplies Electron Builder with the format and sizes expected for Debian packages, avoiding icon-processing failures and improving the installed application's presentation. Runtime behaviour was unchanged.
+
+### [`2b46310`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/2b46310) — Handle legacy peer dependencies in Debian build
+
+Adjusted the Debian workflow to install dependencies using npm's legacy peer-dependency handling. This allows the repository's locked dependency set to install despite an older package declaring an outdated Angular compatibility range. It affects build reliability only and does not alter application behaviour or package identity.
+
+### [`ea91d52`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/ea91d52) — Add Debian AMD64 test build workflow
+
+Added a manually triggered GitHub Actions workflow that checked and built the application on Ubuntu 24.04 with Node.js 22 before creating a Debian AMD64 package and SHA-256 checksum. The result was retained as a temporary CI artifact rather than published automatically, providing an early repeatable way to produce Linux test builds.
+
+## [v3.3.0-sin.3](https://github.com/sebiimaks/Video-Hub-App-SIN/releases/tag/v3.3.0-sin.3) — 19 July 2026
+
+### [`9900211`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/9900211) — Refine README settings summary
+
+Reworded the README's Settings summary to state that both option labels and buttons use title case. This was a documentation-only clarification and did not change the interface or application behaviour.
+
+### [`22eba40`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/22eba40) — Promote fork settings and UI updates
+
+Promoted the fork to `v3.3.0-sin.3` and rewrote the README as a structured account of fork changes, their reasons, the support disclaimer, attribution, and links to the original application. Removed the upstream update checker so the fork would not offer potentially incompatible upstream releases, replacing it with clear links to this repository and the supported original app. Settings wording was standardised, Current Hub sections were spaced and grouped more clearly, zoom controls were made more readable, and several labels and copy errors were corrected.
+
+### [`742ea72`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/742ea72) — Improve high-resolution and dark mode UI
+
+Raised the top toolbar from 32 to 40 pixels and enlarged its controls and icons, with related offsets adjusted so the larger toolbar remains aligned throughout the application. Dark-mode backgrounds, borders, text, form controls, tabs, the Tags tray, sidebar, statistics, and active states received stronger contrast. These changes make controls easier to see and target on high-resolution displays without changing catalogue behaviour; test-release directories were also added to `.gitignore`.
+
+## [v3.3.0-sin.2](https://github.com/sebiimaks/Video-Hub-App-SIN/releases/tag/v3.3.0-sin.2) — 18 July 2026
+
+### [`6deb525`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/6deb525) — Exclude development files from app package
+
+Replaced the broad Electron package pattern and long exclusion list with an explicit allowlist containing only compiled application output, main-process JavaScript, shared interfaces, and translations. This prevents source files, caches, and other development material from being bundled, keeping application packages smaller and making their contents more predictable.
+
+### [`bc8eeaa`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/bc8eeaa) — Repair ESLint checks
+
+Replaced the removed, undeclared TSLint command with Angular's configured ESLint runner and declared ESLint explicitly as a development dependency. Existing legacy patterns were configured as warnings where appropriate, while the affected source files received type improvements and behaviour-preserving cleanup. This restored a usable static-analysis command for maintainers without intentionally changing the user experience.
+
+### [`324fb48`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/324fb48) — Confirm file deletion from context menu
+
+Added a confirmation dialog before either moving a selected video to the trash or deleting it permanently from the context menu. The prompt names the selected file, and permanent deletion receives a stronger warning that the operation cannot be undone. The main process receives the deletion request only after explicit confirmation, reducing accidental file loss while preserving both available deletion modes.
+
+## [v3.3.0-sin.1](https://github.com/sebiimaks/Video-Hub-App-SIN/releases/tag/v3.3.0-sin.1) — 18 July 2026
+
+### [`f46b133`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/f46b133) — Update README.md
+
+Expanded the README with a dated summary of the Catalogue Editor, play-count reset, and longer extraction timeouts. It also clarified that the fork worked for its maintainer but remained unsupported, and restored explicit thanks and attribution to the original developer. This commit changed documentation only.
+
+### [`8c50f99`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/8c50f99) — Add timeout fix and times played reset addition
+
+Increased thumbnail and filmstrip extraction time allowances to four times their upstream values, reducing failures with high-resolution, slow, or network-hosted media. Added a `Reset Times Played` action that clears every video's play count, resets the related filter, marks the catalogue for saving when any play count changes, and confirms completion. Missing play-count values in older catalogues are treated as zero so they do not produce invalid filter ranges.
+
+### [`8b1c714`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/8b1c714) — Update README.md
+
+Replaced the upstream README with a short introduction identifying this repository as a personal fork whose additions were produced with an LLM. It established the initial support disclaimer and did not change application behaviour.
+
+### [`68f2b47`](https://github.com/sebiimaks/Video-Hub-App-SIN/commit/68f2b47) — Add catalogue JSON editor
+
+Added an in-app Catalogue Editor for searching and directly correcting hub metadata such as names, paths, tags, ratings, year, play count, default screenshot selection, and notes. Entries can be marked as deleted or restored, and the editor displays active and deleted counts while updating filters and tag information as edits are made. Changes can be saved to the currently open catalogue without closing the application, with visible success or failure feedback; the catalogue picker also accepts `.json` files alongside `.vha2` files.
 
 ## Distribution and Local Builds
 
