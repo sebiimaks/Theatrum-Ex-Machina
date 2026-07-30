@@ -29,6 +29,11 @@ import { SortOrderComponent } from './sort-order/sort-order.component';
 import type { ContextMenuCoordinate } from '../../../interfaces/shared-interfaces';
 import type { FinalObject, ImageElement, ScreenshotSettings, ResolutionString } from '../../../interfaces/final-object.interface';
 import { IMPORT_ERROR_TAG, isMetadataImportFailure } from '../../../interfaces/final-object.interface';
+import {
+  ensureDateAddedForNewEntry,
+  findDeletedMetadataOrigin,
+  inheritDateAdded,
+} from '../../../interfaces/date-added';
 import type { ImportStage } from '../../../node/main-support';
 import type {
   FolderThumbnailRegenerationProgress,
@@ -1022,7 +1027,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       // rather than appending a duplicate, preserving any user-entered data.
       const existingFailureIndex = this.imageElementService.imageElements.findIndex((currentElement) => {
         return isMetadataImportFailure(currentElement)
-          && currentElement.inputSource === element.inputSource
+          && Number(currentElement.inputSource) === Number(element.inputSource)
           && currentElement.partialPath === element.partialPath
           && currentElement.fileName === element.fileName;
       });
@@ -1057,17 +1062,19 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
       // if the element is part of any of the deleted videos, copy over the metadata into it !
       // important for when user renames a folder for example
-      this.imageElementService.imageElements
-        .filter((currentElements: ImageElement) => {
-          return currentElements.deleted;
-        })
-        .forEach((deletedElement: ImageElement) => {
-          if (deletedElement.hash === element.hash) {
-            this.copyMetaProperties(element, deletedElement);
-          }
-        });
+      const deletedOrigin = findDeletedMetadataOrigin(
+        element,
+        this.imageElementService.imageElements,
+      );
+      const inheritedExistingMetadata = deletedOrigin !== undefined;
+      if (deletedOrigin) {
+        this.copyMetaProperties(element, deletedOrigin);
+      }
 
       if (!this.demo || this.imageElementService.imageElements.length <= 50) {
+        if (!inheritedExistingMetadata) {
+          ensureDateAddedForNewEntry(element);
+        }
         if (isMetadataImportFailure(element)) {
           element.tags = element.tags || [];
           if (!element.tags.includes(IMPORT_ERROR_TAG)) {
@@ -1116,6 +1123,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
    */
   copyMetaProperties(destination: ImageElement, origin: ImageElement): void {
     // WARNING - some day in MacOS we'll add OS tags, so this will need to be a merge, not replace
+    inheritDateAdded(destination, origin);
     destination.notes       = origin.notes;
     destination.stars       = origin.stars;
     destination.tags        = origin.tags;

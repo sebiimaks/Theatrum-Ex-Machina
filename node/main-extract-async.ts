@@ -39,6 +39,7 @@ import {
 } from './thumbnail-transaction';
 
 export interface TempMetadataQueueObject {
+  dateAdded: number;
   fullPath: string;
   inputSource: number;
   name: string;
@@ -614,6 +615,7 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
     })
     .then((imageElement: ImageElementPlus) => {
       imageElement.cleanName = cleanUpFileName(file.name);
+      imageElement.dateAdded = file.dateAdded;
       imageElement.fileName = file.name;
       imageElement.fullPath = file.fullPath; // insert this converting `ImageElement` to `ImageElementPlus`
       imageElement.inputSource = file.inputSource;
@@ -680,6 +682,7 @@ function superFastSystemScan(inputDir: string, inputSource: number): void {
       const partial: string = path.relative(inputDir, parsed.dir).replace(/\\/g, '/');
 
       const newItem: TempMetadataQueueObject = {
+        dateAdded: Date.now(),
         fullPath: fullPath,
         inputSource: inputSource,
         name: parsed.base,
@@ -768,6 +771,7 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
       }
 
       const newItem: TempMetadataQueueObject = {
+        dateAdded: Date.now(),
         fullPath: fullPath,
         inputSource: inputSource,
         name: fileName,
@@ -787,6 +791,7 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
       }
 
       enqueueMetadata({
+        dateAdded: Date.now(),
         fullPath,
         inputSource,
         name: fileName,

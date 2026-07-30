@@ -1,7 +1,12 @@
 import type { ImageElement, StarRating } from '../../../../interfaces/final-object.interface';
+import {
+  formatDateAddedForDisplay,
+  formatDateAddedForInput,
+  parseDateAddedInput,
+} from '../../../../interfaces/date-added';
 
 export type CatalogueSearchField = 'all' | 'name' | 'file' | 'path' | 'tags' | 'hash';
-export type CatalogueOverwriteField = 'cleanName' | 'stars' | 'year' | 'timesPlayed' | 'defaultScreen' | 'notes';
+export type CatalogueOverwriteField = 'cleanName' | 'dateAdded' | 'stars' | 'year' | 'timesPlayed' | 'defaultScreen' | 'notes';
 export type CatalogueOverwriteValue = number | string | undefined;
 
 export interface CatalogueSearchCriterion {
@@ -22,6 +27,7 @@ const starValues: StarRating[] = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5];
 
 export const catalogueOverwriteFieldLabels: Record<CatalogueOverwriteField, string> = {
   cleanName: 'Clean Name',
+  dateAdded: 'Date Added',
   defaultScreen: 'Default Screen',
   notes: 'Notes',
   stars: 'Stars',
@@ -42,6 +48,8 @@ export function applyCatalogueOverwrite(
     if (field === 'cleanName' && typeof value === 'string' && item.cleanName !== value) {
       item.cleanName = value;
       changed = true;
+    } else if (field === 'dateAdded') {
+      changed = setOptionalNumber(item, 'dateAdded', value);
     } else if (field === 'stars' && typeof value === 'number' && item.stars !== value) {
       item.stars = value as StarRating;
       changed = true;
@@ -106,6 +114,19 @@ export function validateCatalogueOverwrite(
     return trimmedDraft
       ? validOverwrite(draft)
       : validClear();
+  }
+
+  if (field === 'dateAdded') {
+    const parsedDate = parseDateAddedInput(draft);
+
+    if (parsedDate === undefined) {
+      return validClear();
+    }
+    if (parsedDate === null) {
+      return invalidOverwrite('Enter a valid local date and time from 1970 onwards.');
+    }
+
+    return validOverwrite(parsedDate, formatDateAddedForDisplay(parsedDate));
   }
 
   if (field === 'stars') {
@@ -173,6 +194,7 @@ function getCatalogueSearchText(item: ImageElement, field: CatalogueSearchField)
     tags,
     item.hash,
     item.inputSource,
+    formatDateAddedForInput(item.dateAdded).replace('T', ' '),
     item.notes,
     item.year,
   ].join(' ').toLowerCase();
@@ -189,7 +211,7 @@ function invalidOverwrite(error: string): CatalogueOverwriteValidation {
 
 function setOptionalNumber(
   item: ImageElement,
-  field: 'defaultScreen' | 'year',
+  field: 'dateAdded' | 'defaultScreen' | 'year',
   value: CatalogueOverwriteValue,
 ): boolean {
   if (value === undefined) {

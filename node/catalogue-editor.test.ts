@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import type { ImageElement } from '../interfaces/final-object.interface';
 import { NewImageElement } from '../interfaces/final-object.interface';
+import { parseDateAddedInput } from '../interfaces/date-added';
 import {
   applyCatalogueOverwrite,
   filterCatalogueEntries,
@@ -125,4 +126,33 @@ test('overwrites only changed entries and can clear optional fields', () => {
   assert.equal(applyCatalogueOverwrite([first, second], 'stars', 5.5), 2);
   assert.equal(first.stars, 5.5);
   assert.equal(second.stars, 5.5);
+});
+
+test('validates and applies an editable Date Added value', () => {
+  const first = image();
+  const second = image({ index: 2 });
+  const draft = '2026-07-30T14:45';
+  const timestamp = parseDateAddedInput(draft);
+
+  assert.equal(typeof timestamp, 'number');
+  assert.equal(validateCatalogueOverwrite('dateAdded', '2026-02-30T12:00', [first]).valid, false);
+  assert.deepEqual(validateCatalogueOverwrite('dateAdded', '', [first]), {
+    action: 'clear',
+    displayValue: 'Clear Field',
+    valid: true,
+    value: undefined,
+  });
+
+  const validation = validateCatalogueOverwrite('dateAdded', draft, [first, second]);
+  assert.equal(validation.valid, true);
+  assert.equal(validation.value, timestamp);
+  assert.match(validation.displayValue, /2026/);
+
+  assert.equal(applyCatalogueOverwrite([first, second], 'dateAdded', timestamp as number), 2);
+  assert.equal(first.dateAdded, timestamp);
+  assert.equal(second.dateAdded, timestamp);
+  assert.equal(applyCatalogueOverwrite([first, second], 'dateAdded', timestamp as number), 0);
+  assert.equal(applyCatalogueOverwrite([first, second], 'dateAdded', undefined), 2);
+  assert.equal(first.dateAdded, undefined);
+  assert.equal(second.dateAdded, undefined);
 });

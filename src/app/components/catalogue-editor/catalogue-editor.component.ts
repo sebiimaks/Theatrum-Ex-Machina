@@ -2,6 +2,7 @@ import type { OnChanges, SimpleChanges } from '@angular/core';
 import { Component, ElementRef, EventEmitter, Input, Output, QueryList, ViewChildren } from '@angular/core';
 
 import type { ImageElement, StarRating } from '../../../../interfaces/final-object.interface';
+import { formatDateAddedForInput, parseDateAddedInput } from '../../../../interfaces/date-added';
 import { ImageElementService } from '../../services/image-element.service';
 import { ModalService } from '../modal/modal.service';
 import { ManualTagsService } from '../tags-manual/manual-tags.service';
@@ -64,6 +65,7 @@ export class CatalogueEditorComponent implements OnChanges {
 
   readonly overwriteFieldOptions: OverwriteFieldOption[] = [
     { label: 'Clean Name', value: 'cleanName' },
+    { label: 'Date Added', value: 'dateAdded' },
     { label: 'Stars', value: 'stars' },
     { label: 'Year', value: 'year' },
     { label: 'Times Played', value: 'timesPlayed' },
@@ -82,6 +84,7 @@ export class CatalogueEditorComponent implements OnChanges {
 
   private tagDrafts: { [index: number]: string } = {};
   private tagTypeaheads: { [index: number]: string } = {};
+  private dateAddedErrors = new WeakMap<ImageElement, string>();
   private nextSearchCriterionId = 1;
 
   constructor(
@@ -113,6 +116,10 @@ export class CatalogueEditorComponent implements OnChanges {
   }
 
   get batchOverwritePlaceholder(): string {
+    if (this.batchOverwriteField === 'dateAdded') {
+      return 'New local date and time, or leave blank to clear';
+    }
+
     if (this.batchOverwriteField === 'year' || this.batchOverwriteField === 'defaultScreen') {
       return 'New value, or leave blank to clear';
     }
@@ -128,6 +135,10 @@ export class CatalogueEditorComponent implements OnChanges {
     return this.batchOverwriteField === 'year'
       || this.batchOverwriteField === 'timesPlayed'
       || this.batchOverwriteField === 'defaultScreen';
+  }
+
+  get batchOverwriteUsesDateInput(): boolean {
+    return this.batchOverwriteField === 'dateAdded';
   }
 
   get deletedCount(): number {
@@ -456,6 +467,41 @@ export class CatalogueEditorComponent implements OnChanges {
 
     if (item.defaultScreen !== parsed) {
       item.defaultScreen = parsed;
+      this.markDirty();
+    }
+  }
+
+  dateAddedInputValue(item: ImageElement): string {
+    return formatDateAddedForInput(item.dateAdded);
+  }
+
+  dateAddedErrorFor(item: ImageElement): string {
+    return this.dateAddedErrors.get(item) || '';
+  }
+
+  updateDateAdded(item: ImageElement, value: string, input?: HTMLInputElement): void {
+    const parsed = parseDateAddedInput(value);
+
+    if (parsed === null) {
+      this.dateAddedErrors.set(item, 'Enter a valid local date and time.');
+      if (input) {
+        input.value = formatDateAddedForInput(item.dateAdded);
+      }
+      return;
+    }
+
+    this.dateAddedErrors.delete(item);
+
+    if (parsed === undefined) {
+      if (item.dateAdded !== undefined) {
+        delete item.dateAdded;
+        this.markDirty();
+      }
+      return;
+    }
+
+    if (item.dateAdded !== parsed) {
+      item.dateAdded = parsed;
       this.markDirty();
     }
   }

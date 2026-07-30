@@ -50,6 +50,7 @@ export interface ImageElement {
   // ========================================================================
   // OPTIONAL
   // ------------------------------------------------------------------------
+  dateAdded?: number;             // timestamp when the video was first added to this catalogue
   defaultScreen?: number;        // index of default screenshot to show
   notes?: string;                // any free-form notes a user may want to add to any video
   metadataImportFailed?: boolean; // ffprobe could not read this file; path-based playback can still be attempted

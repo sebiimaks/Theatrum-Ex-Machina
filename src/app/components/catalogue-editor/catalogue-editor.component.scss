@@ -239,6 +239,23 @@
   min-width: 142px;
 }
 
+.catalogue-overwrite-date-value {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+
+  input {
+    width: 100%;
+  }
+}
+
+.catalogue-overwrite-hint {
+  color: variables.$gray-60;
+  font-size: 10px;
+  line-height: 12px;
+}
+
 .catalogue-save {
   background: variables.$pretty-blue;
   border-color: variables.$dark-blue;
@@ -404,6 +421,12 @@
   min-width: 0;
 }
 
+.catalogue-field-error {
+  color: variables.$pretty-red;
+  font-size: 10px;
+  line-height: 12px;
+}
+
 .catalogue-row input,
 .catalogue-row select {
   height: 26px;
@@ -413,8 +436,12 @@
   height: 24px;
 }
 
-.notes-field {
+.date-added-field {
   grid-column: span 2;
+}
+
+.notes-field {
+  grid-column: 1 / -1;
 
   textarea {
     height: 42px;
@@ -502,6 +529,10 @@
 }
 
 .catalogue-editor-dark {
+  input[type='datetime-local'] {
+    color-scheme: dark;
+  }
+
   background: variables.$gray-85;
   border-color: variables.$black;
   color: variables.$gray-10;

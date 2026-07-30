@@ -180,6 +180,28 @@
     </select>
 
     <ng-template #overwriteTextValue>
+      <div
+        *ngIf="batchOverwriteUsesDateInput; else overwritePlainTextValue"
+        class="catalogue-overwrite-date-value"
+      >
+        <input
+          [ngModel]="batchOverwriteDraft"
+          (ngModelChange)="updateBatchOverwriteDraft($event)"
+          (keydown.enter)="requestBatchOverwrite()"
+          aria-describedby="catalogue-date-added-overwrite-hint"
+          aria-label="New Date Added value in local time"
+          class="catalogue-overwrite-value"
+          step="60"
+          type="datetime-local"
+        >
+        <span
+          class="catalogue-overwrite-hint"
+          id="catalogue-date-added-overwrite-hint"
+        >Local time; leave blank to clear.</span>
+      </div>
+    </ng-template>
+
+    <ng-template #overwritePlainTextValue>
       <input
         [ngModel]="batchOverwriteDraft"
         (ngModelChange)="updateBatchOverwriteDraft($event)"
@@ -317,6 +339,22 @@
             min="0"
             type="number"
           >
+        </label>
+
+        <label class="date-added-field">
+          <span>Date Added</span>
+          <input
+            #dateAddedInput
+            [ngModel]="dateAddedInputValue(item)"
+            (ngModelChange)="updateDateAdded(item, $event, dateAddedInput)"
+            step="60"
+            type="datetime-local"
+          >
+          <span
+            *ngIf="dateAddedErrorFor(item)"
+            aria-live="polite"
+            class="catalogue-field-error"
+          >{{ dateAddedErrorFor(item) }}</span>
         </label>
 
         <label>

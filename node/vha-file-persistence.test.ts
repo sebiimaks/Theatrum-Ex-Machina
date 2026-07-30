@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { afterEach, test } from 'node:test';
 
 import type { FinalObject } from '../interfaces/final-object.interface';
+import { NewImageElement } from '../interfaces/final-object.interface';
 import {
   parseVhaJson,
   readVhaFileWithBackup,
@@ -61,6 +62,19 @@ test('loads a valid primary catalogue without consulting the backup', async () =
 
   assert.equal(result.source, 'primary');
   assert.equal(result.finalObject?.hubName, 'Primary');
+});
+
+test('preserves Date Added while legacy entries remain valid without it', () => {
+  const catalogue = createCatalogue('Date Added');
+  const datedEntry = NewImageElement();
+  datedEntry.dateAdded = 1_700_000_000_123;
+  const legacyEntry = NewImageElement();
+  catalogue.images = [datedEntry, legacyEntry];
+
+  const parsed = parseVhaJson(JSON.stringify(catalogue));
+
+  assert.equal(parsed.images[0].dateAdded, 1_700_000_000_123);
+  assert.equal(parsed.images[1].dateAdded, undefined);
 });
 
 test('offers a valid backup for an empty primary catalogue', async () => {

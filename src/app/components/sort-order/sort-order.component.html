@@ -108,6 +108,16 @@
       &#x25BC; {{ 'SIDEBAR.sortModified' | translate }}
     </option>
   }
+  @if(settingsButtons['sortOptionAdded'].toggled) {
+    <option value="addedAsc">
+      &#x25B2; {{ 'SIDEBAR.sortAdded' | translate }}
+    </option>
+  }
+  @if(settingsButtons['sortOptionAdded'].toggled) {
+    <option value="addedDesc">
+      &#x25BC; {{ 'SIDEBAR.sortAdded' | translate }}
+    </option>
+  }
   @if(settingsButtons['sortOptionCreated'].toggled) {
     <option value="createdAsc">
       &#x25B2; {{ 'SIDEBAR.sortCreated' | translate }}

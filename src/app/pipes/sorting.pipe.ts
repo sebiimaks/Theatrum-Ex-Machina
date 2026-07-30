@@ -1,6 +1,7 @@
 import type { PipeTransform } from '@angular/core';
 import { Pipe } from '@angular/core';
 import type { ImageElement, StarRating } from '../../../interfaces/final-object.interface';
+import { compareDateAdded } from '../../../interfaces/date-added';
 import { randomizeArray } from '../../../node/utility';
 import { orderBy } from 'natural-orderby';
 
@@ -11,6 +12,8 @@ export type SortType = 'default'
                      | 'alphabetDesc2'
                      | 'aspectRatioAsc'
                      | 'aspectRatioDesc'
+                     | 'addedAsc'
+                     | 'addedDesc'
                      | 'createdAsc'
                      | 'createdDesc'
                      | 'folderSizeAsc'
@@ -41,6 +44,8 @@ export type SortType = 'default'
 type SortOrderType =  keyof ImageElement | 'folderSize' | 'alphabetical' | 'aspectRatio';
 
 const sortMapping: Partial<Record<SortType, [SortOrderType, boolean]>> = {
+  addedAsc:        ['dateAdded',    true],
+  addedDesc:       ['dateAdded',    false],
   alphabetAsc:     ['alphabetical', true],
   alphabetDesc:    ['alphabetical', false],
   aspectRatioAsc:  ['aspectRatio',  true],
@@ -107,6 +112,9 @@ export class SortingPipe implements PipeTransform {
     };
 
     switch (property) {
+      case 'dateAdded':
+        return compareDateAdded(x.dateAdded, y.dateAdded, decreasing);
+
       case 'alphabetical':
         return compareValues(x.fileName.toLowerCase(), y.fileName.toLowerCase());
 

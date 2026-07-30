@@ -3,11 +3,13 @@ import { Pipe } from '@angular/core';
 
 import type { ImageElement, StarRating} from '../../../interfaces/final-object.interface';
 import { NewImageElement, isMetadataImportFailure } from '../../../interfaces/final-object.interface';
+import { latestDateAdded } from '../../../interfaces/date-added';
 import type { SettingsButtonsType} from '../common/settings-buttons';
 import { SettingsButtons } from '../common/settings-buttons';
 
 interface FolderProperties {
   byteSize: number;        //                 corresponds to ImageElement `fileSize`
+  dateAdded?: number;      // latest known addition among videos in this folder
   duration: number;        // in seconds,     corresponds to ImageElement `duration`
   mtime: number;           //                 corresponds to ImageElement `mtime`
   birthtime: number;       //                 corresponds to ImageElement `birthtime`
@@ -57,6 +59,7 @@ export class FolderViewPipe implements PipeTransform {
 
     return {
       byteSize: totalFileSize,
+      dateAdded: latestDateAdded(files.map((element: ImageElement) => element.dateAdded)),
       duration: totalDuration,
       mtime: lastUpdated,
       birthtime: firstCreated,
@@ -219,6 +222,7 @@ export class FolderViewPipe implements PipeTransform {
           const folderWithStuff: ImageElement = NewImageElement();
 
           folderWithStuff.cleanName       = '*FOLDER*';
+          folderWithStuff.dateAdded       = folderProperties.dateAdded;
           folderWithStuff.duration        = folderProperties.duration;
           folderWithStuff.fileName        = key.replace('/', '');
           folderWithStuff.fileSize        = folderProperties.byteSize;
