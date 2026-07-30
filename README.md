@@ -5,7 +5,7 @@ This is an unsupported personal fork of [Video Hub App 3](http://www.videohubapp
 **All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
 
 - Current fork version: `v3.3.0-sin.8`
-- Change summary updated: 25/07/2026
+- Change summary updated: 30/07/2026
 
 # Fork Changelog
 
@@ -14,6 +14,14 @@ This changelog covers fork-specific commits made after the upstream baseline at 
 Uncommitted test work is not included here.
 
 ## Unreleased
+
+### Add Safe Folder-Level Thumbnail Regeneration
+
+The Current Hub folder editor now provides a confirmed Regenerate Thumbnails action for each connected source folder, with an eligible-video count, sequential progress, cancellation, and a completion summary. Deleted, placeholder, and `import_error` entries are skipped, duplicate catalogue entries sharing a preview hash are tried until an accessible source succeeds, and only successful jobs update catalogue metadata. New previews are generated and validated in isolated staging folders before transactionally replacing live files; failures, timeouts, cancellation, folder or hub changes, renderer loss, and interrupted application sessions preserve or restore the previous previews. Conflicting save, close, folder-editing, and thumbnail operations are blocked while a batch is active. Related hardening bounds hand-edited fixed screenshot counts, repairs invalid preview metadata, prevents cache-key growth, stabilises filmstrip scrubbing, verifies packaged startup dependencies, and adds focused batching, extraction, transaction-recovery, and lifecycle tests.
+
+### Expand Catalogue Editor Search and Batch Editing
+
+The Catalogue Editor now supports additional search lines through compact add and remove controls, with every completed line narrowing the displayed results through cumulative matching. Field labels use title case, and the Year, Times Played, and Default Screen inputs no longer display number-stepper arrows. A new confirmed bulk action can overwrite the safe editable metadata fields Clean Name, Stars, Year, Times Played, Default Screen, and Notes across the currently displayed results. Strict validation prevents invalid numeric and screenshot selections, optional values can be deliberately cleared, and the target set is rechecked before changes are applied. File paths, hashes, and technical media fields remain excluded from bulk replacement to avoid breaking playback or catalogue identity. Editor mutations now replace stale Saved feedback with Unsaved Changes, and focused tests cover combined filtering, validation, optional clearing, star ratings, screenshot bounds, and batch mutation counts.
 
 ### Show Toolbar Descriptions Beside the Ribbon
 

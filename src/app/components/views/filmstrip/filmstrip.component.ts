@@ -6,6 +6,7 @@ import { FilePathService } from '../file-path.service';
 import { metaAppear, textAppear } from '../../../common/animations';
 
 import type { ImageElement } from '../../../../../interfaces/final-object.interface';
+import { calculateFilmstripHoverPosition } from '../../../../../node/thumbnail-count';
 import { ImageElementService } from './../../../services/image-element.service';
 import type { RightClickEmit, VideoClickEmit } from '../../../../../interfaces/shared-interfaces';
 
@@ -58,12 +59,15 @@ export class FilmstripComponent implements OnInit {
   updateFilmXoffset(mouseMove: PointerEvent) {
     if (this.hoverScrub() && this.video().screens > 0) {
       const imgWidth = this.imgHeight() * (16 / 9); // hardcoded aspect ratio
-      const containerWidth = this.filmstripHolder().nativeElement.getBoundingClientRect().width;
-      const howManyScreensOutsideCutoff = this.video().screens - Math.floor(containerWidth / imgWidth);
-
-      const cursorX = mouseMove.layerX; // cursor's X position inside the filmstrip element
-      this.indexToShow = Math.floor(cursorX * (this.video().screens / containerWidth));
-      this.filmXoffset = imgWidth * Math.floor(cursorX / (containerWidth / howManyScreensOutsideCutoff));
+      const holderBounds = this.filmstripHolder().nativeElement.getBoundingClientRect();
+      const position = calculateFilmstripHoverPosition(
+        this.video().screens,
+        imgWidth,
+        holderBounds.width,
+        mouseMove.clientX - holderBounds.left,
+      );
+      this.indexToShow = position.frameIndex;
+      this.filmXoffset = position.offset;
     }
   }
 

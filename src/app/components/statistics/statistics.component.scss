@@ -100,10 +100,70 @@
   }
 }
 
+.input-sources-editing {
+  display: block;
+  max-width: calc(100% - 80px);
+  width: 1100px;
+}
+
 .input-sources-row {
   display: block;
   min-height: 28px;
   position: relative;
+}
+
+.input-sources-row-editing {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+
+  .delete-input-folder {
+    grid-column: 1;
+    position: static;
+  }
+
+  .input-folder {
+    grid-column: 2;
+    margin-top: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .regenerate-folder-thumbnails {
+    grid-column: 3;
+  }
+}
+
+.regenerate-folder-thumbnails {
+  background: transparent;
+  border: 1px solid variables.$gray-50;
+  border-radius: 5px;
+  color: variables.$dark-blue;
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 4px 8px;
+  white-space: nowrap;
+
+  &:hover:not(:disabled),
+  &:focus-visible {
+    border-color: variables.$pretty-blue;
+    outline: 1px solid variables.$pretty-blue;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+}
+
+.folder-thumbnail-regeneration-progress {
+  color: variables.$gray-70;
+  font-size: 12px;
+  grid-column: 2 / 4;
+  min-height: 16px;
+  text-align: right;
 }
 
 .input-sources + .edit-mode-container {
@@ -128,9 +188,14 @@
 
 .delete-input-folder {
   color: variables.$pretty-red;
-  cursor: not-allowed;
+  cursor: pointer;
   font-weight: bold;
   right: calc(100% + 10px);
+}
+
+.delete-input-folder[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .rescan-input-folder {
@@ -148,6 +213,25 @@
 }
 
 @media (max-width: 900px) {
+  .input-sources-editing {
+    max-width: calc(100% - 24px);
+    width: auto;
+  }
+
+  .input-sources-row-editing {
+    grid-template-columns: auto minmax(0, 1fr);
+
+    .regenerate-folder-thumbnails {
+      grid-column: 2;
+      justify-self: start;
+    }
+
+    .folder-thumbnail-regeneration-progress {
+      grid-column: 2;
+      text-align: left;
+    }
+  }
+
   .table-container {
     flex-direction: column;
 
@@ -288,5 +372,14 @@
   .port-select {
     background-color: variables.$gray-90;
     color: variables.$gray-05;
+  }
+
+  .regenerate-folder-thumbnails {
+    border-color: variables.$gray-40;
+    color: variables.$gray-05;
+  }
+
+  .folder-thumbnail-regeneration-progress {
+    color: variables.$gray-20;
   }
 }

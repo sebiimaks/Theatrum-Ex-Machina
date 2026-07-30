@@ -85,6 +85,16 @@ assert.ok(
   archivedFiles.includes('/node/media-tool-paths.js'),
   'The packaged app is missing its fork-owned media-tool resolver.',
 );
+for (const requiredRuntimeFile of [
+  '/node_modules/electron-window-state/index.js',
+  '/node_modules/jsonfile/index.js',
+  '/node_modules/mkdirp/index.js',
+]) {
+  assert.ok(
+    archivedFiles.includes(requiredRuntimeFile),
+    `The packaged app is missing a required runtime dependency: ${requiredRuntimeFile}`,
+  );
+}
 assert.equal(
   archivedFiles.some((entry) => entry.includes('/node_modules/ffmpeg-ffprobe-static/')),
   false,

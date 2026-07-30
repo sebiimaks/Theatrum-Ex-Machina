@@ -22,7 +22,14 @@ import { readVhaFileWithBackup, recoverVhaFileFromBackup } from './node/vha-file
 import { FinalObject } from './interfaces/final-object.interface';
 import { SettingsObject } from './interfaces/settings-object.interface';
 import { WizardOptions } from './interfaces/wizard-options.interface';
-import { preventSleep, resetAllQueues } from './node/main-extract-async';
+import {
+  isThumbnailRegenerationActive,
+  preventSleep,
+  resetAllQueues,
+  setThumbnailRegenerationBlocked,
+} from './node/main-extract-async';
+import { sanitizeScreenshotSettings } from './node/thumbnail-count';
+import { recoverInterruptedPreviewTransactions } from './node/thumbnail-transaction';
 
 // Variables
 const pathToAppData = app.getPath('appData');
@@ -295,6 +302,27 @@ function getAngularToShutDown(): void {
  */
 async function openThisDamnFile(pathToVhaFile: string): Promise<void> {
 
+  if (isThumbnailRegenerationActive()) {
+    await dialog.showMessageBox(win, {
+      buttons: ['OK'],
+      detail: 'Wait for the current folder thumbnail regeneration to finish before opening another catalogue.',
+      message: 'Thumbnail regeneration is still in progress.',
+      title: 'Catalogue Is Busy',
+      type: 'warning',
+    });
+    return;
+  }
+
+  setThumbnailRegenerationBlocked(true);
+  try {
+    await openCatalogueFile(pathToVhaFile);
+  } finally {
+    setThumbnailRegenerationBlocked(false);
+  }
+}
+
+async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
+
   resetAllQueues();
 
   macFirstRun = false;     // TODO - figure out how to open file when double click first time on Mac
@@ -380,14 +408,36 @@ async function openThisDamnFile(pathToVhaFile: string): Promise<void> {
 
     // set globals only after a catalogue has been parsed and validated successfully
     upgradeToVersion3(finalObject);
+    const sanitizedScreenshotSettings = sanitizeScreenshotSettings(finalObject.screenshotSettings);
+    const catalogueSettingsNormalized = sanitizedScreenshotSettings.n !== finalObject.screenshotSettings.n;
+    finalObject.screenshotSettings = sanitizedScreenshotSettings;
     GLOBALS.currentlyOpenVhaFile = pathToVhaFile;
     GLOBALS.selectedOutputFolder = path.parse(pathToVhaFile).dir;
     GLOBALS.hubName = finalObject.hubName;
     GLOBALS.screenshotSettings = finalObject.screenshotSettings;
     GLOBALS.selectedSourceFolders = finalObject.inputDirs;
 
+    try {
+      const recovery = await recoverInterruptedPreviewTransactions(
+        path.join(GLOBALS.selectedOutputFolder, 'vha-' + GLOBALS.hubName),
+      );
+      if (recovery.rolledBack > 0 || recovery.committedCleaned > 0) {
+        console.warn('Recovered interrupted thumbnail transactions:', recovery);
+      }
+    } catch (error) {
+      const recoveryError = error instanceof Error ? error.message : String(error);
+      console.error('Unable to recover an interrupted thumbnail transaction:', error);
+      await dialog.showMessageBox(win, {
+        buttons: ['OK'],
+        detail: recoveryError,
+        message: 'Some interrupted thumbnail files could not be recovered automatically.',
+        title: 'Thumbnail Recovery Warning',
+        type: 'warning',
+      });
+    }
+
     app.addRecentDocument(pathToVhaFile);
-    sendFinalObjectToAngular(finalObject, GLOBALS);
+    sendFinalObjectToAngular(finalObject, GLOBALS, catalogueSettingsNormalized);
     setUpDirectoryWatchers(finalObject.inputDirs, finalObject.images);
   } catch (error) {
     const unexpectedError = error instanceof Error ? error.message : String(error);
@@ -453,6 +503,17 @@ ipcMain.on('just-started', (event) => {
  */
 ipcMain.on('start-the-import', (event, wizard: WizardOptions) => {
 
+  if (isThumbnailRegenerationActive()) {
+    dialog.showMessageBox(win, {
+      buttons: ['OK'],
+      detail: 'Wait for the current folder thumbnail regeneration to finish before creating another catalogue.',
+      message: 'Thumbnail regeneration is still in progress.',
+      title: 'Catalogue Is Busy',
+      type: 'warning',
+    });
+    return;
+  }
+
   preventSleep();
 
   const hubName = wizard.futureHubName;
@@ -474,14 +535,14 @@ ipcMain.on('start-the-import', (event, wizard: WizardOptions) => {
     GLOBALS.hubName = hubName;
     GLOBALS.selectedOutputFolder = outDir;
     GLOBALS.selectedSourceFolders = wizard.selectedSourceFolder;
-    GLOBALS.screenshotSettings = {
+    GLOBALS.screenshotSettings = sanitizeScreenshotSettings({
       clipHeight: wizard.clipHeight,
       clipSnippetLength: wizard.clipSnippetLength,
       clipSnippets: wizard.extractClips ? wizard.clipSnippets : 0,
       fixed: wizard.isFixedNumberOfScreenshots,
       height: wizard.screenshotSizeForImport,
       n: wizard.isFixedNumberOfScreenshots ? wizard.ssConstant : wizard.ssVariable,
-    };
+    });
 
     writeVhaFileAndStartExtraction();
   }
@@ -554,6 +615,11 @@ ipcMain.on('system-open-file-through-modal', (event, somethingElse) => {  // TOD
  * save current VHA file to disk, if provided
  */
 ipcMain.on('load-this-vha-file', (event, pathToVhaFile: string, finalObjectToSave: FinalObject) => {
+
+  if (isThumbnailRegenerationActive()) {
+    void openThisDamnFile(pathToVhaFile);
+    return;
+  }
 
   if (finalObjectToSave !== null) {
 

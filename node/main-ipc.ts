@@ -1,4 +1,4 @@
-import { app, dialog, shell, BrowserWindow } from 'electron';
+import { app, dialog, shell, BrowserWindow, nativeImage } from 'electron';
 
 import * as path from 'path';
 const fs = require('fs');
@@ -12,10 +12,15 @@ import { createDotPlsFile, writeVhaFileToDisk } from './main-support';
 import { replaceThumbnailWithNewImage } from './main-extract';
 import {
   closeWatcher,
+  cancelFolderThumbnailRegeneration,
   startWatcher,
   extractAnyMissingThumbs,
+  isFolderThumbnailRegenerationActive,
+  isThumbnailRegenerationActive,
+  regenerateFolderThumbnails,
   regenerateThumbnails,
   removeThumbnailsNotInHub,
+  ThumbnailRegenerationError,
 } from './main-extract-async';
 import { writeJsonAtomically } from './vha-file-persistence';
 import {
@@ -27,6 +32,8 @@ import {
   resolveExistingMediaPath,
   resolveNewMediaPath,
 } from './local-operation-safety';
+
+let activeCustomThumbnailReplacements = 0;
 
 /**
  * Set up the listeners
@@ -321,6 +328,9 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
    * Method to replace thumbnail of a particular item
    */
   trustedIpcOn('replace-thumbnail', (event, pathToIncomingJpg: string, item: ImageElement) => {
+    if (isThumbnailRegenerationActive()) {
+      return;
+    }
     const fileToReplace: string = path.join(
         GLOBALS.selectedOutputFolder,
         'vha-' + GLOBALS.hubName,
@@ -329,14 +339,26 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
       );
 
     const height: number = GLOBALS.screenshotSettings.height;
+    activeCustomThumbnailReplacements++;
 
-    replaceThumbnailWithNewImage(fileToReplace, pathToIncomingJpg, height)
+    replaceThumbnailWithNewImage(fileToReplace, pathToIncomingJpg, height, (imagePath: string) => {
+      const decodedImage = nativeImage.createFromPath(imagePath);
+      if (decodedImage.isEmpty()) {
+        throw new Error('Electron could not decode the dropped PNG.');
+      }
+      return decodedImage.toJPEG(100);
+    })
       .then(success => {
         if (success) {
-          event.sender.send('thumbnail-replaced');
+          event.sender.send('custom-thumbnail-replaced', item.hash);
         }
       })
-      .catch((err) => {});
+      .catch((error) => {
+        console.error('Unable to replace custom thumbnail:', error);
+      })
+      .finally(() => {
+        activeCustomThumbnailReplacements = Math.max(0, activeCustomThumbnailReplacements - 1);
+      });
 
   });
 
@@ -391,6 +413,9 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
    * extract any missing thumbnails
    */
   trustedIpcOn('add-missing-thumbnails', (event, finalArray: ImageElement[], extractClips: boolean) => {
+    if (isFolderThumbnailRegenerationActive()) {
+      return;
+    }
     extractAnyMissingThumbs(finalArray);
   });
 
@@ -398,6 +423,14 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
    * Remove and recreate the generated preview assets for one video.
    */
   trustedIpcOn('regenerate-thumbnails', (event, item: ImageElement) => {
+    if (isFolderThumbnailRegenerationActive() || activeCustomThumbnailReplacements > 0) {
+      event.sender.send(
+        'thumbnail-regeneration-failed',
+        item && item.hash,
+        'Wait for the current thumbnail operation to finish.',
+      );
+      return;
+    }
     regenerateThumbnails(item)
       .then((screenshotCount: number) => {
         event.sender.send('thumbnail-replaced');
@@ -405,14 +438,99 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
       })
       .catch((error: Error) => {
         console.error('Unable to regenerate thumbnails:', error);
-        event.sender.send('thumbnail-regeneration-failed');
+        const coreStatus = error instanceof ThumbnailRegenerationError
+          ? error.coreStatus
+          : undefined;
+        event.sender.send('thumbnail-regeneration-failed', item.hash, error.message, coreStatus);
       });
+  });
+
+  /**
+   * Recreate generated previews for all eligible videos in one source folder.
+   * The extraction module owns sequencing, cancellation, and the global batch
+   * lock; this IPC layer only relays progress to the requesting renderer.
+   */
+  trustedIpcOn(
+    'regenerate-folder-thumbnails',
+    (event, requestId: number, sourceIndex: number, cataloguePath: string, items: ImageElement[]) => {
+      const sender = event.sender;
+      let ownerActive = true;
+      const send = (channel: string, ...args: any[]): void => {
+        if (ownerActive && !sender.isDestroyed()) {
+          sender.send(channel, ...args);
+        }
+      };
+
+      if (
+        !Number.isSafeInteger(requestId)
+        || !Number.isInteger(sourceIndex)
+        || typeof cataloguePath !== 'string'
+        || !Array.isArray(items)
+      ) {
+        send('folder-thumbnail-regeneration-failed', requestId, sourceIndex);
+        return;
+      }
+      if (activeCustomThumbnailReplacements > 0) {
+        send('folder-thumbnail-regeneration-failed', requestId, sourceIndex);
+        return;
+      }
+
+      const ownerUnavailable = (): void => {
+        if (!ownerActive) {
+          return;
+        }
+        ownerActive = false;
+        cancelFolderThumbnailRegeneration();
+      };
+      const navigationStarted = (
+        _navigationEvent,
+        _navigationUrl: string,
+        _isInPlace: boolean,
+        isMainFrame: boolean,
+      ): void => {
+        if (isMainFrame) {
+          ownerUnavailable();
+        }
+      };
+      const cleanUpOwnerListeners = (): void => {
+        sender.removeListener('destroyed', ownerUnavailable);
+        sender.removeListener('render-process-gone', ownerUnavailable);
+        sender.removeListener('did-start-navigation', navigationStarted);
+      };
+      sender.once('destroyed', ownerUnavailable);
+      sender.once('render-process-gone', ownerUnavailable);
+      sender.on('did-start-navigation', navigationStarted);
+
+      regenerateFolderThumbnails(
+        sourceIndex,
+        items,
+        cataloguePath,
+        progress => send('folder-thumbnail-regeneration-progress', requestId, sourceIndex, progress),
+        () => ownerActive && !sender.isDestroyed(),
+      )
+        .then((result) => {
+          cleanUpOwnerListeners();
+          send('folder-thumbnail-regeneration-complete', requestId, sourceIndex, result);
+        })
+        .catch((error: Error) => {
+          cleanUpOwnerListeners();
+          console.error('Unable to regenerate folder thumbnails:', error);
+          send('folder-thumbnail-regeneration-failed', requestId, sourceIndex);
+        });
+    },
+  );
+
+  trustedIpcOn('cancel-folder-thumbnail-regeneration', () => {
+    cancelFolderThumbnailRegeneration();
   });
 
   /**
    * Remove any thumbnails for files no longer present in the hub
    */
   trustedIpcOn('clean-old-thumbnails', (event, finalArray: ImageElement[]) => {
+    if (isFolderThumbnailRegenerationActive()) {
+      return;
+    }
     // !!! WARNING
     const screenshotOutputFolder: string = path.join(GLOBALS.selectedOutputFolder, 'vha-' + GLOBALS.hubName);
     // !! ^^^^^^^^^^^^^^^^^^^^^^ - make sure this points to the folder with screenshots only!
@@ -540,6 +658,14 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
         // The window may already be closed while the app is quitting.
       }
     };
+
+    if (isThumbnailRegenerationActive() || activeCustomThumbnailReplacements > 0) {
+      reportCloseFailure(
+        new Error('Thumbnail regeneration or replacement is still in progress.'),
+        'Wait for the current thumbnail operation to finish before closing the application.',
+      );
+      return;
+    }
 
     let json: string;
     try {

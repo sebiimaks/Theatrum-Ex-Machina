@@ -8,27 +8,75 @@
 
   <span class="stats-heading title sources">{{ 'STATISTICS.videoFolder' | translate }}</span>
 
-  <div class="input-sources">
+  <div
+    class="input-sources"
+    [class.input-sources-editing]="removeFoldersMode || folderThumbnailRegenerationStatus() !== null"
+  >
 
   @for (item of inputFolders() | keyvalue | alphabetizeSourceFolders : 'value.path'; track trackByFn(i, item); let i = $index) {
+    @let eligibleVideoCount = folderEligibleVideoCount(item.key);
 
-    <div class="input-sources-row">
-      <span
-        class="stats-heading folder input-folder"
-        [innerHtml]="item.value.path | folderArrowsPipe : true"
-      ></span>
-
+    <div
+      class="input-sources-row"
+      [ngClass]="{ 'input-sources-row-editing': removeFoldersMode || folderThumbnailRegenerationStatus() !== null }"
+    >
     @if ((objectKeys(inputFolders()).length > 1) && removeFoldersMode) {
       <span
         class="delete-input-folder"
-        (click)="deleteInputSource(item.key)"
+        (click)="folderThumbnailRegenerationStatus() === null && deleteInputSource(item.key)"
+        [attr.aria-disabled]="folderThumbnailRegenerationStatus() !== null"
         @breadcrumbWordAppear
       >
         {{ 'STATISTICS.removeFolder' | translate }}
       </span>
     }
 
-    @if (!removeFoldersMode && !item.value.watch && sourceFolderService.sourceFolderConnected[item.key]) {
+      <span
+        class="stats-heading folder input-folder"
+        [innerHtml]="item.value.path | folderArrowsPipe : true"
+      ></span>
+
+    @if (folderThumbnailRegenerationStatus()?.sourceIndex === folderSourceIndex(item.key)) {
+        <button
+          type="button"
+          class="regenerate-folder-thumbnails cancel-folder-thumbnail-regeneration"
+          (click)="cancelFolderThumbnailRegeneration.emit()"
+          [disabled]="folderThumbnailRegenerationStatus()?.cancelling === true"
+        >
+          @if (folderThumbnailRegenerationStatus()?.cancelling) {
+            {{ 'STATISTICS.cancellingFolderThumbnailRegeneration' | translate }}
+          } @else {
+            {{ 'STATISTICS.cancelFolderThumbnailRegeneration' | translate }}
+          }
+        </button>
+        <span class="folder-thumbnail-regeneration-progress" aria-live="polite" role="status">
+          {{ 'STATISTICS.regeneratingFolderThumbnails' | translate : {
+            completed: folderThumbnailRegenerationStatus()?.completedJobs,
+            total: folderThumbnailRegenerationStatus()?.totalJobs
+          } }}
+        </span>
+    } @else if (removeFoldersMode) {
+        <button
+          type="button"
+          class="regenerate-folder-thumbnails"
+          (click)="regenerateFolderThumbnails.emit(folderSourceIndex(item.key))"
+          [attr.aria-label]="'STATISTICS.regenerateFolderThumbnailsAriaLabel' | translate : {
+            count: eligibleVideoCount,
+            folderName: folderDisplayName(item.key)
+          }"
+          [disabled]="folderThumbnailRegenerationStatus() !== null
+                      || sourceFolderService.sourceFolderConnected[item.key] !== true
+                      || eligibleVideoCount === 0"
+          [attr.title]="sourceFolderService.sourceFolderConnected[item.key] === true
+                        && eligibleVideoCount > 0
+                        ? ('STATISTICS.regenerateFolderThumbnailsHint' | translate)
+                        : null"
+        >
+          {{ 'STATISTICS.regenerateFolderThumbnails' | translate }}
+        </button>
+    }
+
+    @if (!removeFoldersMode && folderThumbnailRegenerationStatus() === null && !item.value.watch && sourceFolderService.sourceFolderConnected[item.key]) {
       <span
         class="rescan-input-folder"
         (click)="($event.button === 0) && rescanFolder(item.key)"
@@ -40,7 +88,7 @@
       </span>
     }
 
-    @if (!sourceFolderService.sourceFolderConnected[item.key] && !removeFoldersMode) {
+    @if (!sourceFolderService.sourceFolderConnected[item.key] && !removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
       <span
         class="input-not-connected"
         (click)="reconnectThisFolder(item.key)"
@@ -51,7 +99,7 @@
       </span>
     }
 
-    @if (i === 0 && !removeFoldersMode) {
+    @if (i === 0 && !removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
       <span
         class="watch-folder-note"
         title="{{ 'STATISTICS.watchFolderHelpText' | translate }}"
@@ -61,7 +109,7 @@
       </span>
     }
 
-    @if (!removeFoldersMode) {
+    @if (!removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
       <label
         class="switch"
         @metaAppear
@@ -93,6 +141,7 @@
     <button
       class="wizard-button start-import"
       (click)="addAnotherFolder()"
+      [disabled]="folderThumbnailRegenerationStatus() !== null"
       [ngClass]="{ 'button-hidden': !removeFoldersMode }"
     >
       {{ 'STATISTICS.addFolderToHub' | translate }}
@@ -101,6 +150,7 @@
     <button
       (click)="removeFoldersMode = !removeFoldersMode"
       class="wizard-button "
+      [disabled]="folderThumbnailRegenerationStatus() !== null"
       [ngClass]="{ 'edit-mode-active': removeFoldersMode }"
     >
       {{ 'STATISTICS.editFolders' | translate }}
@@ -110,6 +160,7 @@
       class="wizard-button"
       (click)="addMissingThumbnails()"
       (mouseup)="animateThis($event)"
+      [disabled]="folderThumbnailRegenerationStatus() !== null"
       [ngClass]="{ 'button-hidden': !removeFoldersMode }"
     >
       {{ 'STATISTICS.addMissingThumbnails' | translate }}
@@ -119,6 +170,7 @@
       class="wizard-button"
       (click)="cleanScreenshotFolder()"
       (mouseup)="animateThis($event)"
+      [disabled]="folderThumbnailRegenerationStatus() !== null"
       title="{{ 'STATISTICS.cleanScreenshotsHint' | translate }}"
       [ngClass]="{ 'button-hidden': !removeFoldersMode }"
     >

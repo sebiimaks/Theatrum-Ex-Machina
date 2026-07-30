@@ -26,26 +26,68 @@
   </header>
 
   <div class="catalogue-editor-toolbar">
-    <input
-      class="catalogue-search"
-      [(ngModel)]="query"
-      (ngModelChange)="refreshFilteredEntries()"
-      placeholder="Search entries"
-      type="text"
+    <div
+      aria-label="Search entries. All completed search lines must match."
+      class="catalogue-search-lines"
+      role="group"
     >
+      <div
+        *ngFor="let criterion of searchCriteria; let criterionIndex = index; trackBy: trackBySearchCriterionId"
+        class="catalogue-search-row"
+      >
+        <input
+          #searchCriterionInput
+          class="catalogue-search"
+          [(ngModel)]="criterion.query"
+          (ngModelChange)="refreshFilteredEntries()"
+          [attr.aria-label]="'Search entries line ' + (criterionIndex + 1) + '. All completed search lines must match.'"
+          [attr.data-search-criterion-id]="criterion.id"
+          placeholder="Search entries"
+          type="text"
+        >
 
-    <select
-      [(ngModel)]="field"
-      (ngModelChange)="refreshFilteredEntries()"
-      title="Search field"
-    >
-      <option value="all">All fields</option>
-      <option value="name">Clean name</option>
-      <option value="file">File name</option>
-      <option value="path">Folder</option>
-      <option value="tags">Tags</option>
-      <option value="hash">Hash</option>
-    </select>
+        <select
+          [(ngModel)]="criterion.field"
+          (ngModelChange)="refreshFilteredEntries()"
+          [attr.aria-label]="'Search field for line ' + (criterionIndex + 1)"
+          title="Search Field"
+        >
+          <option value="all">All Fields</option>
+          <option value="name">Clean Name</option>
+          <option value="file">File Name</option>
+          <option value="path">Folder</option>
+          <option value="tags">Tags</option>
+          <option value="hash">Hash</option>
+        </select>
+
+        <button
+          *ngIf="criterionIndex === searchCriteria.length - 1"
+          class="catalogue-search-action catalogue-search-add"
+          (click)="addSearchCriterion()"
+          aria-label="Add search line"
+          title="Add Search Line"
+          type="button"
+        >
+          <span aria-hidden="true">+</span>
+        </button>
+
+        <button
+          *ngIf="searchCriteria.length > 1"
+          class="catalogue-search-action catalogue-search-remove"
+          (click)="removeSearchCriterion(criterion.id)"
+          [attr.aria-label]="'Remove search line ' + (criterionIndex + 1)"
+          title="Remove Search Line"
+          type="button"
+        >
+          <span aria-hidden="true">−</span>
+        </button>
+      </div>
+    </div>
+
+    <span
+      aria-live="polite"
+      class="catalogue-visually-hidden"
+    >{{ searchRowsStatus }}</span>
 
     <label class="catalogue-toggle">
       <input
@@ -103,6 +145,74 @@
     </span>
   </div>
 
+  <div class="catalogue-batch-toolbar catalogue-overwrite-toolbar">
+    <span class="catalogue-batch-label">Overwrite Displayed Results</span>
+
+    <select
+      [ngModel]="batchOverwriteField"
+      (ngModelChange)="updateBatchOverwriteField($event)"
+      aria-label="Field to overwrite"
+      class="catalogue-overwrite-field"
+      title="Field to Overwrite"
+    >
+      <option value="">Select Field</option>
+      <option
+        *ngFor="let option of overwriteFieldOptions"
+        [value]="option.value"
+      >
+        {{ option.label }}
+      </option>
+    </select>
+
+    <select
+      *ngIf="batchOverwriteField === 'stars'; else overwriteTextValue"
+      [ngModel]="batchOverwriteDraft"
+      (ngModelChange)="updateBatchOverwriteDraft($event)"
+      aria-label="New Stars value"
+      class="catalogue-overwrite-value"
+    >
+      <option
+        *ngFor="let option of starOptions"
+        [value]="option.value"
+      >
+        {{ option.label }}
+      </option>
+    </select>
+
+    <ng-template #overwriteTextValue>
+      <input
+        [ngModel]="batchOverwriteDraft"
+        (ngModelChange)="updateBatchOverwriteDraft($event)"
+        (keydown.enter)="requestBatchOverwrite()"
+        [attr.aria-label]="batchOverwriteField ? 'New value for selected field' : 'Select a field to overwrite'"
+        [attr.inputmode]="batchOverwriteUsesNumericInput ? 'numeric' : null"
+        [class.catalogue-number-input]="batchOverwriteUsesNumericInput"
+        [disabled]="!batchOverwriteField"
+        [placeholder]="batchOverwritePlaceholder"
+        class="catalogue-overwrite-value"
+        type="text"
+      >
+    </ng-template>
+
+    <button
+      class="catalogue-batch-apply catalogue-overwrite-apply"
+      (click)="requestBatchOverwrite()"
+      [disabled]="!canRequestBatchOverwrite"
+      type="button"
+    >
+      Apply to {{ filteredEntries.length | number }}
+      {{ filteredEntries.length === 1 ? 'Result' : 'Results' }}
+    </button>
+
+    <span
+      *ngIf="batchOverwriteStatus"
+      aria-live="polite"
+      class="catalogue-batch-status"
+    >
+      {{ batchOverwriteStatus }}
+    </span>
+  </div>
+
   <div class="catalogue-editor-status">
     <span>{{ filteredEntries.length | number }} shown</span>
     <span>{{ activeCount | number }} active</span>
@@ -118,8 +228,8 @@
   </div>
 
   <div class="catalogue-column-header">
-    <span>Editable fields</span>
-    <span>Entry action</span>
+    <span>Editable Fields</span>
+    <span>Entry Action</span>
   </div>
 
   <virtual-scroller
@@ -135,7 +245,7 @@
     >
       <div class="catalogue-row-fields">
         <label class="wide-field">
-          <span>Clean name</span>
+          <span>Clean Name</span>
           <input
             [ngModel]="item.cleanName"
             (ngModelChange)="updateStringField(item, 'cleanName', $event)"
@@ -144,7 +254,7 @@
         </label>
 
         <label class="wide-field">
-          <span>File name</span>
+          <span>File Name</span>
           <input
             [ngModel]="item.fileName"
             (ngModelChange)="updateStringField(item, 'fileName', $event)"
@@ -202,26 +312,32 @@
           <input
             [ngModel]="item.year"
             (ngModelChange)="updateYear(item, $event)"
+            class="catalogue-number-input"
+            inputmode="numeric"
             min="0"
             type="number"
           >
         </label>
 
         <label>
-          <span>Times played</span>
+          <span>Times Played</span>
           <input
             [ngModel]="item.timesPlayed"
             (ngModelChange)="updateNumberField(item, 'timesPlayed', $event)"
+            class="catalogue-number-input"
+            inputmode="numeric"
             min="0"
             type="number"
           >
         </label>
 
         <label>
-          <span>Default screen</span>
+          <span>Default Screen</span>
           <input
             [ngModel]="item.defaultScreen"
             (ngModelChange)="updateDefaultScreen(item, $event)"
+            class="catalogue-number-input"
+            inputmode="numeric"
             min="0"
             type="number"
           >
@@ -237,11 +353,11 @@
 
         <div class="catalogue-readonly">
           <span>#{{ item.index + 1 }}</span>
-          <span>source {{ item.inputSource }}</span>
+          <span>Source {{ item.inputSource }}</span>
           <span>{{ item.duration | lengthPipe }}</span>
           <span>{{ item.width }} x {{ item.height }}</span>
           <span>{{ item.fileSize | fileSizePipe : true }}</span>
-          <span>{{ item.fps || 0 }} fps</span>
+          <span>{{ item.fps || 0 }} FPS</span>
           <div class="catalogue-hash">
             <span
               class="catalogue-hash-value"

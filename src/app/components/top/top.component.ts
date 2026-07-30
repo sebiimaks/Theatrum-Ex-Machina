@@ -59,7 +59,9 @@ export class TopComponent {
 
   updateThumbnailPath() {
     if (this.currentImageElement()) {
-      this.previewPath = this.filePathService.createFilePath(this.folderPath(), this.hubName(), 'thumbnails', this.currentImageElement().hash);
+      this.previewPath = this.filePathService.createFilePath(
+        this.folderPath(), this.hubName(), 'thumbnails', this.currentImageElement().hash, false, this.currentImageElement().uuid,
+      );
     }
   }
 

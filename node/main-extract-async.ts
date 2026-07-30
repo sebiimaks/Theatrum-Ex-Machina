@@ -1,7 +1,7 @@
 // async & chokidar Code written by Cal2195
 // Was originally added to `main-extract.ts` but was moved here for clarity
 
-const { powerSaveBlocker } = require('electron');
+const { nativeImage, powerSaveBlocker } = require('electron');
 const async = require('async');
 const chokidar = require('chokidar');
 import * as path from 'path';
@@ -11,16 +11,32 @@ import { fdir } from 'fdir';
 
 import { GLOBALS } from './main-globals';
 
-import type { ImageElement, ImageElementPlus } from '../interfaces/final-object.interface';
+import type {
+  ImageElement,
+  ImageElementPlus,
+  ScreenshotSettings,
+} from '../interfaces/final-object.interface';
 import { acceptableFiles } from './main-filenames';
-import { extractAll } from './main-extract';
+import { extractAll, isExpectedJpeg } from './main-extract';
+import type { SystemThumbnailCreator } from './main-extract';
 import { sendCurrentProgress, insertTemporaryFieldsSingle, extractMetadataAsync, cleanUpFileName } from './main-support';
 import {
   createImportErrorElement,
   runProbeWithOneRetry,
   shouldExtractThumbnails,
 } from './media-import-resilience';
-import { isActiveThumbnailRegenerationJob, prepareThumbnailRegeneration } from './thumbnail-count';
+import {
+  isActiveThumbnailRegenerationJob,
+  planFolderThumbnailRegeneration,
+  prepareThumbnailRegeneration,
+} from './thumbnail-count';
+import type { ThumbnailCoreStatus } from './thumbnail-count';
+import { runSequentialBatch } from './sequential-batch';
+import { resolveExistingMediaPath } from './local-operation-safety';
+import {
+  beginPreviewTransaction,
+  markPreviewTransactionCommitted,
+} from './thumbnail-transaction';
 
 export interface TempMetadataQueueObject {
   fullPath: string;
@@ -45,14 +61,22 @@ let thumbQueue;         // QueueObject
 let thumbsDone = 0;
 let thumbExtractionStartTime = 0;
 let nextThumbnailRegenerationJobId = 1;
+let activeThumbnailQueueRegenerationJobId: number | undefined;
 
 interface ThumbnailQueueElement extends ImageElement {
   thumbnailRegenerationJobId?: number;
 }
 
 interface ThumbnailRegenerationState {
+  folderBatchJobId?: number;
+  generation: number;
+  installing: boolean;
   jobId: number;
   screenshotCount: number;
+  screenshotOutputFolder: string;
+  screenshotSettings: ScreenshotSettings;
+  sourcePath: string;
+  stillOwned?: () => boolean;
   waiters: {
     reject: (reason?: Error) => void;
     resolve: (screenshotCount: number) => void;
@@ -60,6 +84,81 @@ interface ThumbnailRegenerationState {
 }
 
 const thumbnailRegenerationStates: Map<string, ThumbnailRegenerationState> = new Map();
+let pendingSystemThumbnail: Promise<Buffer> | undefined;
+const SYSTEM_THUMBNAIL_SINGLE_FLIGHT_LEASE_MS = 30 * 1000;
+
+export class ThumbnailRegenerationError extends Error {
+  constructor(message: string, public readonly coreStatus: ThumbnailCoreStatus) {
+    super(message);
+    Object.setPrototypeOf(this, ThumbnailRegenerationError.prototype);
+    this.name = 'ThumbnailRegenerationError';
+  }
+}
+
+const createSystemThumbnail: SystemThumbnailCreator = async (
+  videoPath: string,
+  width: number,
+  height: number,
+): Promise<Buffer> => {
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
+    throw new Error('System video thumbnails are not supported on this platform.');
+  }
+  if (pendingSystemThumbnail) {
+    throw new Error('A previous system thumbnail request is still running.');
+  }
+
+  const request = nativeImage.createThumbnailFromPath(videoPath, { width, height })
+    .then((thumbnail) => {
+      if (!thumbnail || thumbnail.isEmpty()) {
+        throw new Error('The operating system could not create a video thumbnail.');
+      }
+      const jpegData = thumbnail.toJPEG(100);
+      if (!jpegData.length) {
+        throw new Error('The operating system returned an empty video thumbnail.');
+      }
+      return jpegData;
+    });
+  pendingSystemThumbnail = request;
+  const singleFlightLease = setTimeout(() => {
+    if (pendingSystemThumbnail === request) {
+      pendingSystemThumbnail = undefined;
+    }
+  }, SYSTEM_THUMBNAIL_SINGLE_FLIGHT_LEASE_MS);
+  singleFlightLease.unref();
+
+  try {
+    return await request;
+  } finally {
+    clearTimeout(singleFlightLease);
+    if (pendingSystemThumbnail === request) {
+      pendingSystemThumbnail = undefined;
+    }
+  }
+};
+let activeFolderThumbnailRegenerationJobId: number | undefined;
+let folderThumbnailRegenerationGeneration = 0;
+let nextFolderThumbnailRegenerationJobId = 1;
+let thumbnailRegenerationBlocked = false;
+
+export interface FolderThumbnailRegenerationProgress {
+  completed: number;
+  failed: number;
+  fileHash: string;
+  screenshotCount?: number;
+  succeeded: number;
+  success: boolean;
+  total: number;
+}
+
+export interface FolderThumbnailRegenerationResult {
+  cancelled: boolean;
+  completed: number;
+  failed: number;
+  skippedVideos: number;
+  succeeded: number;
+  total: number;
+  videoCount: number;
+}
 
 // delete queue
 let deleteThumbQueue;   // QueueObject
@@ -97,8 +196,12 @@ resetAllQueues();
 export function resetAllQueues(): void {
 
   allowSleep();
+  folderThumbnailRegenerationGeneration++;
 
   Array.from(thumbnailRegenerationStates.entries()).forEach(([fileHash, state]) => {
+    if (state.jobId === activeThumbnailQueueRegenerationJobId) {
+      return;
+    }
     settleThumbnailRegeneration(
       fileHash,
       state.jobId,
@@ -186,31 +289,101 @@ function enqueueMetadata(file: TempMetadataQueueObject): void {
  * @param done    -- callback to indicate the current extraction finished
  */
 function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
-  const screenshotOutputFolder: string = path.join(GLOBALS.selectedOutputFolder, 'vha-' + GLOBALS.hubName);
-  const shouldExtractClips: boolean = GLOBALS.screenshotSettings.clipSnippets > 0;
   const regenerationState = thumbnailRegenerationStates.get(element.hash);
+  const hasRegenerationMarker = element.thumbnailRegenerationJobId !== undefined;
   const isRegenerationJob: boolean = Boolean(regenerationState && isActiveThumbnailRegenerationJob(
     element.thumbnailRegenerationJobId,
     regenerationState.jobId,
   ));
+  if (hasRegenerationMarker && !isRegenerationJob) {
+    done();
+    return;
+  }
+  const screenshotOutputFolder: string = isRegenerationJob
+    ? regenerationState.screenshotOutputFolder
+    : path.join(GLOBALS.selectedOutputFolder, 'vha-' + GLOBALS.hubName);
+  const screenshotSettings: ScreenshotSettings = isRegenerationJob
+    ? regenerationState.screenshotSettings
+    : GLOBALS.screenshotSettings;
+  const sourcePath: string = isRegenerationJob
+    ? regenerationState.sourcePath
+    : GLOBALS.selectedSourceFolders[element.inputSource].path;
+  const shouldExtractClips: boolean = screenshotSettings.clipSnippets > 0;
+  if (isRegenerationJob) {
+    activeThumbnailQueueRegenerationJobId = regenerationState.jobId;
+  }
 
-  const finishQueueItem = (): void => {
+  const finishRunner = (): void => {
+    if (isRegenerationJob && activeThumbnailQueueRegenerationJobId === regenerationState.jobId) {
+      activeThumbnailQueueRegenerationJobId = undefined;
+    }
+    done();
+  };
+
+  const regenerationStillCurrent = (): boolean => {
     if (!isRegenerationJob) {
-      done();
+      return true;
+    }
+    const currentState = thumbnailRegenerationStates.get(element.hash);
+    return currentState?.jobId === regenerationState.jobId
+      && regenerationState.generation === folderThumbnailRegenerationGeneration
+      && (!regenerationState.stillOwned || regenerationState.stillOwned());
+  };
+
+  const finishQueueItem = (
+    generatedOutputFolder: string,
+    extractionSucceeded: boolean,
+    extractionError?: Error,
+  ): void => {
+    if (!isRegenerationJob) {
+      finishRunner();
       return;
     }
 
-    hasAllThumbs(element.hash, screenshotOutputFolder, shouldExtractClips)
-      .then(() => settleThumbnailRegeneration(element.hash, regenerationState.jobId))
-      .catch(() => settleThumbnailRegeneration(
-        element.hash,
-        regenerationState.jobId,
-        new Error('The generated preview files could not be recreated.'),
-      ))
-      .finally(done);
+    const completeRegeneration = async (): Promise<void> => {
+      try {
+        await hasAllThumbs(element, generatedOutputFolder, screenshotSettings, false);
+        if (!extractionSucceeded && extractionError && GLOBALS.debug) {
+          console.warn('Core previews recovered, but optional preview extraction was incomplete:', extractionError);
+        }
+        if (!regenerationStillCurrent()) {
+          throw new Error('Thumbnail regeneration was cancelled.');
+        }
+        const includeGeneratedClips = shouldExtractClips
+          && await hasCompleteClipPair(element.hash, generatedOutputFolder);
+        regenerationState.installing = true;
+        await commitRegeneratedPreviewFiles(
+          element.hash,
+          regenerationState.jobId,
+          generatedOutputFolder,
+          screenshotOutputFolder,
+          includeGeneratedClips,
+          regenerationStillCurrent,
+        );
+        settleThumbnailRegeneration(element.hash, regenerationState.jobId);
+      } catch (error) {
+        // Regeneration is transactional, so failure status from the staging
+        // folder must not be applied to the preserved live previews.
+        const reportedError = error instanceof ThumbnailRegenerationError
+          ? new Error(error.message)
+          : error instanceof Error
+            ? error
+            : new Error('The generated preview files could not be recreated.');
+        settleThumbnailRegeneration(
+          element.hash,
+          regenerationState.jobId,
+          reportedError,
+        );
+      } finally {
+        await removeRegenerationStagingFolder(generatedOutputFolder);
+        finishRunner();
+      }
+    };
+
+    void completeRegeneration();
   };
 
-  const extractQueueItem = (): void => {
+  const extractQueueItem = (generatedOutputFolder: string = screenshotOutputFolder): void => {
     sendCurrentProgress( // TODO check whether sending data off by 1
       thumbsDone,
       thumbsDone + thumbQueue.length() + 1,
@@ -220,26 +393,37 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
 
     extractAll(
       element,
-      GLOBALS.selectedSourceFolders[element.inputSource].path,
-      screenshotOutputFolder,
-      GLOBALS.screenshotSettings,
-      finishQueueItem
+      sourcePath,
+      generatedOutputFolder,
+      screenshotSettings,
+      (success: boolean, error?: Error) => finishQueueItem(generatedOutputFolder, success, error),
+      createSystemThumbnail,
     );
   };
 
   if (isRegenerationJob) {
-    deleteGeneratedPreviewFiles(element.hash, screenshotOutputFolder)
-      .then(extractQueueItem)
+    const stagingFolder = path.join(
+      screenshotOutputFolder,
+      '.thumbnail-regeneration',
+      `${element.hash}-${process.pid}-${Date.now()}-${regenerationState.jobId}`,
+    );
+    prepareRegenerationStagingFolder(stagingFolder)
+      .then(() => {
+        if (!regenerationStillCurrent()) {
+          throw new Error('Thumbnail regeneration was cancelled.');
+        }
+        extractQueueItem(stagingFolder);
+      })
       .catch((error: Error) => {
         settleThumbnailRegeneration(element.hash, regenerationState.jobId, error);
-        done();
+        void removeRegenerationStagingFolder(stagingFolder).finally(finishRunner);
       });
     return;
   }
 
-  hasAllThumbs(element.hash, screenshotOutputFolder, shouldExtractClips)
+  hasAllThumbs(element, screenshotOutputFolder, screenshotSettings, shouldExtractClips)
     .then(() => {
-      finishQueueItem();
+      finishQueueItem(screenshotOutputFolder, true);
     })
     .catch(() => {
       extractQueueItem();
@@ -266,19 +450,107 @@ function settleThumbnailRegeneration(
   });
 }
 
-function deleteGeneratedPreviewFiles(fileHash: string, screenshotOutputFolder: string): Promise<void[]> {
-  const generatedFiles: string[] = [
-    path.join(screenshotOutputFolder, 'thumbnails', fileHash + '.jpg'),
-    path.join(screenshotOutputFolder, 'filmstrips', fileHash + '.jpg'),
-    path.join(screenshotOutputFolder, 'clips', fileHash + '.mp4'),
-    path.join(screenshotOutputFolder, 'clips', fileHash + '.jpg'),
+function generatedPreviewRelativePaths(fileHash: string): string[] {
+  return [
+    path.join('thumbnails', fileHash + '.jpg'),
+    path.join('filmstrips', fileHash + '.jpg'),
+    path.join('clips', fileHash + '.mp4'),
+    path.join('clips', fileHash + '.jpg'),
   ];
+}
 
-  return Promise.all(generatedFiles.map((generatedFile: string) => {
-    return fs.promises.unlink(generatedFile).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT') {
-        throw error;
+async function prepareRegenerationStagingFolder(stagingFolder: string): Promise<void> {
+  await fs.promises.rm(stagingFolder, { force: true, recursive: true });
+  await Promise.all([
+    fs.promises.mkdir(path.join(stagingFolder, 'thumbnails'), { recursive: true }),
+    fs.promises.mkdir(path.join(stagingFolder, 'filmstrips'), { recursive: true }),
+    fs.promises.mkdir(path.join(stagingFolder, 'clips'), { recursive: true }),
+  ]);
+}
+
+async function removeRegenerationStagingFolder(stagingFolder: string): Promise<void> {
+  try {
+    await fs.promises.rm(stagingFolder, { force: true, recursive: true });
+  } catch (error) {
+    console.warn('Unable to remove thumbnail regeneration staging folder:', stagingFolder, error);
+  }
+}
+
+/**
+ * Replace previews only after a complete new set has been generated. Existing
+ * files are moved aside during the short commit step and restored if any move
+ * fails, so extraction failures and disconnected shares leave them untouched.
+ */
+async function commitRegeneratedPreviewFiles(
+  fileHash: string,
+  jobId: number,
+  stagingFolder: string,
+  screenshotOutputFolder: string,
+  includeGeneratedClips: boolean,
+  shouldContinue: () => boolean,
+): Promise<void> {
+  const allRelativePaths = generatedPreviewRelativePaths(fileHash);
+  const desiredRelativePaths = includeGeneratedClips
+    ? allRelativePaths
+    : allRelativePaths.slice(0, 2);
+  const backups: { backup: string; original: string }[] = [];
+  const installed: string[] = [];
+  const backupSuffix = `.regeneration-${process.pid}-${Date.now()}-${jobId}.bak`;
+  const requireCurrentJob = (): void => {
+    if (!shouldContinue()) {
+      throw new Error('Thumbnail regeneration was cancelled.');
+    }
+  };
+  const transactionManifest = await beginPreviewTransaction(
+    stagingFolder,
+    screenshotOutputFolder,
+    desiredRelativePaths,
+    backupSuffix,
+  );
+
+  try {
+    requireCurrentJob();
+    for (const relativePath of desiredRelativePaths) {
+      const original = path.join(screenshotOutputFolder, relativePath);
+      const backup = original + backupSuffix;
+      try {
+        await fs.promises.rename(original, backup);
+        backups.push({ backup, original });
+        requireCurrentJob();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw error;
+        }
       }
+    }
+
+    for (const relativePath of desiredRelativePaths) {
+      requireCurrentJob();
+      const generated = path.join(stagingFolder, relativePath);
+      const original = path.join(screenshotOutputFolder, relativePath);
+      await fs.promises.rename(generated, original);
+      installed.push(original);
+      requireCurrentJob();
+    }
+    requireCurrentJob();
+    await markPreviewTransactionCommitted(stagingFolder, transactionManifest);
+  } catch (error) {
+    await Promise.all(installed.map((installedPath: string) => {
+      return fs.promises.unlink(installedPath).catch(() => undefined);
+    }));
+    for (const backup of backups.reverse()) {
+      try {
+        await fs.promises.rename(backup.backup, backup.original);
+      } catch (restoreError) {
+        console.error('Unable to restore a preview after regeneration failed:', backup.original, restoreError);
+      }
+    }
+    throw error;
+  }
+
+  await Promise.all(backups.map((backup) => {
+    return fs.promises.unlink(backup.backup).catch((error: NodeJS.ErrnoException) => {
+      console.warn('Unable to remove a completed thumbnail backup:', backup.backup, error);
     });
   }));
 }
@@ -618,42 +890,64 @@ export function startWatcher(inputSource: number, folderPath: string, persistent
   startFileSystemWatching(folderPath, inputSource, persistent);
 }
 
-/**
- * Check if thumbnail, flimstrip, and clip is present
- * return boolean
- * @param fileHash           - unique identifier of the file
- * @param screenshotFolder   - path to where thumbnails are
- * @param shouldExtractClips - whether or not to extract clips
- */
-function hasAllThumbs(
-  fileHash: string,
+async function requireNonEmptyFile(filePath: string): Promise<void> {
+  const fileStats = await fs.promises.stat(filePath);
+  if (!fileStats.isFile() || fileStats.size === 0) {
+    throw new Error('A generated preview file is empty.');
+  }
+}
+
+async function hasCompleteClipPair(fileHash: string, screenshotFolder: string): Promise<boolean> {
+  try {
+    await Promise.all([
+      requireNonEmptyFile(path.join(screenshotFolder, 'clips', fileHash + '.mp4')),
+      requireNonEmptyFile(path.join(screenshotFolder, 'clips', fileHash + '.jpg')),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Validate the core JPEGs exactly; optionally require a non-empty clip pair. */
+async function hasAllThumbs(
+  element: ImageElement,
   screenshotFolder: string,
-  shouldExtractClips: boolean
+  screenshotSettings: ScreenshotSettings,
+  requireClips: boolean,
 ): Promise<boolean> {
-  return new Promise((resolve, reject) => {
+  const fileHash = element.hash;
+  const thumb: string = path.join(screenshotFolder, 'thumbnails', fileHash + '.jpg');
+  const filmstrip: string = path.join(screenshotFolder, 'filmstrips', fileHash + '.jpg');
+  const screenshotHeight = screenshotSettings.height;
+  const screenshotWidth = Math.round(screenshotHeight * (16 / 9));
 
-    const thumb: string =     path.join(screenshotFolder, '/thumbnails/', fileHash + '.jpg');
-    const filmstrip: string = path.join(screenshotFolder, '/filmstrips/', fileHash + '.jpg');
-    const clip: string =      path.join(screenshotFolder, '/clips/',      fileHash + '.mp4');
-    const clipThumb: string = path.join(screenshotFolder, '/clips/',      fileHash + '.jpg');
+  const [thumbIsValid, filmstripIsValid] = await Promise.all([
+    isExpectedJpeg(thumb, screenshotWidth, screenshotHeight),
+    isExpectedJpeg(filmstrip, screenshotWidth * element.screens, screenshotHeight),
+  ]);
+  const coreStatus: ThumbnailCoreStatus = {
+    filmstrip: filmstripIsValid,
+    thumbnail: thumbIsValid,
+  };
+  if (!thumbIsValid) {
+    throw new ThumbnailRegenerationError(
+      'No usable thumbnail frame could be decoded.',
+      coreStatus,
+    );
+  }
+  if (!filmstripIsValid) {
+    throw new ThumbnailRegenerationError(
+      'No usable filmstrip could be assembled.',
+      coreStatus,
+    );
+  }
 
-    Promise.all([
-      fs.promises.access(thumb, fs.constants.F_OK),
-      fs.promises.access(filmstrip, fs.constants.F_OK),
-      shouldExtractClips
-        ? fs.promises.access(clip, fs.constants.F_OK)
-        : 'ok',
-      shouldExtractClips
-        ? fs.promises.access(clipThumb, fs.constants.F_OK)
-        : 'ok'
-    ])
-      .then(() => {
-        resolve(true);
-      })
-      .catch(() => {
-        reject();
-      });
-  });
+  if (requireClips && !await hasCompleteClipPair(fileHash, screenshotFolder)) {
+    throw new Error('The generated preview clip pair is incomplete.');
+  }
+
+  return true;
 }
 
 /**
@@ -678,8 +972,16 @@ export function extractAnyMissingThumbs(fullArray: ImageElement[]): void {
  * Remove and recreate all generated preview assets for one catalogue item.
  * Uses the same extraction queue and settings as normal imports.
  */
-export function regenerateThumbnails(element: ImageElement): Promise<number> {
+export function regenerateThumbnails(
+  element: ImageElement,
+  folderBatchJobId?: number,
+  stillOwned?: () => boolean,
+): Promise<number> {
   return new Promise((resolve, reject) => {
+    if (thumbnailRegenerationBlocked) {
+      reject(new Error('The catalogue is changing. Wait before regenerating thumbnails.'));
+      return;
+    }
     const fileHash: string = element && element.hash;
     const sourceFolder = element && GLOBALS.selectedSourceFolders[element.inputSource];
 
@@ -701,13 +1003,21 @@ export function regenerateThumbnails(element: ImageElement): Promise<number> {
     }
 
     const jobId = nextThumbnailRegenerationJobId++;
+    const screenshotSettings: ScreenshotSettings = { ...GLOBALS.screenshotSettings };
     const regenerationElement: ThumbnailQueueElement = {
-      ...prepareThumbnailRegeneration(element, GLOBALS.screenshotSettings),
+      ...prepareThumbnailRegeneration(element, screenshotSettings),
       thumbnailRegenerationJobId: jobId,
     };
     thumbnailRegenerationStates.set(fileHash, {
+      folderBatchJobId,
+      generation: folderThumbnailRegenerationGeneration,
+      installing: false,
       jobId,
       screenshotCount: regenerationElement.screens,
+      screenshotOutputFolder: path.join(GLOBALS.selectedOutputFolder, 'vha-' + GLOBALS.hubName),
+      screenshotSettings,
+      sourcePath: sourceFolder.path,
+      stillOwned,
       waiters: [{ reject, resolve }],
     });
 
@@ -715,6 +1025,177 @@ export function regenerateThumbnails(element: ImageElement): Promise<number> {
     importCompletionSent = false;
     thumbQueue.push(regenerationElement);
   });
+}
+
+export function isFolderThumbnailRegenerationActive(): boolean {
+  return activeFolderThumbnailRegenerationJobId !== undefined;
+}
+
+export function isThumbnailRegenerationActive(): boolean {
+  return thumbnailRegenerationBlocked
+    || activeFolderThumbnailRegenerationJobId !== undefined
+    || activeThumbnailQueueRegenerationJobId !== undefined
+    || thumbnailRegenerationStates.size > 0;
+}
+
+export function setThumbnailRegenerationBlocked(blocked: boolean): void {
+  thumbnailRegenerationBlocked = blocked;
+}
+
+/**
+ * Stop scheduling folder jobs immediately. An in-flight extraction is left in
+ * its isolated staging directory; the generation fence prevents it from ever
+ * replacing live previews when it eventually exits.
+ */
+export function cancelFolderThumbnailRegeneration(): boolean {
+  if (activeFolderThumbnailRegenerationJobId === undefined) {
+    return false;
+  }
+
+  folderThumbnailRegenerationGeneration++;
+  Array.from(thumbnailRegenerationStates.entries()).forEach(([fileHash, state]) => {
+    if (
+      state.folderBatchJobId !== activeFolderThumbnailRegenerationJobId
+      || state.jobId === activeThumbnailQueueRegenerationJobId
+      || state.installing
+    ) {
+      return;
+    }
+    settleThumbnailRegeneration(
+      fileHash,
+      state.jobId,
+      new Error('Folder thumbnail regeneration was cancelled.'),
+    );
+  });
+  return true;
+}
+
+/**
+ * Recreate previews for every eligible video assigned to one configured
+ * source folder. Jobs run sequentially to avoid overwhelming local or network
+ * storage, and a queue reset cancels the batch before another item is queued.
+ */
+export async function regenerateFolderThumbnails(
+  sourceIndex: number,
+  elements: ImageElement[],
+  cataloguePath: string,
+  onProgress?: (progress: FolderThumbnailRegenerationProgress) => void,
+  stillOwned?: () => boolean,
+): Promise<FolderThumbnailRegenerationResult> {
+  if (thumbnailRegenerationBlocked) {
+    throw new Error('The catalogue is changing. Wait before regenerating thumbnails.');
+  }
+  if (activeFolderThumbnailRegenerationJobId !== undefined) {
+    throw new Error('Another folder thumbnail regeneration is already in progress.');
+  }
+  if (thumbnailRegenerationStates.size > 0) {
+    throw new Error('Wait for the current thumbnail regeneration to finish.');
+  }
+
+  const sourceFolder = GLOBALS.selectedSourceFolders[sourceIndex];
+  if (
+    !Number.isInteger(sourceIndex)
+    || !sourceFolder
+    || !sourceFolder.path
+    || !Array.isArray(elements)
+    || cataloguePath !== GLOBALS.currentlyOpenVhaFile
+  ) {
+    throw new Error('The selected source folder is not available.');
+  }
+
+  const plan = planFolderThumbnailRegeneration(elements, sourceIndex);
+  if (plan.targets.length === 0) {
+    return {
+      cancelled: false,
+      completed: 0,
+      failed: 0,
+      skippedVideos: plan.skippedVideos,
+      succeeded: 0,
+      total: 0,
+      videoCount: plan.videoCount,
+    };
+  }
+
+  const batchGeneration = folderThumbnailRegenerationGeneration;
+  const jobId = nextFolderThumbnailRegenerationJobId++;
+  const sourcePath = sourceFolder.path;
+  let sourceUnavailable = false;
+  activeFolderThumbnailRegenerationJobId = jobId;
+
+  const shouldCancel = (): boolean => {
+    const currentSourceFolder = GLOBALS.selectedSourceFolders[sourceIndex];
+    return batchGeneration !== folderThumbnailRegenerationGeneration
+      || activeFolderThumbnailRegenerationJobId !== jobId
+      || sourceUnavailable
+      || cataloguePath !== GLOBALS.currentlyOpenVhaFile
+      || (stillOwned && !stillOwned())
+      || !currentSourceFolder
+      || currentSourceFolder.path !== sourcePath;
+  };
+
+  const regenerateFirstAvailableCandidate = async (candidates: ImageElement[]): Promise<number> => {
+    try {
+      await fs.promises.access(sourcePath, fs.constants.R_OK);
+    } catch (error) {
+      sourceUnavailable = true;
+      throw error;
+    }
+
+    let lastError: Error = new Error('No accessible media file was found for this preview hash.');
+    for (const candidate of candidates) {
+      if (shouldCancel()) {
+        throw new Error('Folder thumbnail regeneration was cancelled.');
+      }
+      try {
+        resolveExistingMediaPath(sourcePath, candidate.partialPath, candidate.fileName);
+      } catch (error) {
+        lastError = error instanceof Error ? error : lastError;
+        continue;
+      }
+
+      try {
+        return await regenerateThumbnails(candidate, jobId, stillOwned);
+      } catch (error) {
+        lastError = error instanceof Error ? error : lastError;
+        if (shouldCancel()) {
+          throw lastError;
+        }
+      }
+    }
+    throw lastError;
+  };
+
+  try {
+    const candidateGroups = Array.from(plan.candidatesByHash.values());
+    const result = await runSequentialBatch(
+      candidateGroups,
+      regenerateFirstAvailableCandidate,
+      shouldCancel,
+      progress => onProgress?.({
+        completed: progress.completed,
+        failed: progress.failed,
+        fileHash: progress.outcome.item[0].hash,
+        screenshotCount: progress.outcome.result,
+        succeeded: progress.succeeded,
+        success: progress.outcome.succeeded,
+        total: progress.total,
+      }),
+    );
+
+    return {
+      cancelled: result.cancelled,
+      completed: result.completed,
+      failed: result.failed,
+      skippedVideos: plan.skippedVideos,
+      succeeded: result.succeeded,
+      total: result.total,
+      videoCount: plan.videoCount,
+    };
+  } finally {
+    if (activeFolderThumbnailRegenerationJobId === jobId) {
+      activeFolderThumbnailRegenerationJobId = undefined;
+    }
+  }
 }
 
 /**
@@ -772,6 +1253,9 @@ function deleteThumbQueueRunner(pathToFile: string, done): void {
  */
 export function preventSleep(): void {
   console.log('preventing sleep');
+  if (preventSleepIds.length > 0) {
+    return;
+  }
   preventSleepIds.push(powerSaveBlocker.start('prevent-app-suspension'));
 }
 

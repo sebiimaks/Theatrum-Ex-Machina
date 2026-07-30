@@ -104,14 +104,18 @@ export class ClipComponent implements OnInit {
         const folderPath = this.folderPath();
         const hubName = this.hubName();
         this.folderThumbPaths.push( this.filePathService.createFilePath(folderPath, hubName, 'clips', hash, true));
-        this.folderPosterPaths.push(this.filePathService.createFilePath(folderPath, hubName, this.posterFolderType, hash));
+        this.folderPosterPaths.push(
+          this.filePathService.createFilePath(folderPath, hubName, this.posterFolderType, hash, false, this.video.uuid),
+        );
       });
     } else {
       if (this.video.hash === undefined) {
         this.noError = false;
       }
       this.pathToVideo = this.filePathService.createFilePath(this.folderPath(), this.hubName(), 'clips', this.video.hash, true);
-      this.poster =      this.filePathService.createFilePath(this.folderPath(), this.hubName(), this.posterFolderType, this.video.hash);
+      this.poster =      this.filePathService.createFilePath(
+        this.folderPath(), this.hubName(), this.posterFolderType, this.video.hash, false, this.video.uuid,
+      );
 
       this.folderThumbPaths.push(this.pathToVideo);
       this.folderPosterPaths.push(this.poster);

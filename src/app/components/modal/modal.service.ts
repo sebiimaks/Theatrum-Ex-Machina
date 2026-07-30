@@ -33,6 +33,7 @@ export class ModalService {
     const dialogRef = this.dialog.open(
       ModalComponent,
       {
+        ariaLabel: title,
         data: {
           content: content,
           details: details,
@@ -56,6 +57,7 @@ export class ModalService {
     const dialogRef = this.dialog.open(
       ModalComponent,
       {
+        ariaLabel: title,
         data: {
           cancelLabel: cancelLabel,
           confirmLabel: confirmLabel,

@@ -70,13 +70,68 @@
 }
 
 .catalogue-editor-toolbar {
-  align-items: center;
+  align-items: start;
   background: variables.$gray-10;
   border-bottom: 1px solid variables.$gray-30;
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(210px, 1fr) 140px auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   padding: 10px 12px;
+}
+
+.catalogue-search-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 122px;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 1px 2px 1px 1px;
+
+  @include variables.scrollBar;
+}
+
+.catalogue-search-row {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(160px, 320px) minmax(120px, 140px) 28px 28px;
+  justify-content: start;
+  min-width: 0;
+}
+
+.catalogue-search-action {
+  align-items: center;
+  background: variables.$white;
+  border: 1px solid variables.$gray-40;
+  border-radius: 4px;
+  color: variables.$gray-80;
+  display: inline-flex;
+  font-size: 18px;
+  height: 26px;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: 28px;
+
+  &:focus-visible {
+    border-color: variables.$dark-blue;
+    outline: 2px solid variables.$pretty-blue;
+    outline-offset: 1px;
+  }
+}
+
+.catalogue-search-remove {
+  color: variables.$dark-red;
+}
+
+.catalogue-visually-hidden {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
 }
 
 .catalogue-batch-toolbar {
@@ -88,6 +143,10 @@
   grid-template-columns: auto minmax(220px, 1fr) auto;
   min-height: 44px;
   padding: 7px 12px;
+}
+
+.catalogue-overwrite-toolbar {
+  grid-template-columns: auto 170px minmax(220px, 1fr) auto;
 }
 
 .catalogue-batch-label {
@@ -105,6 +164,8 @@
 
 .catalogue-search,
 .catalogue-editor-toolbar select,
+.catalogue-overwrite-toolbar input,
+.catalogue-overwrite-toolbar select,
 .catalogue-row input,
 .catalogue-row select,
 .catalogue-row textarea {
@@ -125,12 +186,23 @@
   }
 }
 
+.catalogue-number-input {
+  appearance: textfield;
+
+  &::-webkit-inner-spin-button,
+  &::-webkit-outer-spin-button {
+    appearance: none;
+    margin: 0;
+  }
+}
+
 .catalogue-toggle {
   align-items: center;
   color: variables.$gray-70;
   display: inline-flex;
   font-size: 12px;
   gap: 6px;
+  min-height: 28px;
   white-space: nowrap;
 
   input {
@@ -161,6 +233,10 @@
     border-color: variables.$gray-50;
     cursor: default;
   }
+}
+
+.catalogue-overwrite-apply {
+  min-width: 142px;
 }
 
 .catalogue-save {
@@ -266,7 +342,6 @@
   font-weight: bold;
   grid-template-columns: minmax(0, 1fr) 150px;
   padding: 7px 12px;
-  text-transform: uppercase;
 }
 
 .catalogue-editor-body {
@@ -492,12 +567,24 @@
 
   .catalogue-search,
   .catalogue-editor-toolbar select,
+  .catalogue-overwrite-toolbar input,
+  .catalogue-overwrite-toolbar select,
   .catalogue-row input,
   .catalogue-row select,
   .catalogue-row textarea {
     background: variables.$gray-90;
     border-color: variables.$gray-60;
     color: variables.$gray-10;
+  }
+
+  .catalogue-search-action {
+    background: variables.$gray-70;
+    border-color: variables.$gray-50;
+    color: variables.$gray-10;
+  }
+
+  .catalogue-search-remove {
+    color: variables.$pretty-red;
   }
 
   .catalogue-tag-input {
@@ -521,11 +608,23 @@
 
 @media (max-width: 980px) {
   .catalogue-editor-toolbar {
-    grid-template-columns: minmax(180px, 1fr) 125px;
+    grid-template-columns: minmax(180px, 1fr) auto;
+  }
+
+  .catalogue-search-lines {
+    grid-column: 1 / -1;
+  }
+
+  .catalogue-search-row {
+    grid-template-columns: minmax(140px, 1fr) 125px 28px 28px;
   }
 
   .catalogue-batch-toolbar {
     grid-template-columns: minmax(180px, 1fr) auto;
+  }
+
+  .catalogue-overwrite-toolbar {
+    grid-template-columns: minmax(130px, 0.7fr) minmax(180px, 1fr) auto;
   }
 
   .catalogue-batch-label,
@@ -544,5 +643,22 @@
 
   .catalogue-row-actions {
     align-items: flex-start;
+  }
+}
+
+@media (max-width: 600px) {
+  .catalogue-overwrite-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+
+    .catalogue-batch-label,
+    .catalogue-batch-status {
+      grid-column: 1;
+    }
+  }
+
+  .catalogue-overwrite-field,
+  .catalogue-overwrite-value,
+  .catalogue-overwrite-apply {
+    width: 100%;
   }
 }

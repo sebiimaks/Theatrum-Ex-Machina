@@ -273,11 +273,14 @@
   @if (settingTabToShow == 3) {
     <div class="shortcut-menu">
       <app-statistics
+        (cancelFolderThumbnailRegeneration)="cancelFolderThumbnailRegeneration()"
         (deleteInputSourceFiles)="deleteInputSourceFiles($event)"
         (finalArrayNeedsSaving)="imageElementService.finalArrayNeedsSaving = true"
+        (regenerateFolderThumbnails)="confirmRegenerateFolderThumbnails($event)"
         (startServerOnPort)="startServer($event)"
 
         [appState]="appState"
+        [folderThumbnailRegenerationStatus]="folderThumbnailRegenerationStatus"
         [hubName]="appState.hubName"
         [inputFolders]="sourceFolderService.selectedSourceFolder"
         [numFolders]="appState.numOfFolders"

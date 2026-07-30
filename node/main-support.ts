@@ -529,7 +529,11 @@ export function parseAdditionalExtensions(additionalExtension: string): string[]
  * @param finalObject
  * @param globals
  */
-export function sendFinalObjectToAngular(finalObject: FinalObject, globals: VhaGlobals): void {
+export function sendFinalObjectToAngular(
+  finalObject: FinalObject,
+  globals: VhaGlobals,
+  catalogueSettingsNormalized = false,
+): void {
 
   // finalObject.images = alphabetizeFinalArray(finalObject.images); // TODO -- check -- unsure if needed
 
@@ -539,7 +543,8 @@ export function sendFinalObjectToAngular(finalObject: FinalObject, globals: VhaG
     'final-object-returning',
     finalObject,
     globals.currentlyOpenVhaFile,
-    getHtmlPath(globals.selectedOutputFolder)
+    getHtmlPath(globals.selectedOutputFolder),
+    catalogueSettingsNormalized,
   );
 }
 

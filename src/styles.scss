@@ -2,6 +2,10 @@
 
 @import "~@angular/cdk/overlay-prebuilt.css";
 
+.cdk-overlay-container {
+  z-index: 8000;
+}
+
 html, body {
   font-family: sans-serif;
   margin: 0;

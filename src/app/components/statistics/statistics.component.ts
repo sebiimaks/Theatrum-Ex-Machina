@@ -1,4 +1,4 @@
-import type { OnInit, OnDestroy } from '@angular/core';
+import type { DoCheck, OnInit, OnDestroy } from '@angular/core';
 import { ChangeDetectorRef, input, output } from '@angular/core';
 import { Component, Input } from '@angular/core';
 
@@ -11,6 +11,7 @@ import { SourceFolderService } from './source-folder.service';
 import type { AppStateInterface } from '../../common/app-state';
 import type { ImageElement, ScreenshotSettings, InputSources } from '../../../../interfaces/final-object.interface';
 import { isMetadataImportFailure } from '../../../../interfaces/final-object.interface';
+import { buildEligibleFolderThumbnailVideoCounts } from '../../../../node/thumbnail-count';
 
 import { metaAppear, breadcrumbWordAppear } from '../../common/animations';
 
@@ -18,6 +19,13 @@ export interface ServerDetails {
   port: number;
   wifi: string;
   host: string;
+}
+
+export interface FolderThumbnailRegenerationStatus {
+  cancelling?: boolean;
+  completedJobs: number;
+  sourceIndex: number;
+  totalJobs: number;
 }
 
 @Component({
@@ -33,15 +41,18 @@ export interface ServerDetails {
   ],
   animations: [metaAppear, breadcrumbWordAppear]
 })
-export class StatisticsComponent implements OnInit, OnDestroy {
+export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
 
   readonly deleteInputSourceFiles = output<number>();
+  readonly cancelFolderThumbnailRegeneration = output<void>();
   readonly finalArrayNeedsSaving = output<any>();
+  readonly regenerateFolderThumbnails = output<number>();
   readonly startServerOnPort = output<number>();
 
   readonly appState = input<AppStateInterface>();
   readonly hubName = input<string>();
   readonly inputFolders = input<InputSources>();
+  readonly folderThumbnailRegenerationStatus = input<FolderThumbnailRegenerationStatus | null>(null);
   readonly numFolders = input<number>();
   readonly pathToVhaFile = input<string>();
 
@@ -79,6 +90,7 @@ export class StatisticsComponent implements OnInit, OnDestroy {
   serverRunning = false;
 
   objectKeys = Object.keys; // to use in template
+  private eligibleVideoCounts = new Map<number, number>();
 
   constructor(
     public cd: ChangeDetectorRef,
@@ -238,6 +250,27 @@ export class StatisticsComponent implements OnInit, OnDestroy {
     return Math.max(...indexesAsNumbers) + 1;
   }
 
+  folderSourceIndex(itemSourceKey: string | number): number {
+    return Number(itemSourceKey);
+  }
+
+  ngDoCheck(): void {
+    this.eligibleVideoCounts = buildEligibleFolderThumbnailVideoCounts(
+      this.imageElementService.imageElements,
+    );
+  }
+
+  folderEligibleVideoCount(itemSourceKey: string | number): number {
+    return this.eligibleVideoCounts.get(this.folderSourceIndex(itemSourceKey)) || 0;
+  }
+
+  folderDisplayName(itemSourceKey: string | number): string {
+    const folder = this.inputFolders()[this.folderSourceIndex(itemSourceKey)];
+    const folderPath = folder && folder.path ? folder.path : '';
+    const segments = folderPath.split(/[\\/]/).filter(Boolean);
+    return segments.length > 0 ? segments[segments.length - 1] : folderPath;
+  }
+
   /**
    * Notify Node of watch status change
    * toggled via checkbox input in template
@@ -299,6 +332,9 @@ export class StatisticsComponent implements OnInit, OnDestroy {
    * @param itemSourceKey
    */
   deleteInputSource(itemSourceKey: number) {
+    if (this.folderThumbnailRegenerationStatus()) {
+      return;
+    }
     console.log(itemSourceKey);
     const inputFolders = this.inputFolders();
     console.log(inputFolders[itemSourceKey]);

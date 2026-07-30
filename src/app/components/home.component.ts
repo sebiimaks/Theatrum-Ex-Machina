@@ -30,8 +30,24 @@ import type { ContextMenuCoordinate } from '../../../interfaces/shared-interface
 import type { FinalObject, ImageElement, ScreenshotSettings, ResolutionString } from '../../../interfaces/final-object.interface';
 import { IMPORT_ERROR_TAG, isMetadataImportFailure } from '../../../interfaces/final-object.interface';
 import type { ImportStage } from '../../../node/main-support';
-import { applyRegeneratedScreenshotCount } from '../../../node/thumbnail-count';
-import type { ServerDetails } from './statistics/statistics.component';
+import type {
+  FolderThumbnailRegenerationProgress,
+  FolderThumbnailRegenerationResult,
+} from '../../../node/main-extract-async';
+import {
+  applyCustomThumbnailReplacement,
+  applyRegeneratedScreenshotCount,
+  applyThumbnailRegenerationFailure,
+  folderThumbnailRegenerationPlansMatch,
+  normalizeCatalogueThumbnailCounts,
+  planFolderThumbnailRegeneration,
+  withThumbnailRefreshId,
+} from '../../../node/thumbnail-count';
+import type { ThumbnailCoreStatus } from '../../../node/thumbnail-count';
+import type {
+  FolderThumbnailRegenerationStatus,
+  ServerDetails,
+} from './statistics/statistics.component';
 import type { RemoteSettings, SettingsButtonSavedProperties, SettingsObject } from '../../../interfaces/settings-object.interface';
 import type { SortType } from '../pipes/sorting.pipe';
 import type { WizardOptions } from '../../../interfaces/wizard-options.interface';
@@ -74,6 +90,18 @@ import {
   slowFadeOut,
   topAnimation
 } from '../common/animations';
+
+interface FolderThumbnailRegenerationRequest {
+  failedVideos: number;
+  hubFile: string;
+  processedHashes: Set<string>;
+  requestId: number;
+  skippedVideos: number;
+  sourceIndex: number;
+  succeededVideos: number;
+  updatedHashes: Set<string>;
+  videoCountsByHash: Map<string, number>;
+}
 
 @Component({
   standalone: false,
@@ -179,6 +207,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
   previewWidth: number;
   previewWidthRelated: number;          // For the Related Videos tab:
   textPaddingHeight: number;            // for text padding below filmstrip or thumbnail element
+
+  folderThumbnailRegenerationStatus: FolderThumbnailRegenerationStatus | null = null;
+  private folderThumbnailRegenerationRequest: FolderThumbnailRegenerationRequest | null = null;
+  private nextFolderThumbnailRegenerationRequestId = 1;
 
   // ========================================================================
   // Duration filter
@@ -579,20 +611,15 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.electronService.webFrame.clearCache();
     });
 
-    this.electronService.ipcRenderer.on(
-      'thumbnail-regeneration-complete',
-      (event, fileHash: string, screenshotCount: number) => {
+    this.electronService.ipcRenderer.on('custom-thumbnail-replaced', (event, fileHash: string) => {
       this.zone.run(() => {
-        const catalogueChanged = applyRegeneratedScreenshotCount(
+        const catalogueChanged = applyCustomThumbnailReplacement(
           this.imageElementService.imageElements,
           fileHash,
-          screenshotCount,
+          Date.now(),
         );
-        this.imageElementService.imageElements
-          .filter((element: ImageElement) => element.hash === fileHash)
-          .forEach((element: ImageElement) => {
-            element.uuid = `${element.uuid}-thumbnail-${Date.now()}`;
-          });
+
+        this.electronService.webFrame.clearCache();
         this.imageElementService.imageElements = this.imageElementService.imageElements.slice();
         if (catalogueChanged) {
           this.imageElementService.finalArrayNeedsSaving = true;
@@ -601,16 +628,78 @@ export class HomeComponent implements OnInit, AfterViewInit {
         if (this.currentClickedItem && this.currentClickedItem.hash === fileHash) {
           this.updateCurrentClickedItem(this.currentClickedItem);
         }
+      });
+    });
 
+    this.electronService.ipcRenderer.on(
+      'thumbnail-regeneration-complete',
+      (event, fileHash: string, screenshotCount: number) => {
+      this.zone.run(() => {
+        this.applyThumbnailRegenerationResult(fileHash, screenshotCount, true);
         this.modalService.openSnackbar(this.translate.instant('RIGHTCLICK.thumbnailRegenerationComplete'));
       });
     });
 
-    this.electronService.ipcRenderer.on('thumbnail-regeneration-failed', (event) => {
-      this.zone.run(() => {
-        this.modalService.openSnackbar(this.translate.instant('RIGHTCLICK.thumbnailRegenerationFailed'));
+    this.electronService.ipcRenderer.on(
+      'thumbnail-regeneration-failed',
+      (event, fileHash: string, reason?: string, coreStatus?: ThumbnailCoreStatus) => {
+        this.zone.run(() => {
+          const catalogueChanged = applyThumbnailRegenerationFailure(
+            this.imageElementService.imageElements,
+            fileHash,
+            coreStatus,
+            Date.now(),
+          );
+          this.electronService.webFrame.clearCache();
+          this.imageElementService.imageElements = this.imageElementService.imageElements.slice();
+          if (catalogueChanged) {
+            this.imageElementService.finalArrayNeedsSaving = true;
+          }
+          if (this.currentClickedItem && this.currentClickedItem.hash === fileHash) {
+            this.updateCurrentClickedItem(this.currentClickedItem);
+          }
+
+          const message = this.translate.instant('RIGHTCLICK.thumbnailRegenerationFailed');
+          this.modalService.openSnackbar(reason ? `${message}: ${reason}` : message);
+        });
       });
-    });
+
+    this.electronService.ipcRenderer.on(
+      'folder-thumbnail-regeneration-progress',
+      (
+        event,
+        requestId: number,
+        sourceIndex: number,
+        progress: FolderThumbnailRegenerationProgress,
+      ) => {
+        this.zone.run(() => {
+          this.handleFolderThumbnailRegenerationProgress(requestId, sourceIndex, progress);
+        });
+      },
+    );
+
+    this.electronService.ipcRenderer.on(
+      'folder-thumbnail-regeneration-complete',
+      (
+        event,
+        requestId: number,
+        sourceIndex: number,
+        result: FolderThumbnailRegenerationResult,
+      ) => {
+        this.zone.run(() => {
+          this.handleFolderThumbnailRegenerationComplete(requestId, sourceIndex, result);
+        });
+      },
+    );
+
+    this.electronService.ipcRenderer.on(
+      'folder-thumbnail-regeneration-failed',
+      (event, requestId: number, sourceIndex: number) => {
+        this.zone.run(() => {
+          this.handleFolderThumbnailRegenerationFailure(requestId, sourceIndex);
+        });
+      },
+    );
 
     this.electronService.ipcRenderer.on('touchBar-to-app', (event, changesFromTouchBar: SettingsButtonKey | SupportedView) => {
       if (changesFromTouchBar) {
@@ -761,6 +850,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       finalObject: FinalObject,
       pathToFile: string,
       outputFolderPath: string,
+      catalogueSettingsNormalized = false,
     ) => {
 
       this.stopServer();
@@ -772,6 +862,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.imageElementService.finalArrayNeedsSaving = false;
 
       this.currentScreenshotSettings = finalObject.screenshotSettings;
+      const thumbnailMetadataNormalized = normalizeCatalogueThumbnailCounts(
+        finalObject.images,
+        finalObject.screenshotSettings,
+      );
 
       this.appState.currentVhaFile = pathToFile;
       this.appState.selectedOutputFolder = outputFolderPath;
@@ -794,6 +888,9 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.setTags(finalObject.addTags, finalObject.removeTags); // auto-tags
 
       this.imageElementService.imageElements = this.demo ? finalObject.images.slice(0, 50) : finalObject.images;
+      if (thumbnailMetadataNormalized || catalogueSettingsNormalized) {
+        this.imageElementService.finalArrayNeedsSaving = true;
+      }
 
       this.canCloseWizard = true;
       this.wizard.showWizard = false;
@@ -1090,30 +1187,46 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * @param event         drop event - containing path to possible jpg file
    * @param galleryItem   item in the gallery over which jpg was dropped
    */
-  droppedSomethingOverVideo(event, galleryItem: ImageElement) {
+  droppedSomethingOverVideo(event: DragEvent, galleryItem: ImageElement): void {
+    const dataTransfer = event.dataTransfer;
+    if (!dataTransfer) {
+      return;
+    }
+
+    const droppedFile = dataTransfer.files.item(0);
+    if (droppedFile) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (galleryItem.cleanName === '*FOLDER*') {
+        return;
+      }
+
+      try {
+        const pathToNewImage = this.electronService.getPathForFile(droppedFile);
+        const extension = path.extname(pathToNewImage).toLowerCase();
+        if (['.jpg', '.jpeg', '.png'].includes(extension)) {
+          if (this.blockActionDuringFolderThumbnailRegeneration()) {
+            return;
+          }
+          this.electronService.ipcRenderer.send('replace-thumbnail', pathToNewImage, galleryItem);
+        }
+      } catch (error) {
+        console.error('Unable to resolve the dropped image path:', error);
+      }
+      return;
+    }
 
     // this occurs when a tag is dropped on a video from the tag tray
-    if (event.dataTransfer.getData('text')) {
+    if (dataTransfer.getData('text')) {
       // tag previously set by `dragStart` in `view-tags.component`
-      const tag: string = event.dataTransfer.getData('text');
+      const tag: string = dataTransfer.getData('text');
 
       this.addTagToThisElement(tag, galleryItem);
 
       this.ifShowDetailsViewRefreshTags();
 
       return;
-    }
-
-    const pathToNewImage: string = event.dataTransfer.files[0].path.toLowerCase();
-    if (
-        (
-             pathToNewImage.endsWith('.jpg')
-          || pathToNewImage.endsWith('.jpeg')
-          || pathToNewImage.endsWith('.png')
-        )
-        && galleryItem.cleanName !== '*FOLDER*'
-    ) {
-      this.electronService.ipcRenderer.send('replace-thumbnail', pathToNewImage, galleryItem);
     }
   }
 
@@ -1150,10 +1263,16 @@ export class HomeComponent implements OnInit, AfterViewInit {
   }
 
   public loadThisVhaFile(fullPath: string): void {
+    if (this.blockActionDuringFolderThumbnailRegeneration()) {
+      return;
+    }
     this.electronService.ipcRenderer.send('load-this-vha-file', fullPath, this.getFinalObjectForSaving());
   }
 
   public loadFromFile(): void {
+    if (this.blockActionDuringFolderThumbnailRegeneration()) {
+      return;
+    }
     this.electronService.ipcRenderer.send('system-open-file-through-modal');
   }
 
@@ -1180,7 +1299,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
   }
 
   public saveCurrentVhaFile(): void {
-    if (this.catalogueEditorSaving) {
+    if (this.catalogueEditorSaving || this.blockActionDuringFolderThumbnailRegeneration()) {
       return;
     }
 
@@ -1205,6 +1324,9 @@ export class HomeComponent implements OnInit, AfterViewInit {
   }
 
   public importFresh(): void {
+    if (this.blockActionDuringFolderThumbnailRegeneration()) {
+      return;
+    }
     this.sourceFolderService.selectedSourceFolder = this.wizard.selectedSourceFolder;
     this.appState.selectedOutputFolder = this.wizard.selectedOutputFolder;
     this.electronService.ipcRenderer.send('start-the-import', this.wizard);
@@ -1233,6 +1355,9 @@ export class HomeComponent implements OnInit, AfterViewInit {
   }
 
   public initiateClose(): void {
+    if (this.blockActionDuringFolderThumbnailRegeneration()) {
+      return;
+    }
     this.isClosing = true;
     this.savePreviousViewSize();
     this.appState.imgsPerRow = this.imgsPerRow;
@@ -1924,6 +2049,9 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * Start the wizard again
    */
   public startWizard(): void {
+    if (this.blockActionDuringFolderThumbnailRegeneration()) {
+      return;
+    }
     this.wizard = {
       clipHeight: 144, // default = half the screenshot height
       clipSnippetLength: 1,
@@ -2125,6 +2253,9 @@ export class HomeComponent implements OnInit, AfterViewInit {
   }
 
   openCatalogueEditor(): void {
+    if (this.blockActionDuringFolderThumbnailRegeneration()) {
+      return;
+    }
     this.catalogueEditorOpen = true;
     this.catalogueEditorSaveStatus = '';
   }
@@ -2154,6 +2285,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
   handleCatalogueEntriesChanged(): void {
     const activeImages = this.imageElementService.imageElements.filter((element: ImageElement) => !element.deleted);
+
+    if (!this.catalogueEditorSaving) {
+      this.catalogueEditorSaveStatus = 'Unsaved Changes';
+    }
 
     this.deletePipeTrigger = !this.deletePipeTrigger;
     this.setUpTimesPlayedFilterValues(activeImages);
@@ -2348,7 +2483,297 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * Recreate all generated preview assets for the selected video.
    */
   regenerateThumbnails(item: ImageElement): void {
+    if (this.blockActionDuringFolderThumbnailRegeneration()) {
+      return;
+    }
     this.electronService.ipcRenderer.send('regenerate-thumbnails', item);
+  }
+
+  /**
+   * Confirm and start one sequential preview-regeneration batch for a source
+   * folder. The eligible set is recalculated after confirmation so a delayed
+   * response cannot operate on stale catalogue entries.
+   */
+  confirmRegenerateFolderThumbnails(sourceIndex: number): void {
+    if (this.folderThumbnailRegenerationRequest) {
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.folderThumbnailRegenerationBusy'),
+      );
+      return;
+    }
+
+    const folder = this.sourceFolderService.selectedSourceFolder[sourceIndex];
+    if (
+      !Number.isInteger(sourceIndex)
+      || !folder
+      || this.sourceFolderService.sourceFolderConnected[sourceIndex] !== true
+    ) {
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.folderThumbnailRegenerationUnavailable'),
+      );
+      return;
+    }
+
+    const plan = planFolderThumbnailRegeneration(
+      this.imageElementService.imageElements,
+      sourceIndex,
+    );
+    if (plan.targets.length === 0) {
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.noFolderThumbnailsToRegenerate'),
+      );
+      return;
+    }
+
+    const folderPath = folder.path;
+    const folderName = path.basename(folderPath) || folderPath;
+    const messageKey = plan.videoCount === 1
+      ? 'STATISTICS.confirmRegenerateFolderThumbnailsMessageSingle'
+      : 'STATISTICS.confirmRegenerateFolderThumbnailsMessage';
+    let message = this.translate.instant(messageKey, {
+      count: plan.videoCount,
+      folderName,
+    });
+    if (plan.skippedVideos > 0) {
+      message += ' ' + this.translate.instant('STATISTICS.folderThumbnailRegenerationSkippedNotice', {
+        count: plan.skippedVideos,
+      });
+    }
+
+    const hubFile = this.appState.currentVhaFile;
+    this.modalService.openConfirmationDialog(
+      this.translate.instant('STATISTICS.confirmRegenerateFolderThumbnailsTitle'),
+      message,
+      this.translate.instant('STATISTICS.regenerateFolderThumbnails'),
+      this.translate.instant('SYSTEM.cancel'),
+    ).subscribe((confirmed: boolean) => {
+      if (!confirmed || this.appState.currentVhaFile !== hubFile) {
+        return;
+      }
+      if (this.folderThumbnailRegenerationRequest) {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.folderThumbnailRegenerationBusy'),
+        );
+        return;
+      }
+
+      const currentFolder = this.sourceFolderService.selectedSourceFolder[sourceIndex];
+      if (
+        !currentFolder
+        || currentFolder.path !== folderPath
+        || this.sourceFolderService.sourceFolderConnected[sourceIndex] !== true
+      ) {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.folderThumbnailRegenerationUnavailable'),
+        );
+        return;
+      }
+
+      const currentPlan = planFolderThumbnailRegeneration(
+        this.imageElementService.imageElements,
+        sourceIndex,
+      );
+      if (!folderThumbnailRegenerationPlansMatch(plan, currentPlan)) {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.folderThumbnailRegenerationSelectionChanged'),
+        );
+        return;
+      }
+      if (currentPlan.targets.length === 0) {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.noFolderThumbnailsToRegenerate'),
+        );
+        return;
+      }
+
+      const requestId = this.nextFolderThumbnailRegenerationRequestId++;
+      this.folderThumbnailRegenerationRequest = {
+        failedVideos: 0,
+        hubFile,
+        processedHashes: new Set<string>(),
+        requestId,
+        skippedVideos: currentPlan.skippedVideos,
+        sourceIndex,
+        succeededVideos: 0,
+        updatedHashes: new Set<string>(),
+        videoCountsByHash: currentPlan.videoCountsByHash,
+      };
+      this.folderThumbnailRegenerationStatus = {
+        completedJobs: 0,
+        sourceIndex,
+        totalJobs: currentPlan.targets.length,
+      };
+      this.electronService.ipcRenderer.send(
+        'regenerate-folder-thumbnails',
+        requestId,
+        sourceIndex,
+        hubFile,
+        currentPlan.eligibleVideos,
+      );
+    });
+  }
+
+  cancelFolderThumbnailRegeneration(): void {
+    if (!this.folderThumbnailRegenerationRequest || !this.folderThumbnailRegenerationStatus) {
+      return;
+    }
+    this.folderThumbnailRegenerationStatus = {
+      ...this.folderThumbnailRegenerationStatus,
+      cancelling: true,
+    };
+    this.electronService.ipcRenderer.send('cancel-folder-thumbnail-regeneration');
+  }
+
+  private blockActionDuringFolderThumbnailRegeneration(): boolean {
+    if (!this.folderThumbnailRegenerationRequest) {
+      return false;
+    }
+    this.modalService.openSnackbar(
+      this.translate.instant('STATISTICS.folderThumbnailRegenerationActionBlocked'),
+    );
+    return true;
+  }
+
+  private applyThumbnailRegenerationResult(
+    fileHash: string,
+    screenshotCount: number,
+    refreshPresentation: boolean,
+  ): void {
+    const catalogueChanged = applyRegeneratedScreenshotCount(
+      this.imageElementService.imageElements,
+      fileHash,
+      screenshotCount,
+    );
+    const refreshId = Date.now();
+    this.imageElementService.imageElements
+      .filter((element: ImageElement) => element.hash === fileHash)
+      .forEach((element: ImageElement) => {
+        element.uuid = withThumbnailRefreshId(element.uuid, 'thumbnail', refreshId);
+      });
+
+    if (catalogueChanged) {
+      this.imageElementService.finalArrayNeedsSaving = true;
+    }
+    if (!refreshPresentation) {
+      return;
+    }
+
+    this.imageElementService.imageElements = this.imageElementService.imageElements.slice();
+    if (this.currentClickedItem && this.currentClickedItem.hash === fileHash) {
+      this.updateCurrentClickedItem(this.currentClickedItem);
+    }
+  }
+
+  private handleFolderThumbnailRegenerationProgress(
+    requestId: number,
+    sourceIndex: number,
+    progress: FolderThumbnailRegenerationProgress,
+  ): void {
+    const request = this.getActiveFolderThumbnailRegenerationRequest(requestId, sourceIndex);
+    if (!request || request.processedHashes.has(progress.fileHash)) {
+      return;
+    }
+
+    request.processedHashes.add(progress.fileHash);
+    const matchingVideos = request.videoCountsByHash.get(progress.fileHash) || 0;
+    if (
+      progress.success
+      && Number.isInteger(progress.screenshotCount)
+      && progress.screenshotCount > 0
+    ) {
+      this.applyThumbnailRegenerationResult(progress.fileHash, progress.screenshotCount, false);
+      request.succeededVideos += matchingVideos;
+      request.updatedHashes.add(progress.fileHash);
+    } else {
+      request.failedVideos += matchingVideos;
+    }
+
+    this.folderThumbnailRegenerationStatus = {
+      cancelling: this.folderThumbnailRegenerationStatus?.cancelling,
+      completedJobs: Math.min(progress.completed, progress.total),
+      sourceIndex,
+      totalJobs: progress.total,
+    };
+  }
+
+  private handleFolderThumbnailRegenerationComplete(
+    requestId: number,
+    sourceIndex: number,
+    result: FolderThumbnailRegenerationResult,
+  ): void {
+    const request = this.getActiveFolderThumbnailRegenerationRequest(requestId, sourceIndex);
+    if (!request) {
+      return;
+    }
+
+    if (request.updatedHashes.size > 0) {
+      this.electronService.webFrame.clearCache();
+      this.imageElementService.imageElements = this.imageElementService.imageElements.slice();
+      if (this.currentClickedItem && request.updatedHashes.has(this.currentClickedItem.hash)) {
+        this.updateCurrentClickedItem(this.currentClickedItem);
+      }
+    }
+
+    const succeededVideos = request.succeededVideos;
+    const failedVideos = request.failedVideos;
+    const skippedVideos = request.skippedVideos;
+    this.clearFolderThumbnailRegenerationRequest();
+
+    if (result.cancelled) {
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.folderThumbnailRegenerationCancelled'),
+      );
+    } else if (failedVideos > 0 || skippedVideos > 0) {
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.folderThumbnailRegenerationSummary', {
+          failed: failedVideos,
+          skipped: skippedVideos,
+          succeeded: succeededVideos,
+        }),
+      );
+    } else {
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.folderThumbnailRegenerationComplete', {
+          count: succeededVideos,
+        }),
+      );
+    }
+  }
+
+  private handleFolderThumbnailRegenerationFailure(requestId: number, sourceIndex: number): void {
+    const request = this.getActiveFolderThumbnailRegenerationRequest(requestId, sourceIndex);
+    if (!request) {
+      return;
+    }
+
+    this.clearFolderThumbnailRegenerationRequest();
+    this.modalService.openSnackbar(
+      this.translate.instant('STATISTICS.folderThumbnailRegenerationFailed'),
+    );
+  }
+
+  private getActiveFolderThumbnailRegenerationRequest(
+    requestId: number,
+    sourceIndex: number,
+  ): FolderThumbnailRegenerationRequest | null {
+    const request = this.folderThumbnailRegenerationRequest;
+    if (
+      !request
+      || request.requestId !== requestId
+      || request.sourceIndex !== sourceIndex
+    ) {
+      return null;
+    }
+    if (request.hubFile !== this.appState.currentVhaFile) {
+      this.clearFolderThumbnailRegenerationRequest();
+      return null;
+    }
+    return request;
+  }
+
+  private clearFolderThumbnailRegenerationRequest(): void {
+    this.folderThumbnailRegenerationRequest = null;
+    this.folderThumbnailRegenerationStatus = null;
   }
 
   /**

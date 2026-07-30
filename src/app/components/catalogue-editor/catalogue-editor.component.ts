@@ -1,15 +1,29 @@
 import type { OnChanges, SimpleChanges } from '@angular/core';
-import { Component, EventEmitter, Input, Output } from '@angular/core';
+import { Component, ElementRef, EventEmitter, Input, Output, QueryList, ViewChildren } from '@angular/core';
 
 import type { ImageElement, StarRating } from '../../../../interfaces/final-object.interface';
 import { ImageElementService } from '../../services/image-element.service';
+import { ModalService } from '../modal/modal.service';
 import { ManualTagsService } from '../tags-manual/manual-tags.service';
-
-type CatalogueSearchField = 'all' | 'name' | 'file' | 'path' | 'tags' | 'hash';
+import {
+  applyCatalogueOverwrite,
+  catalogueOverwriteFieldLabels,
+  filterCatalogueEntries,
+  validateCatalogueOverwrite,
+} from './catalogue-editor.logic';
+import type {
+  CatalogueOverwriteField,
+  CatalogueSearchCriterion,
+} from './catalogue-editor.logic';
 
 interface StarOption {
   label: string;
   value: StarRating;
+}
+
+interface OverwriteFieldOption {
+  label: string;
+  value: CatalogueOverwriteField;
 }
 
 @Component({
@@ -19,6 +33,9 @@ interface StarOption {
   styleUrls: ['./catalogue-editor.component.scss']
 })
 export class CatalogueEditorComponent implements OnChanges {
+
+  @ViewChildren('searchCriterionInput')
+  private searchCriterionInputs: QueryList<ElementRef<HTMLInputElement>>;
 
   @Input() currentVhaFile = '';
   @Input() darkMode = false;
@@ -30,15 +47,29 @@ export class CatalogueEditorComponent implements OnChanges {
   @Output() entriesChanged = new EventEmitter<void>();
   @Output() saveRequested = new EventEmitter<void>();
 
-  field: CatalogueSearchField = 'all';
   filteredEntries: ImageElement[] = [];
+  batchOverwriteDraft = '';
+  batchOverwriteField: CatalogueOverwriteField | '' = '';
+  batchOverwriteStatus = '';
   batchTagDraft = '';
   batchTagStatus = '';
   batchTagTypeahead = '';
   hashCopyFailedIndex: number | undefined;
   hashCopiedIndex: number | undefined;
-  query = '';
+  searchRowsStatus = '';
+  searchCriteria: CatalogueSearchCriterion[] = [
+    { field: 'all', id: 0, query: '' },
+  ];
   showDeleted = false;
+
+  readonly overwriteFieldOptions: OverwriteFieldOption[] = [
+    { label: 'Clean Name', value: 'cleanName' },
+    { label: 'Stars', value: 'stars' },
+    { label: 'Year', value: 'year' },
+    { label: 'Times Played', value: 'timesPlayed' },
+    { label: 'Default Screen', value: 'defaultScreen' },
+    { label: 'Notes', value: 'notes' },
+  ];
 
   readonly starOptions: StarOption[] = [
     { label: 'N/A', value: 0.5 },
@@ -51,10 +82,12 @@ export class CatalogueEditorComponent implements OnChanges {
 
   private tagDrafts: { [index: number]: string } = {};
   private tagTypeaheads: { [index: number]: string } = {};
+  private nextSearchCriterionId = 1;
 
   constructor(
     public imageElementService: ImageElementService,
     public manualTagsService: ManualTagsService,
+    private modalService: ModalService,
   ) { }
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -75,12 +108,47 @@ export class CatalogueEditorComponent implements OnChanges {
     return this.filteredEntries.length > 0 && this.parseTags(this.batchTagDraft).length > 0;
   }
 
+  get canRequestBatchOverwrite(): boolean {
+    return Boolean(this.batchOverwriteField) && this.filteredEntries.length > 0;
+  }
+
+  get batchOverwritePlaceholder(): string {
+    if (this.batchOverwriteField === 'year' || this.batchOverwriteField === 'defaultScreen') {
+      return 'New value, or leave blank to clear';
+    }
+
+    if (this.batchOverwriteField === 'notes') {
+      return 'New notes, or leave blank to clear';
+    }
+
+    return this.batchOverwriteField ? 'New value' : 'Select a field first';
+  }
+
+  get batchOverwriteUsesNumericInput(): boolean {
+    return this.batchOverwriteField === 'year'
+      || this.batchOverwriteField === 'timesPlayed'
+      || this.batchOverwriteField === 'defaultScreen';
+  }
+
   get deletedCount(): number {
     return this.images.filter((element: ImageElement) => element.deleted).length;
   }
 
   get totalCount(): number {
     return this.images.length;
+  }
+
+  addSearchCriterion(): void {
+    const criterionId = this.nextSearchCriterionId++;
+
+    this.searchCriteria.push({
+      field: 'all',
+      id: criterionId,
+      query: '',
+    });
+    this.searchRowsStatus = `Search line ${this.searchCriteria.length} added. All completed search lines must match.`;
+
+    setTimeout(() => this.focusSearchCriterion(criterionId), 0);
   }
 
   close(): void {
@@ -204,6 +272,90 @@ export class CatalogueEditorComponent implements OnChanges {
     this.refreshFilteredEntries();
   }
 
+  requestBatchOverwrite(): void {
+    const field = this.batchOverwriteField;
+    const overwriteDraft = this.batchOverwriteDraft;
+    const targetEntries = this.filteredEntries.slice();
+
+    if (!field || targetEntries.length === 0) {
+      return;
+    }
+
+    const validation = validateCatalogueOverwrite(field, overwriteDraft, targetEntries);
+
+    if (!validation.valid) {
+      this.batchOverwriteStatus = validation.error || 'Enter a valid value.';
+      return;
+    }
+
+    const fieldLabel = catalogueOverwriteFieldLabels[field];
+    const entryCount = targetEntries.length;
+    const entryLabel = entryCount === 1 ? 'entry' : 'entries';
+    const clearingField = validation.action === 'clear';
+    const title = clearingField
+      ? `Clear ${fieldLabel} for Displayed Results?`
+      : `Overwrite ${fieldLabel} for Displayed Results?`;
+    const displayValuePreview = this.getOverwriteConfirmationPreview(validation.displayValue);
+    const content = clearingField
+      ? `Clear '${fieldLabel}' from all ${entryCount} currently displayed ${entryLabel}? Existing values in this field will be removed.`
+      : `Set '${fieldLabel}' to '${displayValuePreview}' for all ${entryCount} currently displayed ${entryLabel}? Existing values in this field will be replaced.`;
+    const confirmLabel = clearingField
+      ? `Clear ${entryCount} ${entryLabel}`
+      : `Overwrite ${entryCount} ${entryLabel}`;
+
+    this.modalService.openConfirmationDialog(
+      title,
+      content,
+      confirmLabel,
+      'Cancel',
+    ).subscribe((confirmed: boolean) => {
+      if (!confirmed) {
+        return;
+      }
+
+      const targetsStillCurrent = targetEntries.every((item: ImageElement) => this.images.includes(item));
+
+      if (!targetsStillCurrent) {
+        this.batchOverwriteStatus = 'Displayed results changed while confirmation was open. Review the results and try again.';
+        this.refreshFilteredEntries();
+        return;
+      }
+
+      const confirmedValidation = validateCatalogueOverwrite(field, overwriteDraft, targetEntries);
+
+      if (!confirmedValidation.valid) {
+        this.batchOverwriteStatus = confirmedValidation.error
+          ? `Displayed results changed: ${confirmedValidation.error}`
+          : 'Displayed results changed. Review the results and try again.';
+        this.refreshFilteredEntries();
+        return;
+      }
+
+      // Commit open tag edits so a later blur or save cannot restore stale row data.
+      this.commitAllTagDrafts();
+
+      const updatedEntryCount = applyCatalogueOverwrite(targetEntries, field, confirmedValidation.value);
+
+      if (updatedEntryCount === 0) {
+        this.batchOverwriteStatus = clearingField
+          ? `The displayed entries already have no ${fieldLabel} value.`
+          : `All displayed entries already have this ${fieldLabel} value.`;
+        return;
+      }
+
+      if (field === 'stars') {
+        this.imageElementService.forceStarFilterUpdate = !this.imageElementService.forceStarFilterUpdate;
+      }
+
+      const updatedEntryLabel = updatedEntryCount === 1 ? 'entry' : 'entries';
+      this.batchOverwriteStatus = clearingField
+        ? `Cleared ${fieldLabel} from ${updatedEntryCount} displayed ${updatedEntryLabel}.`
+        : `Updated ${fieldLabel} for ${updatedEntryCount} displayed ${updatedEntryLabel}.`;
+      this.markDirty();
+      this.refreshFilteredEntries();
+    });
+  }
+
   deleteEntry(item: ImageElement): void {
     this.commitTags(item);
     item.deleted = true;
@@ -218,19 +370,34 @@ export class CatalogueEditorComponent implements OnChanges {
   }
 
   refreshFilteredEntries(): void {
-    const needle = this.query.trim().toLowerCase();
+    this.filteredEntries = filterCatalogueEntries(
+      this.images,
+      this.searchCriteria,
+      this.showDeleted,
+    );
+  }
 
-    this.filteredEntries = this.images.filter((item: ImageElement) => {
-      if (!this.showDeleted && item.deleted) {
-        return false;
-      }
+  removeSearchCriterion(criterionId: number): void {
+    if (this.searchCriteria.length === 1) {
+      return;
+    }
 
-      if (!needle) {
-        return true;
-      }
+    const removedCriterionIndex = this.searchCriteria.findIndex(
+      (criterion: CatalogueSearchCriterion) => criterion.id === criterionId
+    );
+    const remainingCriteria = this.searchCriteria.filter(
+      (criterion: CatalogueSearchCriterion) => criterion.id !== criterionId
+    );
+    const focusIndex = Math.min(
+      Math.max(removedCriterionIndex, 0),
+      remainingCriteria.length - 1,
+    );
 
-      return this.getSearchText(item).includes(needle);
-    });
+    this.searchCriteria = remainingCriteria;
+    this.searchRowsStatus = `Search line removed. ${remainingCriteria.length} search ${remainingCriteria.length === 1 ? 'line remains' : 'lines remain'}.`;
+    this.refreshFilteredEntries();
+
+    setTimeout(() => this.focusSearchCriterion(remainingCriteria[focusIndex].id), 0);
   }
 
   requestSave(): void {
@@ -259,6 +426,21 @@ export class CatalogueEditorComponent implements OnChanges {
 
   trackByImageIndex(index: number, item: ImageElement): number {
     return item.index === undefined ? index : item.index;
+  }
+
+  trackBySearchCriterionId(index: number, criterion: CatalogueSearchCriterion): number {
+    return criterion.id === undefined ? index : criterion.id;
+  }
+
+  updateBatchOverwriteDraft(value: string): void {
+    this.batchOverwriteDraft = value;
+    this.batchOverwriteStatus = '';
+  }
+
+  updateBatchOverwriteField(field: CatalogueOverwriteField | ''): void {
+    this.batchOverwriteField = field;
+    this.batchOverwriteDraft = field === 'stars' ? '0.5' : '';
+    this.batchOverwriteStatus = '';
   }
 
   updateDefaultScreen(item: ImageElement, value: string | number): void {
@@ -399,31 +581,22 @@ export class CatalogueEditorComponent implements OnChanges {
     return tagText + typeahead.slice(activeFragment.length);
   }
 
-  private getSearchText(item: ImageElement): string {
-    const tags = (item.tags || []).join(' ');
+  private focusSearchCriterion(criterionId: number): void {
+    const input = this.searchCriterionInputs
+      ?.toArray()
+      .find((element: ElementRef<HTMLInputElement>) => (
+        Number(element.nativeElement.dataset.searchCriterionId) === criterionId
+      ));
 
-    if (this.field === 'name') {
-      return (item.cleanName || '').toLowerCase();
-    } else if (this.field === 'file') {
-      return (item.fileName || '').toLowerCase();
-    } else if (this.field === 'path') {
-      return (item.partialPath || '').toLowerCase();
-    } else if (this.field === 'tags') {
-      return tags.toLowerCase();
-    } else if (this.field === 'hash') {
-      return (item.hash || '').toLowerCase();
-    }
+    input?.nativeElement.focus();
+  }
 
-    return [
-      item.cleanName,
-      item.fileName,
-      item.partialPath,
-      tags,
-      item.hash,
-      item.inputSource,
-      item.notes,
-      item.year,
-    ].join(' ').toLowerCase();
+  private getOverwriteConfirmationPreview(value: string): string {
+    const normalizedValue = value.replace(/\s+/g, ' ').trim();
+
+    return normalizedValue.length > 160
+      ? `${normalizedValue.slice(0, 159)}…`
+      : normalizedValue;
   }
 
   private markDirty(rebuildTags = false): void {

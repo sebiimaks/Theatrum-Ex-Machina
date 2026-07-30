@@ -22,8 +22,31 @@
 // const { performance } = require('perf_hooks');  // for logging time taken during debug
 
 const fs = require('fs');
+import * as os from 'os';
 import * as path from 'path';
 const spawn = require('child_process').spawn;
+
+const CUSTOM_THUMBNAIL_TIMEOUT_MS = 30 * 1000;
+const FORCE_KILL_DELAY_MS = 2 * 1000;
+const FILMSTRIP_ASSEMBLY_RESERVE_MS = 15 * 1000;
+const FILMSTRIP_RECOVERY_BUDGET_MS = 60 * 1000;
+const MAX_FILMSTRIP_RECOVERY_FRAMES = 30;
+const MAX_RECOVERY_FRAME_TIMEOUT_MS = 10 * 1000;
+const MIN_FILMSTRIP_TIMEOUT_MS = 30 * 1000;
+const MIN_THUMBNAIL_TIMEOUT_MS = 15 * 1000;
+const SYSTEM_THUMBNAIL_REQUEST_TIMEOUT_MS = 15 * 1000;
+const SYSTEM_THUMBNAIL_SCALE_TIMEOUT_MS = 10 * 1000;
+const THUMBNAIL_RECOVERY_BUDGET_MS = 30 * 1000;
+
+interface ActiveCustomImage {
+  release: () => void;
+  settled: Promise<void>;
+}
+
+const activeCustomImages = new Map<string, ActiveCustomImage>();
+const generatedImageVersions = new Map<string, number>();
+const imagePublicationLocks = new Map<string, Promise<void>>();
+let temporaryImageSequence = 0;
 
 import { ffmpegPath } from './media-tool-paths';
 
@@ -55,11 +78,118 @@ export const extractSingleFrameArgs = (
   const args: string[] = [
     '-ss', (duration / 10).toString(),
     '-i', pathToVideo,
+    '-map', '0:V:0',
     '-frames', '1',
     '-q:v', '2',
     '-vf', scaleAndPadString(ssWidth, screenshotHeight),
     savePath,
   ];
+
+  return args;
+};
+
+type RecoverySeekMode = 'fast' | 'scan';
+export type SystemThumbnailCreator = (
+  videoPath: string,
+  width: number,
+  height: number,
+) => Promise<Buffer>;
+
+export interface ThumbnailRecoveryOptions {
+  createSystemThumbnail?: SystemThumbnailCreator;
+  generationVersion?: number | null;
+}
+
+/**
+ * Retry one frame with options that tolerate damaged packets and timestamps.
+ * `scan` deliberately seeks after opening the input so a broken index cannot
+ * prevent recovery; `fast` remains bounded for later points in long videos.
+ */
+export const extractRecoveryFrameArgs = (
+  pathToVideo: string,
+  screenshotHeight: number,
+  timestamp: number,
+  savePath: string,
+  seekMode: RecoverySeekMode,
+): string[] => {
+  const ssWidth: number = screenshotHeight * (16 / 9);
+  const args: string[] = [
+    '-fflags', seekMode === 'scan' ? '+ignidx+genpts+discardcorrupt' : '+genpts+discardcorrupt',
+    '-err_detect', 'ignore_err',
+  ];
+
+  if (seekMode === 'fast') {
+    args.push('-ss', timestamp.toString());
+  }
+
+  args.push('-i', pathToVideo);
+
+  if (seekMode === 'scan') {
+    args.push('-ss', timestamp.toString());
+  }
+
+  args.push(
+    '-map', '0:V:0',
+    '-an', '-sn', '-dn',
+    '-frames:v', '1',
+    '-max_error_rate', '1.0',
+    '-q:v', '2',
+    '-vf', scaleAndPadString(ssWidth, screenshotHeight),
+    '-y',
+    savePath,
+  );
+
+  return args;
+};
+
+/**
+ * Last FFmpeg fallback: allow the decoder to emit a concealed/damaged frame
+ * that ordinary recovery would discard. The JPEG is still validated before
+ * it can become a user-visible thumbnail.
+ */
+export const extractConcealedFrameArgs = (
+  pathToVideo: string,
+  screenshotHeight: number,
+  savePath: string,
+): string[] => {
+  const ssWidth: number = screenshotHeight * (16 / 9);
+
+  return [
+    '-fflags', '+ignidx+genpts',
+    '-err_detect', 'ignore_err',
+    '-flags', '+output_corrupt',
+    '-i', pathToVideo,
+    '-map', '0:V:0',
+    '-an', '-sn', '-dn',
+    '-frames:v', '1',
+    '-max_error_rate', '1.0',
+    '-q:v', '2',
+    '-vf', scaleAndPadString(ssWidth, screenshotHeight),
+    '-y',
+    savePath,
+  ];
+};
+
+/** Build one fixed-width strip from individually recovered JPEG frames. */
+export const stackRecoveredFramesArgs = (
+  framePaths: string[],
+  savePath: string,
+): string[] => {
+  const args: string[] = [];
+  let inputs = '';
+
+  framePaths.forEach((framePath: string, index: number) => {
+    args.push('-i', framePath);
+    inputs += `[${index}:v]`;
+  });
+
+  args.push(
+    '-frames:v', '1',
+    '-filter_complex', `${inputs}hstack=inputs=${framePaths.length}`,
+    '-q:v', '2',
+    '-y',
+    savePath,
+  );
 
   return args;
 };
@@ -239,7 +369,8 @@ export function extractAll(
   videoFolderPath: string,
   screenshotFolder: string,
   screenshotSettings: ScreenshotSettings,
-  done
+  done: (success: boolean, error?: Error) => void,
+  createSystemThumbnail?: SystemThumbnailCreator,
 ): void {
 
   const clipHeight:       number = screenshotSettings.clipHeight;        // -- number in px how tall each clip should be
@@ -258,6 +389,10 @@ export function extractAll(
   const filmstripSavePath: string = path.normalize(screenshotFolder + '/filmstrips/' + fileHash + '.jpg');
   const clipSavePath:      string = path.normalize(screenshotFolder + '/clips/' +      fileHash + '.mp4');
   const clipThumbSavePath: string = path.normalize(screenshotFolder + '/clips/' +      fileHash + '.jpg');
+  const screenshotWidth: number = Math.round(screenshotHeight * (16 / 9));
+  const thumbnailGenerationVersion = activeCustomImages.has(thumbnailSavePath)
+    ? null
+    : currentGeneratedImageVersion(thumbnailSavePath);
 
   const maxRunTime: ExtractionDurations = setExtractionDurations(
     sourceHeight, numOfScreens, screenshotHeight, clipSnippets, snippetLength, clipHeight
@@ -270,7 +405,7 @@ export function extractAll(
       if (!videoFileExists) {
         throw new Error('VIDEO FILE NOT PRESENT');
       } else {
-        return checkFileExists(thumbnailSavePath);                                        // (2)
+        return isExpectedJpeg(thumbnailSavePath, screenshotWidth, screenshotHeight);      // (2)
       }
     })
     .then((thumbExists: boolean) => {
@@ -279,20 +414,30 @@ export function extractAll(
       if (thumbExists) {
         return true;
       } else {
-        const ffmpegArgs: string[] =  extractSingleFrameArgs(
-          pathToVideo, screenshotHeight, duration, thumbnailSavePath
+        return extractThumbnailWithRecovery(
+          pathToVideo,
+          screenshotHeight,
+          duration,
+          thumbnailSavePath,
+          maxRunTime.thumb,
+          {
+            createSystemThumbnail,
+            generationVersion: thumbnailGenerationVersion,
+          },
         );
-
-        return spawn_ffmpeg_and_run(ffmpegArgs, maxRunTime.thumb, 'thumb');               // (3)
       }
     })
     .then((thumbSuccess: boolean) => {
       // console.log('03 - single screenshot now present = ' + thumbSuccess);
 
       if (!thumbSuccess) {
-        throw new Error('SINGLE SCREENSHOT EXTRACTION TIMED OUT - LIKELY CORRUPT');
+        throw new Error('SINGLE SCREENSHOT EXTRACTION FAILED AFTER RECOVERY');
       } else {
-        return checkFileExists(filmstripSavePath);                                        // (4)
+        return isExpectedJpeg(
+          filmstripSavePath,
+          screenshotWidth * numOfScreens,
+          screenshotHeight,
+        );                                                                                // (4)
       }
     })
     .then((filmstripExists: boolean) => {
@@ -301,19 +446,22 @@ export function extractAll(
       if (filmstripExists) {
         return true;
       } else {
-
-        const ffmpegArgs: string [] = generateScreenshotStripArgs(
-          pathToVideo, duration, screenshotHeight, numOfScreens, filmstripSavePath
+        return extractFilmstripWithRecovery(
+          pathToVideo,
+          duration,
+          screenshotHeight,
+          numOfScreens,
+          thumbnailSavePath,
+          filmstripSavePath,
+          maxRunTime.filmstrip,
         );
-
-        return spawn_ffmpeg_and_run(ffmpegArgs, maxRunTime.filmstrip, 'filmstrip');       // (5)
       }
     })
     .then((filmstripSuccess: boolean) => {
       // console.log('05 - filmstrip now present = ' + filmstripSuccess);
 
       if (!filmstripSuccess) {
-        throw new Error('FILMSTRIP GENERATION TIMED OUT - LIKELY CORRUPT');
+        throw new Error('FILMSTRIP GENERATION FAILED AFTER RECOVERY');
       } else if (clipSnippets === 0) {
         throw new Error('USER DOES NOT WANT CLIPS');
       } else {
@@ -361,11 +509,21 @@ export function extractAll(
       if (success) {
         // console.log('======= ALL STEPS SUCCESSFUL ==========');
       }
-      done();
+      if (success) {
+        done(true);
+      } else {
+        done(false, new Error('CLIP THUMBNAIL GENERATION FAILED'));
+      }
     })
     .catch((err) => {
-      // console.log('===> ERROR - RESTARTING: ' + err);
-      done();
+      if (err instanceof Error && err.message === 'USER DOES NOT WANT CLIPS') {
+        done(true);
+      } else {
+        if (GLOBALS.debug) {
+          console.error('Preview extraction stopped:', err);
+        }
+        done(false, err instanceof Error ? err : new Error(String(err)));
+      }
     });
 }
 
@@ -394,7 +552,7 @@ interface ExtractionDurations {
  * @param snippetLength
  * @param clipHeight
  */
-function setExtractionDurations(
+export function setExtractionDurations(
   sourceHeight: number,
   numOfScreens: number,
   screenshotHeight: number,
@@ -418,8 +576,14 @@ function setExtractionDurations(
   const sourceFactor = 1 + (sourceRatio * sourceRatio / 3); // square of ratio
 
   return {                                                                           // for me:
-    thumb:    2000 * sourceFactor * thumbHeightFactor,                               // original was 500; now 4x
-    filmstrip: 1400 * sourceFactor * thumbHeightFactor * numOfScreens,               // original was 350; now 4x
+    thumb:    Math.max(                                                              // original coefficient was 500; now 4x
+      MIN_THUMBNAIL_TIMEOUT_MS,
+      2000 * sourceFactor * thumbHeightFactor,
+    ),
+    filmstrip: Math.max(                                                             // original coefficient was 350; now 4x
+      MIN_FILMSTRIP_TIMEOUT_MS,
+      1400 * sourceFactor * thumbHeightFactor * numOfScreens,
+    ),
     clip:      350 * sourceFactor * clipHeightFactor * clipSnippets * snippetLength, // rarely above 15s
     clipThumb: 400 * clipHeightRatio,                                                // never above 600ms
   };
@@ -437,6 +601,588 @@ function checkFileExists(pathToFile: string): Promise<boolean> {
   });
 }
 
+interface JpegDimensions {
+  height: number;
+  width: number;
+}
+
+interface RecoveryAttempt {
+  seekMode: RecoverySeekMode;
+  timestamp: number;
+}
+
+/** Read dimensions from a complete JPEG without trusting its filename. */
+export function readJpegDimensions(contents: Buffer): JpegDimensions | undefined {
+  if (
+    contents.length < 4
+    || contents[0] !== 0xff
+    || contents[1] !== 0xd8
+    || contents[contents.length - 2] !== 0xff
+    || contents[contents.length - 1] !== 0xd9
+  ) {
+    return undefined;
+  }
+
+  const startOfFrameMarkers = new Set([
+    0xc0, 0xc1, 0xc2, 0xc3,
+    0xc5, 0xc6, 0xc7,
+    0xc9, 0xca, 0xcb,
+    0xcd, 0xce, 0xcf,
+  ]);
+  let offset = 2;
+
+  while (offset + 3 < contents.length) {
+    if (contents[offset] !== 0xff) {
+      offset++;
+      continue;
+    }
+    while (contents[offset] === 0xff) {
+      offset++;
+    }
+    if (offset >= contents.length) {
+      return undefined;
+    }
+
+    const marker = contents[offset++];
+    if (marker === 0xd9) {
+      break;
+    }
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      continue;
+    }
+    if (offset + 2 > contents.length) {
+      return undefined;
+    }
+
+    const segmentLength = contents.readUInt16BE(offset);
+    if (segmentLength < 2 || offset + segmentLength > contents.length) {
+      return undefined;
+    }
+    if (startOfFrameMarkers.has(marker)) {
+      if (segmentLength < 7) {
+        return undefined;
+      }
+      return {
+        height: contents.readUInt16BE(offset + 3),
+        width: contents.readUInt16BE(offset + 5),
+      };
+    }
+    offset += segmentLength;
+  }
+
+  return undefined;
+}
+
+export async function isExpectedJpeg(
+  filePath: string,
+  expectedWidth: number,
+  expectedHeight: number,
+): Promise<boolean> {
+  try {
+    const dimensions = readJpegDimensions(await fs.promises.readFile(filePath));
+    return Boolean(
+      dimensions
+      && dimensions.width === expectedWidth
+      && dimensions.height === expectedHeight,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function createTemporaryImagePath(finalPath: string): string {
+  temporaryImageSequence++;
+  return path.join(
+    path.dirname(finalPath),
+    `.${path.basename(finalPath)}.${process.pid}-${Date.now()}-${temporaryImageSequence}.tmp.jpg`,
+  );
+}
+
+async function removeFileIfPresent(filePath: string): Promise<void> {
+  try {
+    await fs.promises.unlink(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && GLOBALS.debug) {
+      console.error('Unable to remove incomplete preview image:', filePath, error);
+    }
+  }
+}
+
+function currentGeneratedImageVersion(filePath: string): number {
+  return generatedImageVersions.get(filePath) ?? 0;
+}
+
+function invalidateGeneratedImage(filePath: string): void {
+  generatedImageVersions.set(filePath, currentGeneratedImageVersion(filePath) + 1);
+}
+
+async function waitForActiveCustomImage(filePath: string): Promise<void> {
+  let activeCustomImage = activeCustomImages.get(filePath);
+  while (activeCustomImage) {
+    await activeCustomImage.settled;
+    activeCustomImage = activeCustomImages.get(filePath);
+  }
+}
+
+async function withImagePublicationLock<T>(
+  filePath: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previousOperation = imagePublicationLocks.get(filePath) ?? Promise.resolve();
+  let releaseCurrentOperation: () => void;
+  const currentOperation = new Promise<void>((resolve) => {
+    releaseCurrentOperation = resolve;
+  });
+  const queuedOperations = previousOperation.then(() => currentOperation);
+  imagePublicationLocks.set(filePath, queuedOperations);
+
+  await previousOperation;
+  try {
+    return await operation();
+  } finally {
+    releaseCurrentOperation();
+    if (imagePublicationLocks.get(filePath) === queuedOperations) {
+      imagePublicationLocks.delete(filePath);
+    }
+  }
+}
+
+async function publishImage(candidatePath: string, finalPath: string): Promise<void> {
+  try {
+    await fs.promises.rename(candidatePath, finalPath);
+  } catch (error) {
+    const errorCode = (error as NodeJS.ErrnoException).code;
+    if (errorCode !== 'EEXIST' && errorCode !== 'EPERM') {
+      throw error;
+    }
+    await fs.promises.unlink(finalPath);
+    await fs.promises.rename(candidatePath, finalPath);
+  }
+}
+
+/**
+ * A warning-only FFmpeg exit can still leave a complete JPEG. Accept only a
+ * fresh candidate with the exact expected dimensions, then publish it with an
+ * atomic same-directory rename. Timed-out writers never touch the final path.
+ */
+async function generateValidatedJpeg(
+  finalPath: string,
+  expectedWidth: number,
+  expectedHeight: number,
+  maxRunningTime: number,
+  description: string,
+  buildArgs: (candidatePath: string) => string[],
+  canPublish: () => boolean = () => true,
+  preserveValidDestination = false,
+): Promise<boolean> {
+  const candidatePath = createTemporaryImagePath(finalPath);
+  let published = false;
+
+  try {
+    const processResult = await spawn_ffmpeg_and_run_detailed(
+      buildArgs(candidatePath),
+      maxRunningTime,
+      description,
+    );
+    const candidateIsValid = await isExpectedJpeg(candidatePath, expectedWidth, expectedHeight);
+
+    if (!candidateIsValid || processResult.timedOut || processResult.processError) {
+      return false;
+    }
+    if (!processResult.success && GLOBALS.debug) {
+      console.warn(`${description} produced a valid image despite FFmpeg warnings`);
+    }
+
+    return await withImagePublicationLock(finalPath, async () => {
+      if (!canPublish()) {
+        return false;
+      }
+      if (
+        preserveValidDestination
+        && await isExpectedJpeg(finalPath, expectedWidth, expectedHeight)
+      ) {
+        return true;
+      }
+      await publishImage(candidatePath, finalPath);
+      published = true;
+      return true;
+    });
+  } catch (error) {
+    if (GLOBALS.debug) {
+      console.error(`${description} failed`, error);
+    }
+    return false;
+  } finally {
+    if (!published) {
+      await removeFileIfPresent(candidatePath);
+    }
+  }
+}
+
+function thumbnailRecoveryAttempts(duration: number): RecoveryAttempt[] {
+  const safeDuration = Number.isFinite(duration) ? Math.max(0, duration) : 0;
+  const attempts: RecoveryAttempt[] = [
+    { seekMode: 'scan', timestamp: 0 },
+    { seekMode: 'scan', timestamp: Math.min(5, safeDuration * 0.02) },
+    { seekMode: 'fast', timestamp: safeDuration * 0.5 },
+    { seekMode: 'fast', timestamp: safeDuration * 0.9 },
+  ];
+  const seen = new Set<string>();
+
+  return attempts.filter((attempt: RecoveryAttempt) => {
+    const key = `${attempt.seekMode}:${attempt.timestamp.toFixed(3)}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+async function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('System thumbnail request timed out.')), timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function extractSystemThumbnail(
+  pathToVideo: string,
+  screenshotHeight: number,
+  savePath: string,
+  createSystemThumbnail: SystemThumbnailCreator,
+  canPublish: () => boolean,
+): Promise<boolean> {
+  const expectedWidth = Math.round(screenshotHeight * (16 / 9));
+  let temporaryDirectory: string | undefined;
+
+  try {
+    const jpegData = await promiseWithTimeout(
+      Promise.resolve().then(() => createSystemThumbnail(
+        pathToVideo,
+        expectedWidth,
+        screenshotHeight,
+      )),
+      SYSTEM_THUMBNAIL_REQUEST_TIMEOUT_MS,
+    );
+    if (!jpegData.length || !canPublish()) {
+      return false;
+    }
+
+    temporaryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'vha-system-thumbnail-'));
+    const sourcePath = path.join(temporaryDirectory, 'system-thumbnail.jpg');
+    await fs.promises.writeFile(sourcePath, jpegData);
+
+    return await generateValidatedJpeg(
+      savePath,
+      expectedWidth,
+      screenshotHeight,
+      SYSTEM_THUMBNAIL_SCALE_TIMEOUT_MS,
+      'system thumbnail recovery',
+      (candidatePath: string) => [
+        '-y', '-i', sourcePath,
+        '-map', '0:v:0',
+        '-frames:v', '1',
+        '-vf', scaleAndPadString(expectedWidth, screenshotHeight),
+        candidatePath,
+      ],
+      canPublish,
+      true,
+    );
+  } catch (error) {
+    if (GLOBALS.debug) {
+      console.error('System thumbnail recovery failed', error);
+    }
+    return false;
+  } finally {
+    if (temporaryDirectory) {
+      try {
+        await fs.promises.rm(temporaryDirectory, { force: true, recursive: true });
+      } catch (error) {
+        if (GLOBALS.debug) {
+          console.error('System thumbnail recovery files could not be removed', error);
+        }
+      }
+    }
+  }
+}
+
+export async function extractThumbnailWithRecovery(
+  pathToVideo: string,
+  screenshotHeight: number,
+  duration: number,
+  savePath: string,
+  maxRunningTime: number,
+  options: ThumbnailRecoveryOptions = {},
+): Promise<boolean> {
+  const expectedWidth = Math.round(screenshotHeight * (16 / 9));
+  const generationVersion = options.generationVersion === undefined
+    ? currentGeneratedImageVersion(savePath)
+    : options.generationVersion;
+  const canPublish = (): boolean => {
+    return generationVersion !== null
+      && currentGeneratedImageVersion(savePath) === generationVersion
+      && !activeCustomImages.has(savePath);
+  };
+
+  if (!canPublish()) {
+    await waitForActiveCustomImage(savePath);
+    return isExpectedJpeg(savePath, expectedWidth, screenshotHeight);
+  }
+
+  const normalSucceeded = await generateValidatedJpeg(
+    savePath,
+    expectedWidth,
+    screenshotHeight,
+    maxRunningTime,
+    'thumb',
+    (candidatePath: string) => extractSingleFrameArgs(
+      pathToVideo,
+      screenshotHeight,
+      duration,
+      candidatePath,
+    ),
+    canPublish,
+    true,
+  );
+  if (normalSucceeded) {
+    return true;
+  }
+  if (!canPublish()) {
+    await waitForActiveCustomImage(savePath);
+    return isExpectedJpeg(savePath, expectedWidth, screenshotHeight);
+  }
+
+  const recoveryDeadline = Date.now() + THUMBNAIL_RECOVERY_BUDGET_MS;
+  const attempts = thumbnailRecoveryAttempts(duration);
+
+  for (let index = 0; index < attempts.length; index++) {
+    const remainingRecoveryTime = recoveryDeadline - Date.now();
+    if (remainingRecoveryTime <= 0 || !canPublish()) {
+      break;
+    }
+    const attempt = attempts[index];
+    const recovered = await generateValidatedJpeg(
+      savePath,
+      expectedWidth,
+      screenshotHeight,
+      Math.min(MAX_RECOVERY_FRAME_TIMEOUT_MS, remainingRecoveryTime),
+      `thumb recovery ${index + 1}`,
+      (candidatePath: string) => extractRecoveryFrameArgs(
+        pathToVideo,
+        screenshotHeight,
+        attempt.timestamp,
+        candidatePath,
+        attempt.seekMode,
+      ),
+      canPublish,
+      true,
+    );
+    if (recovered) {
+      return true;
+    }
+
+    if (index === 0) {
+      const remainingConcealedRecoveryTime = recoveryDeadline - Date.now();
+      if (remainingConcealedRecoveryTime > 0 && canPublish()) {
+        const concealedFrameRecovered = await generateValidatedJpeg(
+          savePath,
+          expectedWidth,
+          screenshotHeight,
+          Math.min(MAX_RECOVERY_FRAME_TIMEOUT_MS, remainingConcealedRecoveryTime),
+          'concealed frame recovery',
+          (candidatePath: string) => extractConcealedFrameArgs(
+            pathToVideo,
+            screenshotHeight,
+            candidatePath,
+          ),
+          canPublish,
+          true,
+        );
+        if (concealedFrameRecovered) {
+          return true;
+        }
+      }
+    }
+  }
+
+  if (!canPublish()) {
+    await waitForActiveCustomImage(savePath);
+    return isExpectedJpeg(savePath, expectedWidth, screenshotHeight);
+  }
+  if (options.createSystemThumbnail) {
+    const systemThumbnailRecovered = await extractSystemThumbnail(
+      pathToVideo,
+      screenshotHeight,
+      savePath,
+      options.createSystemThumbnail,
+      canPublish,
+    );
+    if (systemThumbnailRecovered) {
+      return true;
+    }
+    if (!canPublish()) {
+      await waitForActiveCustomImage(savePath);
+      return isExpectedJpeg(savePath, expectedWidth, screenshotHeight);
+    }
+  }
+  return false;
+}
+
+export function selectRecoveryFrameIndexes(
+  totalFrames: number,
+  maximumFrames = MAX_FILMSTRIP_RECOVERY_FRAMES,
+): number[] {
+  if (totalFrames <= 0 || maximumFrames <= 0) {
+    return [];
+  }
+  if (totalFrames <= maximumFrames) {
+    return Array.from({ length: totalFrames }, (_value, index) => index);
+  }
+  if (maximumFrames === 1) {
+    return [0];
+  }
+
+  const indexes = new Set<number>();
+  for (let index = 0; index < maximumFrames; index++) {
+    indexes.add(Math.round(index * (totalFrames - 1) / (maximumFrames - 1)));
+  }
+  return Array.from(indexes).sort((left, right) => left - right);
+}
+
+export function fillMissingRecoveryFrames(
+  totalFrames: number,
+  recoveredFrames: Map<number, string>,
+  fallbackPath: string,
+): string[] {
+  const recoveredIndexes = Array.from(recoveredFrames.keys()).sort((left, right) => left - right);
+  if (!recoveredIndexes.length) {
+    return Array(totalFrames).fill(fallbackPath);
+  }
+
+  return Array.from({ length: totalFrames }, (_value, index) => {
+    const nearestIndex = recoveredIndexes.reduce((nearest, candidate) => {
+      return Math.abs(candidate - index) < Math.abs(nearest - index) ? candidate : nearest;
+    }, recoveredIndexes[0]);
+    return recoveredFrames.get(nearestIndex) as string;
+  });
+}
+
+export async function extractFilmstripWithRecovery(
+  pathToVideo: string,
+  duration: number,
+  screenshotHeight: number,
+  numberOfScreenshots: number,
+  thumbnailPath: string,
+  savePath: string,
+  maxRunningTime: number,
+): Promise<boolean> {
+  if (!Number.isInteger(numberOfScreenshots) || numberOfScreenshots <= 0) {
+    return false;
+  }
+
+  const safeDuration = Number.isFinite(duration) ? Math.max(0, duration) : 0;
+  const frameWidth = Math.round(screenshotHeight * (16 / 9));
+  const stripWidth = frameWidth * numberOfScreenshots;
+
+  const normalSucceeded = await generateValidatedJpeg(
+    savePath,
+    stripWidth,
+    screenshotHeight,
+    maxRunningTime,
+    'filmstrip',
+    (candidatePath: string) => generateScreenshotStripArgs(
+      pathToVideo,
+      safeDuration,
+      screenshotHeight,
+      numberOfScreenshots,
+      candidatePath,
+    ),
+  );
+  if (normalSucceeded) {
+    return true;
+  }
+
+  const recoveryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'vha-filmstrip-recovery-'));
+  const recoveredFrames = new Map<number, string>();
+  const step = safeDuration / (numberOfScreenshots + 1);
+  const thumbnailIndex = Math.max(
+    0,
+    Math.min(numberOfScreenshots - 1, Math.round((numberOfScreenshots + 1) / 10 - 1)),
+  );
+  recoveredFrames.set(thumbnailIndex, thumbnailPath);
+  const recoveryDeadline = Date.now() + FILMSTRIP_RECOVERY_BUDGET_MS;
+
+  try {
+    const indexesToRecover = selectRecoveryFrameIndexes(numberOfScreenshots)
+      .filter((index: number) => index !== thumbnailIndex);
+
+    for (const frameIndex of indexesToRecover) {
+      const remainingFrameRecoveryTime = recoveryDeadline
+        - FILMSTRIP_ASSEMBLY_RESERVE_MS
+        - Date.now();
+      if (remainingFrameRecoveryTime <= 0) {
+        break;
+      }
+
+      const recoveredPath = path.join(recoveryDirectory, `frame-${frameIndex}.jpg`);
+      const recovered = await generateValidatedJpeg(
+        recoveredPath,
+        frameWidth,
+        screenshotHeight,
+        Math.min(MAX_RECOVERY_FRAME_TIMEOUT_MS, remainingFrameRecoveryTime),
+        `filmstrip frame recovery ${frameIndex + 1}`,
+        (candidatePath: string) => extractRecoveryFrameArgs(
+          pathToVideo,
+          screenshotHeight,
+          (frameIndex + 1) * step,
+          candidatePath,
+          'fast',
+        ),
+      );
+      if (recovered) {
+        recoveredFrames.set(frameIndex, recoveredPath);
+      }
+    }
+
+    const framePaths = fillMissingRecoveryFrames(
+      numberOfScreenshots,
+      recoveredFrames,
+      thumbnailPath,
+    );
+    const remainingAssemblyTime = recoveryDeadline - Date.now();
+    if (remainingAssemblyTime <= 0) {
+      return false;
+    }
+    return await generateValidatedJpeg(
+      savePath,
+      stripWidth,
+      screenshotHeight,
+      remainingAssemblyTime,
+      'recovered filmstrip assembly',
+      (candidatePath: string) => stackRecoveredFramesArgs(framePaths, candidatePath),
+    );
+  } finally {
+    try {
+      await fs.promises.rm(recoveryDirectory, { force: true, recursive: true });
+    } catch (error) {
+      if (GLOBALS.debug) {
+        console.error('Filmstrip recovery files could not be removed', error);
+      }
+    }
+  }
+}
+
 /**
  * Replace original file with new file
  * use ffmpeg to convert and letterbox to fit width and height
@@ -445,24 +1191,73 @@ function checkFileExists(pathToFile: string): Promise<boolean> {
  * @param newFile full path to sounce image to use as replacement
  * @param height
  */
-export function replaceThumbnailWithNewImage(
+export async function replaceThumbnailWithNewImage(
   oldFile: string,
   newFile: string,
-  height: number
+  height: number,
+  convertPngToJpeg?: (imagePath: string) => Buffer | Promise<Buffer>,
 ): Promise<boolean> {
 
   console.log('Resizing new image and replacing old thumbnail');
 
   const width: number = Math.floor(height * (16 / 9));
+  let sourceFile = newFile;
+  let temporaryDirectory: string | undefined;
+  invalidateGeneratedImage(oldFile);
+  const replacementVersion = currentGeneratedImageVersion(oldFile);
+  const canPublish = (): boolean => currentGeneratedImageVersion(oldFile) === replacementVersion;
+  let releaseCustomImage: () => void = () => undefined;
+  const activeCustomImage: ActiveCustomImage = {
+    release: () => releaseCustomImage(),
+    settled: new Promise<void>((resolve) => {
+      releaseCustomImage = resolve;
+    }),
+  };
+  activeCustomImages.set(oldFile, activeCustomImage);
 
-  const args = [
-    '-y', '-i', newFile,
-    '-vf', scaleAndPadString(width, height),
-    oldFile,
-  ];
+  try {
+    if (path.extname(newFile).toLowerCase() === '.png') {
+      if (!convertPngToJpeg) {
+        throw new Error('PNG custom thumbnails require an image decoder.');
+      }
 
-  return spawn_ffmpeg_and_run(args, 1000, 'replacing thumbnail');
-  // resizing an image file with ffmpeg should take less than 1 second
+      const jpegData = await convertPngToJpeg(newFile);
+      if (!jpegData.length) {
+        throw new Error('The dropped PNG could not be decoded.');
+      }
+      temporaryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'vha-custom-thumbnail-'));
+      sourceFile = path.join(temporaryDirectory, 'decoded-image.jpg');
+      await fs.promises.writeFile(sourceFile, jpegData);
+    }
+
+    return await generateValidatedJpeg(
+      oldFile,
+      width,
+      height,
+      CUSTOM_THUMBNAIL_TIMEOUT_MS,
+      'replacing thumbnail',
+      (candidatePath: string) => [
+        '-y', '-i', sourceFile,
+        '-vf', scaleAndPadString(width, height),
+        candidatePath,
+      ],
+      canPublish,
+    );
+  } finally {
+    activeCustomImage.release();
+    if (activeCustomImages.get(oldFile) === activeCustomImage) {
+      activeCustomImages.delete(oldFile);
+    }
+    if (temporaryDirectory) {
+      try {
+        await fs.promises.rm(temporaryDirectory, { force: true, recursive: true });
+      } catch (error) {
+        if (GLOBALS.debug) {
+          console.error('Temporary custom thumbnail files could not be removed', error);
+        }
+      }
+    }
+  }
 }
 
 /**
@@ -486,27 +1281,104 @@ function scaleAndPadString(width: number, height: number): string {
  * @param maxRunningTime  maximum time to run ffmpeg
  * @param description     log for console.log
  */
-function spawn_ffmpeg_and_run(
+type SpawnMediaProcess = (
+  executablePath: string,
+  args: string[],
+  options: { windowsHide: boolean },
+) => any;
+
+export interface MediaProcessResult {
+  exitCode: number | null;
+  processError: boolean;
+  success: boolean;
+  timedOut: boolean;
+}
+
+export function spawn_ffmpeg_and_run(
   args: string[],
   maxRunningTime: number,
-  description: string
+  description: string,
+  spawnMediaProcess: SpawnMediaProcess = spawn,
 ): Promise<boolean> {
+  return spawn_ffmpeg_and_run_detailed(
+    args,
+    maxRunningTime,
+    description,
+    spawnMediaProcess,
+  ).then((result: MediaProcessResult) => result.success);
+}
 
-  return new Promise((resolve, reject) => {
+export function spawn_ffmpeg_and_run_detailed(
+  args: string[],
+  maxRunningTime: number,
+  description: string,
+  spawnMediaProcess: SpawnMediaProcess = spawn,
+): Promise<MediaProcessResult> {
+
+  return new Promise((resolve) => {
+    let resultSettled = false;
+    let timedOut = false;
+    let forceKillTimeout: NodeJS.Timeout | undefined;
+
+    const settleResult = (result: MediaProcessResult): void => {
+      if (!resultSettled) {
+        resultSettled = true;
+        resolve(result);
+      }
+    };
 
     // Uncomment things in this method (and the `performance` import) to check how long extraction takes
     // const t0: number = performance.now();
 
-    const ffmpeg_process = spawn(ffmpegPath, ['-nostdin', '-hide_banner', ...args], {
+    const ffmpeg_process = spawnMediaProcess(ffmpegPath, ['-nostdin', '-hide_banner', ...args], {
       windowsHide: true,
     });
 
+    const processStillRunning = (): boolean => {
+      return ffmpeg_process.exitCode === null && ffmpeg_process.signalCode === null;
+    };
+
     const killProcessTimeout = setTimeout(() => {
-      if (!ffmpeg_process.killed) {
-        ffmpeg_process.kill();
-        // console.log(description + ' KILLED EARLY');
-        return resolve(false);
+      // `exitCode` is populated before Node emits `exit`. If the process has
+      // already finished, let that successful exit win rather than treating a
+      // delayed event (or delayed stdio close) as a timeout.
+      if (!processStillRunning()) {
+        settleResult({
+          exitCode: ffmpeg_process.exitCode,
+          processError: false,
+          success: ffmpeg_process.exitCode === 0,
+          timedOut: false,
+        });
+        return;
       }
+
+      timedOut = true;
+      try {
+        ffmpeg_process.kill();
+      } catch (error) {
+        if (GLOBALS.debug) {
+          console.error(description + ' could not be stopped after timing out', error);
+        }
+      }
+      settleResult({
+        exitCode: null,
+        processError: false,
+        success: false,
+        timedOut: true,
+      });
+
+      forceKillTimeout = setTimeout(() => {
+        if (processStillRunning()) {
+          try {
+            ffmpeg_process.kill('SIGKILL');
+          } catch (error) {
+            if (GLOBALS.debug) {
+              console.error(description + ' could not be force-stopped', error);
+            }
+          }
+        }
+      }, FORCE_KILL_DELAY_MS);
+      forceKillTimeout.unref?.();
     }, maxRunningTime);
 
     // Note from past Cal to future Cal:
@@ -523,13 +1395,38 @@ function spawn_ffmpeg_and_run(
     });
     ffmpeg_process.on('error', () => {
       clearTimeout(killProcessTimeout);
-      return resolve(false);
+      // A failed termination can emit `error`. Keep the scheduled SIGKILL in
+      // that case; it is safe to clear only after exit/close confirms the
+      // child is gone.
+      if (!timedOut && forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+      }
+      settleResult({
+        exitCode: ffmpeg_process.exitCode,
+        processError: true,
+        success: false,
+        timedOut,
+      });
     });
     ffmpeg_process.on('exit', (code: number | null) => {
       clearTimeout(killProcessTimeout);
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+      }
       // const t1: number = performance.now();
       // console.log(description + ' ' + Math.round(t1 - t0) + ' < ' + maxRunningTime);
-      return resolve(code === 0);
+      settleResult({
+        exitCode: code,
+        processError: false,
+        success: code === 0 && !timedOut,
+        timedOut,
+      });
+    });
+    ffmpeg_process.on('close', () => {
+      clearTimeout(killProcessTimeout);
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+      }
     });
 
   });

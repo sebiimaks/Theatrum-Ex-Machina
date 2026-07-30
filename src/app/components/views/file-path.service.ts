@@ -28,9 +28,17 @@ export class FilePathService {
    * @param subfolder  - whether `thumbnails`, `filmstrips`, or `clips`
    * @param hash       - file hash
    * @param video      - boolean -- if true then extension is `.mp4`
+   * @param cacheKey   - optional value used to force Chromium to reload a replaced image
    */
-  createFilePath(folderPath: string, hubName: string, subfolder: FolderType, hash: string, video?: boolean): string {
-    return 'file://' + path.normalize(path.join(
+  createFilePath(
+    folderPath: string,
+    hubName: string,
+    subfolder: FolderType,
+    hash: string,
+    video?: boolean,
+    cacheKey?: string,
+  ): string {
+    const filePath = 'file://' + path.normalize(path.join(
       folderPath,
       'vha-' + hubName,
       subfolder,
@@ -38,6 +46,8 @@ export class FilePathService {
     )).replace(/\\/g, '/')
       .replace(/[ ()]/g, (match) => { return this.replaceMap[match]; });
       //         ^^^^^ replace the ` ` (space) as well as parentheses `(` and `)` with URL encoding from the `replaceMap`
+
+    return cacheKey ? `${filePath}?v=${encodeURIComponent(cacheKey)}` : filePath;
   }
 
   /**
