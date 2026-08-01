@@ -7,8 +7,10 @@
     "target": "es2022"
   },
   "include": [
+    "interfaces/catalogue-file.ts",
     "interfaces/date-added.ts",
     "interfaces/final-object.interface.ts",
+    "node/catalogue-file.test.ts",
     "node/catalogue-editor.test.ts",
     "node/date-added.test.ts",
     "node/main-extract.ts",

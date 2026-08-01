@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest a new feature for VHA
+about: Suggest a new feature for Theatrum Ex Machina
 title: "[FEATURE] "
 labels: enhancement
 assignees: ""
@@ -10,7 +10,7 @@ assignees: ""
 
 ### Description
 
-<!-- Describe the feature or enhancement you'd like to see implemented in VHA -->
+<!-- Describe the feature or enhancement you'd like to see implemented in Theatrum Ex Machina -->
 
 #### What problem does this solve?
 

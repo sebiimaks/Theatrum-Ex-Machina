@@ -1,6 +1,6 @@
 ---
 name: Other
-about: Anything related to VHA
+about: Anything related to Theatrum Ex Machina
 title: "[OTHER] "
 assignees: ""
 ---

@@ -1,12 +1,12 @@
 {
-  "name": "video-hub-app-sin",
-  "productName": "Video Hub App SIN",
+  "name": "theatrum-ex-machina",
+  "productName": "Theatrum Ex Machina",
   "version": "3.3.0-sin.8",
-  "description": "Video Hub App SIN - an unsupported personal fork for browsing, searching, previewing, and managing videos",
-  "homepage": "https://github.com/sebiimaks/Video-Hub-App-SIN",
+  "description": "Theatrum Ex Machina - an unsupported personal fork of Video Hub App 3 for browsing, searching, previewing, and managing videos",
+  "homepage": "https://github.com/sebiimaks/Theatrum-Ex-Machina",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sebiimaks/Video-Hub-App-SIN.git"
+    "url": "https://github.com/sebiimaks/Theatrum-Ex-Machina.git"
   },
   "author": {
     "name": "Boris Yakubchik",
@@ -36,6 +36,7 @@
     "build": "npm run electron:serve-tsc && ng build --base-href ./",
     "build:prod": "npm run build -- -c production",
     "buildsize": "sh ./bin/buildSizeCheck.sh",
+    "branding:generate": "node ./bin/generate-brand-assets.mjs",
     "check": "npm run check:tsc && npm run check:lint",
     "check:lint": "ng lint --quiet",
     "check:tsc": "tsc --project ./tsconfig.json --noEmit && tsc --project ./tsconfig-serve.json --noEmit && tsc --project ./tsconfig.worker.json --noEmit",
@@ -50,12 +51,14 @@
     "legal:generate": "node ./bin/generate-third-party-notices.mjs",
     "media:build": "sh ./bin/build-media-tools.sh",
     "media:ensure": "sh ./bin/ensure-media-tools.sh",
-    "media:prepare": "npm run media:ensure && npm run legal:generate",
+    "media:prepare": "npm run media:ensure && npm run runtime:stage && npm run legal:generate",
     "media:source": "sh ./bin/package-media-source.sh",
     "media:source:test": "sh ./bin/package-media-source.sh ./release-test",
     "ng:serve": "ng serve",
     "postinstall": "electron-builder install-app-deps",
-    "test": "npm-run-all -s test:persistence test:local-safety test:import-resilience test:thumbnail-count test:thumbnail-batch test:thumbnail-transaction test:date-added test:catalogue-editor test:media-toolchain",
+    "runtime:stage": "node ./bin/stage-runtime-dependencies.mjs",
+    "test": "npm-run-all -s test:catalogue-file test:persistence test:local-safety test:import-resilience test:thumbnail-count test:thumbnail-batch test:thumbnail-transaction test:date-added test:catalogue-editor test:media-toolchain",
+    "test:catalogue-file": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/catalogue-file.test.ts",
     "test:catalogue-editor": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/catalogue-editor.test.ts",
     "test:date-added": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/date-added.test.ts",
     "test:import-resilience": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/media-import-resilience.test.ts",
@@ -65,8 +68,8 @@
     "test:thumbnail-batch": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/sequential-batch.test.ts",
     "test:thumbnail-count": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/thumbnail-count.test.ts",
     "test:thumbnail-transaction": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/thumbnail-transaction.test.ts",
-    "verify:mac:release": "node ./bin/verify-packaged-app.mjs './release/mac-arm64/Video Hub App SIN.app'",
-    "verify:mac:test": "node ./bin/verify-packaged-app.mjs './release-test/mac-arm64/Video Hub App SIN.app'"
+    "verify:mac:release": "node ./bin/verify-packaged-app.mjs './release/mac-arm64/Theatrum Ex Machina.app'",
+    "verify:mac:test": "node ./bin/verify-packaged-app.mjs './release-test/mac-arm64/Theatrum Ex Machina.app'"
   },
   "dependencies": {
     "@iharbeck/ngx-virtual-scroller": "19.0.1",

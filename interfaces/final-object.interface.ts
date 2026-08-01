@@ -60,7 +60,7 @@ export interface ImageElement {
   // ========================================================================
   // Stripped out and not saved in the VHA file
   // ------------------------------------------------------------------------
-  deleted?: boolean;             // toggled after a successful delete of file; ImageElement removed before saving .vha2 file
+  deleted?: boolean;             // toggled after a successful delete; ImageElement removed before saving the catalogue
   durationDisplay: string;       // displayed duration in X:XX:XX format
   fileSizeDisplay: string;       // displayed as XXXmb or X.Xgb -- also co-opted for showing number of files in a *FOLDER*
   index: number;                 // for the `default` sort order

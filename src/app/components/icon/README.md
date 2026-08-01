@@ -1,6 +1,6 @@
 # Adding new icons
 
-Thank you for considering adding additional icons to Video Hub App!
+Thank you for considering adding additional icons to Theatrum Ex Machina.
 
 It's pretty straight forward: all you need is an _SVG_ file! 
 

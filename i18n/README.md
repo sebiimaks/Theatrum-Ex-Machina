@@ -1,6 +1,6 @@
 # Adding a language
 
-Thank you for considering adding an additional translation to Video Hub App!
+Thank you for considering adding an additional translation to Theatrum Ex Machina.
 
 Translations take seconds using the _Google Translation API_ and the [translate-json-object](https://github.com/KhaledMohamedP/translate-json-object) library, but it does require a _Google Cloud API_ key (please use your own).
 
@@ -10,7 +10,7 @@ For abbreviations please choose a 2-letter abbreviation that is on both lists:
 - https://github.com/electron/electron/blob/master/docs/api/locales.md
 - https://cloud.google.com/translate/docs/languages
 
-After generating the `json` you may open a [pull request](https://github.com/whyboris/Video-Hub-App/pulls) or first integrate it into the app.
+After generating the `json` you may open a [pull request](https://github.com/sebiimaks/Theatrum-Ex-Machina/pulls) or first integrate it into the app.
 
 ## Integrating the language into the app
 

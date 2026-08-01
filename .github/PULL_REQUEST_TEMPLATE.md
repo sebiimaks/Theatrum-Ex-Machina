@@ -1,4 +1,4 @@
-<!-- 🙇‍♂️ Thank you very much for contributing to VHA ♥ -->
+<!-- Thank you for contributing to Theatrum Ex Machina. -->
 
 Related issue: #{{issue number}}
 

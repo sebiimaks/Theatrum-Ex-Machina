@@ -271,7 +271,11 @@
     "showSimilar": "Show similar",
     "shuffle": "Shuffle results",
     "thumbnailRegenerationComplete": "Thumbnails regenerated",
+    "thumbnailRegenerationBusy": "Thumbnail regeneration is already in progress",
+    "thumbnailRegenerationCancelling": "Cancelling thumbnail regeneration…",
+    "thumbnailRegenerationElapsed": "{{ elapsed }} elapsed",
     "thumbnailRegenerationFailed": "Could not regenerate thumbnails",
+    "thumbnailRegenerationInProgress": "Regenerating thumbnails for “{{ fileName }}”",
     "viewFolder": "View folder"
   },
   "SETTINGS": {
@@ -444,6 +448,7 @@
     "folderThumbnailRegenerationCancelled": "Folder thumbnail regeneration stopped because the folder or hub became unavailable",
     "folderThumbnailRegenerationComplete": "Regenerated thumbnails for {{ count }} videos",
     "folderThumbnailRegenerationFailed": "Could not regenerate thumbnails for this folder",
+    "folderThumbnailRegenerationGlobalProgress": "Regenerating thumbnails in “{{ folderName }}”: {{ completed }} of {{ total }}",
     "folderThumbnailRegenerationSelectionChanged": "The videos in this folder changed while confirmation was open. Review the folder and try again",
     "folderThumbnailRegenerationSkippedNotice": "{{ count }} catalogue entries without usable media metadata will be skipped.",
     "folderThumbnailRegenerationSummary": "Thumbnail regeneration finished: {{ succeeded }} succeeded, {{ failed }} failed, and {{ skipped }} skipped",

@@ -10,9 +10,9 @@ source_release_input=${1:-"$source_project_dir/release"}
 mkdir -p "$source_release_input"
 source_release_dir=$(CDPATH= cd -- "$source_release_input" && pwd)
 source_version=$(node -p "require('$source_project_dir/package.json').version")
-source_archive_name="video-hub-app-sin-media-source-v$source_version.tar.xz"
-source_work_dir=$(mktemp -d "${TMPDIR:-/tmp}/video-hub-app-sin-source.XXXXXX")
-source_stage_dir="$source_work_dir/video-hub-app-sin-media-source-v$source_version"
+source_archive_name="theatrum-ex-machina-media-source-v$source_version.tar.xz"
+source_work_dir=$(mktemp -d "${TMPDIR:-/tmp}/theatrum-ex-machina-source.XXXXXX")
+source_stage_dir="$source_work_dir/theatrum-ex-machina-media-source-v$source_version"
 
 trap 'rm -rf "$source_work_dir"' EXIT HUP INT TERM
 

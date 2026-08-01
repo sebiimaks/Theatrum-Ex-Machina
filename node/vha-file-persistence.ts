@@ -35,7 +35,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Parse and minimally validate a Video Hub catalogue.
+ * Parse and minimally validate a catalogue.
  * Version 2 catalogues legitimately use `inputDir` until upgraded after loading.
  */
 export function parseVhaJson(raw: string | Buffer): FinalObject {

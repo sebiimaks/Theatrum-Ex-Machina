@@ -1,6 +1,6 @@
 # Demo
 
-This folder contains files for showing a web preview of the app.
+This folder contains the unmaintained legacy upstream web demo inherited from Video Hub App. It does not represent the current Theatrum Ex Machina interface.
 
 First build the app (`npm run build`) with the web-demo flag `webDemo` set to `true` (in `home.component.ts`). This should populate the `/dist` folder with `index.html`. 
 

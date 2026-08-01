@@ -1,6 +1,6 @@
 {
-  "productName": "Video Hub App SIN",
-  "appId": "com.github.sebiimaks.videohubappsin",
+  "productName": "Theatrum Ex Machina",
+  "appId": "com.github.sebiimaks.theatrumexmachina",
   "copyright": "Copyright © 2022 Boris Yakubchik; fork modifications © 2026 sebiimaks",
   "directories": {
     "output": "release/"
@@ -10,7 +10,14 @@
     "main.js",
     "node/**/*.js",
     "interfaces/**/*.js",
-    "i18n/*.json"
+    "i18n/*.json",
+    {
+      "from": "build/runtime-dependencies/node_modules",
+      "to": "node_modules",
+      "filter": [
+        "**/*"
+      ]
+    }
   ],
   "extraResources": [
     {
@@ -48,7 +55,7 @@
   },
   "mac": {
     "category": "public.app-category.video",
-    "artifactName": "video-hub-app-sin-v${version}-${arch}.${ext}",
+    "artifactName": "theatrum-ex-machina-v${version}-${arch}.${ext}",
     "target": {
       "target": "dmg",
       "arch": [
@@ -62,12 +69,12 @@
     "icon": "src/assets/icons/png",
     "category": "AudioVideo",
     "synopsis": "Unsupported personal fork of Video Hub App 3",
-    "description": "Browse, search, preview, and manage video collections. This is an unsupported personal version of the Video Hub App. All changes made utilising LLMs. Use at your own risk.",
+    "description": "Browse, search, preview, and manage video collections. Theatrum Ex Machina is an unsupported personal fork of Video Hub App 3. Fork changes were made utilising LLMs. Use at your own risk.",
     "maintainer": "sebiimaks <github.sadness446@passmail.net>",
     "vendor": "sebiimaks",
     "desktop": {
       "entry": {
-        "Name": "Video Hub App SIN",
+        "Name": "Theatrum Ex Machina",
         "Comment": "Browse, search, preview, and manage video collections",
         "Categories": "AudioVideo;Video;"
       }
@@ -78,7 +85,7 @@
     ]
   },
   "deb": {
-    "packageName": "video-hub-app-sin",
+    "packageName": "theatrum-ex-machina",
     "packageCategory": "video",
     "priority": "optional"
   },
@@ -87,8 +94,9 @@
     "perMachine": true
   },
   "fileAssociations": {
-    "ext": "vha2",
-    "name": "Video Hub App SIN file",
+    "ext": "scaena",
+    "mimeType": "application/x-theatrum-ex-machina-catalogue",
+    "name": "Theatrum Ex Machina catalogue",
     "role": "Editor"
   }
 }

@@ -69,6 +69,7 @@ interface ThumbnailQueueElement extends ImageElement {
 }
 
 interface ThumbnailRegenerationState {
+  cancelRunner?: () => void;
   folderBatchJobId?: number;
   generation: number;
   installing: boolean;
@@ -85,6 +86,7 @@ interface ThumbnailRegenerationState {
 }
 
 const thumbnailRegenerationStates: Map<string, ThumbnailRegenerationState> = new Map();
+const lingeringThumbnailInstallations: Set<string> = new Set();
 let pendingSystemThumbnail: Promise<Buffer> | undefined;
 const SYSTEM_THUMBNAIL_SINGLE_FLIGHT_LEASE_MS = 30 * 1000;
 
@@ -137,9 +139,13 @@ const createSystemThumbnail: SystemThumbnailCreator = async (
   }
 };
 let activeFolderThumbnailRegenerationJobId: number | undefined;
+const folderThumbnailCancellationWaiters: Set<() => void> = new Set();
 let folderThumbnailRegenerationGeneration = 0;
 let nextFolderThumbnailRegenerationJobId = 1;
 let thumbnailRegenerationBlocked = false;
+let initialScanQueueGeneration = 0;
+const activeInitialScanQueueTokens: Set<symbol> = new Set();
+const INITIAL_SCAN_QUEUE_PAUSE_LIMIT_MS = 5 * 60 * 1000;
 
 export interface FolderThumbnailRegenerationProgress {
   completed: number;
@@ -197,18 +203,9 @@ resetAllQueues();
 export function resetAllQueues(): void {
 
   allowSleep();
-  folderThumbnailRegenerationGeneration++;
-
-  Array.from(thumbnailRegenerationStates.entries()).forEach(([fileHash, state]) => {
-    if (state.jobId === activeThumbnailQueueRegenerationJobId) {
-      return;
-    }
-    settleThumbnailRegeneration(
-      fileHash,
-      state.jobId,
-      new Error('Thumbnail regeneration was cancelled.'),
-    );
-  });
+  initialScanQueueGeneration++;
+  activeInitialScanQueueTokens.clear();
+  cancelThumbnailRegeneration();
 
   // kill all previeous
   if (thumbQueue && typeof thumbQueue.kill === 'function') {
@@ -233,7 +230,9 @@ export function resetAllQueues(): void {
 
   metadataQueue.drain(() => {
 
-    thumbQueue.resume();
+    if (activeInitialScanQueueTokens.size === 0) {
+      thumbQueue.resume();
+    }
 
     if (thumbQueue.idle()) {
       finishImport();
@@ -284,6 +283,49 @@ function enqueueMetadata(file: TempMetadataQueueObject): void {
 }
 
 /**
+ * Pause import work while an initial folder scan is enumerating files, but
+ * always provide a bounded release path. Network watchers and crawlers can
+ * fail without emitting their normal completion event; without this lease the
+ * shared thumbnail queue would remain paused indefinitely.
+ */
+function pauseQueuesForInitialScan(description: string): () => void {
+  const token = Symbol(description);
+  const generation = initialScanQueueGeneration;
+  let released = false;
+
+  activeInitialScanQueueTokens.add(token);
+  metadataQueue.pause();
+  thumbQueue.pause();
+
+  const release = (): void => {
+    if (released) {
+      return;
+    }
+    released = true;
+    clearTimeout(pauseLimit);
+    if (generation !== initialScanQueueGeneration) {
+      return;
+    }
+    activeInitialScanQueueTokens.delete(token);
+    if (activeInitialScanQueueTokens.size > 0) {
+      return;
+    }
+    metadataQueue.resume();
+    if (metadataQueue.idle()) {
+      thumbQueue.resume();
+    }
+  };
+
+  const pauseLimit = setTimeout(() => {
+    console.warn(`Initial folder scan exceeded its queue-pause limit: ${description}. Import work will continue.`);
+    release();
+  }, INITIAL_SCAN_QUEUE_PAUSE_LIMIT_MS);
+  pauseLimit.unref?.();
+
+  return release;
+}
+
+/**
  * Extraction queue runner
  * Runs for every element in the `thumbQueue`
  * @param element -- ImageElement to extract screenshots for
@@ -314,12 +356,23 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
     activeThumbnailQueueRegenerationJobId = regenerationState.jobId;
   }
 
+  let runnerFinished = false;
   const finishRunner = (): void => {
+    if (runnerFinished) {
+      return;
+    }
+    runnerFinished = true;
+    if (isRegenerationJob && regenerationState.cancelRunner === finishRunner) {
+      regenerationState.cancelRunner = undefined;
+    }
     if (isRegenerationJob && activeThumbnailQueueRegenerationJobId === regenerationState.jobId) {
       activeThumbnailQueueRegenerationJobId = undefined;
     }
     done();
   };
+  if (isRegenerationJob) {
+    regenerationState.cancelRunner = finishRunner;
+  }
 
   const regenerationStillCurrent = (): boolean => {
     if (!isRegenerationJob) {
@@ -376,8 +429,9 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
           reportedError,
         );
       } finally {
-        await removeRegenerationStagingFolder(generatedOutputFolder);
         finishRunner();
+        lingeringThumbnailInstallations.delete(element.hash);
+        void removeRegenerationStagingFolder(generatedOutputFolder);
       }
     };
 
@@ -417,7 +471,8 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
       })
       .catch((error: Error) => {
         settleThumbnailRegeneration(element.hash, regenerationState.jobId, error);
-        void removeRegenerationStagingFolder(stagingFolder).finally(finishRunner);
+        finishRunner();
+        void removeRegenerationStagingFolder(stagingFolder);
       });
     return;
   }
@@ -642,14 +697,19 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
 function superFastSystemScan(inputDir: string, inputSource: number): void {
 
   GLOBALS.angularApp.sender.send('started-watching-this-dir', inputSource);
+  const releaseScanQueues = pauseQueuesForInitialScan(inputDir);
 
-  metadataQueue.pause();
-  thumbQueue.pause();
-
-  const crawler = new fdir()
-    .exclude((dir: string) => dir.startsWith('vha-')) // .exclude `dir` is the folder name, not full path
-    .withFullPaths()
-    .crawl(inputDir);
+  let crawler;
+  try {
+    crawler = new fdir()
+      .exclude((dir: string) => dir.startsWith('vha-')) // .exclude `dir` is the folder name, not full path
+      .withFullPaths()
+      .crawl(inputDir);
+  } catch (error) {
+    console.error('Unable to begin folder scan:', inputDir, error);
+    releaseScanQueues();
+    return;
+  }
 
   const t0 = performance.now(); // LOGGING
 
@@ -694,10 +754,10 @@ function superFastSystemScan(inputDir: string, inputSource: number): void {
     });
 
     GLOBALS.angularApp.sender.send('all-files-found-in-dir', inputSource, allFoundFilesMap.get(inputSource));
-
-    metadataQueue.resume();
-
-  });
+  }).catch((error: Error) => {
+    console.error('Folder scan failed:', inputDir, error);
+    GLOBALS.angularApp.sender.send('all-files-found-in-dir', inputSource, allFoundFilesMap.get(inputSource));
+  }).finally(releaseScanQueues);
 
 }
 
@@ -744,8 +804,7 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
 
   const allAcceptableFiles: string[] = [...acceptableFiles, ...GLOBALS.additionalExtensions];
 
-  metadataQueue.pause();
-  thumbQueue.pause();
+  const releaseScanQueues = pauseQueuesForInitialScan(inputDir);
 
   watcher
     .on('add', (filePath: string) => {
@@ -811,8 +870,7 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
     })
     .on('ready', () => {
       console.log('Finished scanning', inputSource);
-
-      metadataQueue.resume();
+      releaseScanQueues();
 
       GLOBALS.angularApp.sender.send('all-files-found-in-dir', inputSource, allFoundFilesMap.get(inputSource));
 
@@ -824,6 +882,10 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
       }
 
       logPerformance('Chokidar took ', t0);
+    })
+    .on('error', (error: Error) => {
+      console.error('Folder watcher failed:', inputDir, error);
+      releaseScanQueues();
     });
 
   watcherMap.set(inputSource, watcher);
@@ -1001,6 +1063,11 @@ export function regenerateThumbnails(
       return;
     }
 
+    if (lingeringThumbnailInstallations.has(fileHash)) {
+      reject(new Error('The previous thumbnail installation for this item is still finishing.'));
+      return;
+    }
+
     const existingState = thumbnailRegenerationStates.get(fileHash);
     if (existingState) {
       existingState.waiters.push({ reject, resolve });
@@ -1048,31 +1115,70 @@ export function setThumbnailRegenerationBlocked(blocked: boolean): void {
 }
 
 /**
- * Stop scheduling folder jobs immediately. An in-flight extraction is left in
- * its isolated staging directory; the generation fence prevents it from ever
- * replacing live previews when it eventually exits.
+ * Cancel every queued or active manual thumbnail-regeneration job. Active
+ * extraction is released from the shared queue immediately and remains fenced
+ * inside its unique staging folder, so a late callback cannot publish files.
+ * If cancellation crosses the short transactional install phase, the hash is
+ * held until rollback/commit handling finishes to prevent overlapping writes.
  */
-export function cancelFolderThumbnailRegeneration(): boolean {
-  if (activeFolderThumbnailRegenerationJobId === undefined) {
+export function cancelThumbnailRegeneration(): boolean {
+  const hadRegeneration = activeFolderThumbnailRegenerationJobId !== undefined
+    || activeThumbnailQueueRegenerationJobId !== undefined
+    || thumbnailRegenerationStates.size > 0;
+  if (!hadRegeneration) {
     return false;
   }
 
   folderThumbnailRegenerationGeneration++;
+  activeFolderThumbnailRegenerationJobId = undefined;
+  Array.from(folderThumbnailCancellationWaiters).forEach(cancel => cancel());
+  folderThumbnailCancellationWaiters.clear();
   Array.from(thumbnailRegenerationStates.entries()).forEach(([fileHash, state]) => {
-    if (
-      state.folderBatchJobId !== activeFolderThumbnailRegenerationJobId
-      || state.jobId === activeThumbnailQueueRegenerationJobId
-      || state.installing
-    ) {
-      return;
+    if (state.installing) {
+      lingeringThumbnailInstallations.add(fileHash);
     }
     settleThumbnailRegeneration(
       fileHash,
       state.jobId,
-      new Error('Folder thumbnail regeneration was cancelled.'),
+      new Error('Thumbnail regeneration was cancelled.'),
+    );
+    state.cancelRunner?.();
+  });
+  activeThumbnailQueueRegenerationJobId = undefined;
+  return true;
+}
+
+/** Stop the current folder batch using the same safe cancellation path. */
+export function cancelFolderThumbnailRegeneration(): boolean {
+  if (activeFolderThumbnailRegenerationJobId === undefined) {
+    return false;
+  }
+  return cancelThumbnailRegeneration();
+}
+
+function withFolderThumbnailCancellation<T>(operation: Promise<T>, jobId: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      folderThumbnailCancellationWaiters.delete(cancel);
+      callback();
+    };
+    const cancel = (): void => finish(() => reject(new Error('Folder thumbnail regeneration was cancelled.')));
+
+    if (activeFolderThumbnailRegenerationJobId !== jobId) {
+      cancel();
+      return;
+    }
+    folderThumbnailCancellationWaiters.add(cancel);
+    operation.then(
+      value => finish(() => resolve(value)),
+      error => finish(() => reject(error)),
     );
   });
-  return true;
 }
 
 /**
@@ -1140,7 +1246,10 @@ export async function regenerateFolderThumbnails(
 
   const regenerateFirstAvailableCandidate = async (candidates: ImageElement[]): Promise<number> => {
     try {
-      await fs.promises.access(sourcePath, fs.constants.R_OK);
+      await withFolderThumbnailCancellation(
+        fs.promises.access(sourcePath, fs.constants.R_OK),
+        jobId,
+      );
     } catch (error) {
       sourceUnavailable = true;
       throw error;

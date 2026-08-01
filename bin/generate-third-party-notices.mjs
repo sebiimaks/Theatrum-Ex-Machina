@@ -119,10 +119,10 @@ const sections = orderedPackages.map((entry) => [
 ].join('\n'));
 
 const notices = [
-  'Video Hub App SIN - third-party runtime notices',
+  'Theatrum Ex Machina - third-party runtime notices',
   '',
   'This file is generated from the exact production dependency lock and installed',
-  'package license files. Video Hub App SIN itself remains licensed under the MIT',
+  'package license files. Theatrum Ex Machina itself remains licensed under the MIT',
   'License in the application root. FFmpeg and x264 notices are supplied separately.',
   '',
   ...sections,

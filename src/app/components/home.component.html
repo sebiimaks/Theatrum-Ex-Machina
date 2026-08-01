@@ -120,7 +120,8 @@
       <li (click)="openThumbnailSheet(currentRightClickedItem)">{{ 'RIGHTCLICK.sheetModal'  | translate }}</li>
       <li
         (click)="regenerateThumbnails(currentRightClickedItem)"
-        [ngClass]="{ 'right-click-disabled': !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource] }"
+        [ngClass]="{ 'right-click-disabled': thumbnailRegenerationActive
+                                               || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource] }"
       >
                                                                 {{ 'RIGHTCLICK.regenerateThumbnails' | translate }}</li>
     @if (settingsButtons['showDeleteOption'].toggled) {
@@ -356,6 +357,45 @@
         [settingsButtonsGroups]="settingsButtonsGroups"
         [settingsButtons]="settingsButtons"
        />
+
+    @if (thumbnailRegenerationActive) {
+      <section
+        class="thumbnail-regeneration-banner"
+        [class.thumbnail-regeneration-banner-dark]="settingsButtons['darkMode'].toggled"
+      >
+        <span class="thumbnail-regeneration-spinner" aria-hidden="true"></span>
+        <span class="thumbnail-regeneration-message" aria-live="polite" role="status">
+          @if (individualThumbnailRegenerationStatus) {
+            {{ (individualThumbnailRegenerationStatus.cancelling
+                  ? 'RIGHTCLICK.thumbnailRegenerationCancelling'
+                  : 'RIGHTCLICK.thumbnailRegenerationInProgress') | translate : {
+                    fileName: individualThumbnailRegenerationStatus.fileName
+                  } }}
+          } @else if (folderThumbnailRegenerationStatus) {
+            {{ (folderThumbnailRegenerationStatus.cancelling
+                  ? 'RIGHTCLICK.thumbnailRegenerationCancelling'
+                  : 'STATISTICS.folderThumbnailRegenerationGlobalProgress') | translate : {
+                    completed: folderThumbnailRegenerationStatus.completedJobs,
+                    folderName: thumbnailRegenerationFolderName,
+                    total: folderThumbnailRegenerationStatus.totalJobs
+                  } }}
+          }
+        </span>
+        <span class="thumbnail-regeneration-elapsed">
+          {{ 'RIGHTCLICK.thumbnailRegenerationElapsed' | translate : {
+            elapsed: thumbnailRegenerationElapsedLabel
+          } }}
+        </span>
+        <button
+          type="button"
+          class="thumbnail-regeneration-cancel"
+          (click)="cancelThumbnailRegeneration()"
+          [disabled]="thumbnailRegenerationCancelling"
+        >
+          {{ 'SYSTEM.cancel' | translate }}
+        </button>
+      </section>
+    }
 
       <!-- GEAR BUTTON -->
       <div
@@ -1417,6 +1457,7 @@
   (selectSourceDirectory)="selectSourceDirectory()"
 
   [canCloseWizard]="canCloseWizard"
+  [darkMode]="settingsButtons['darkMode'].toggled"
   [importStage]="importStage"
   [vhaFileHistory]="vhaFileHistory"
   [wizard]="wizard"

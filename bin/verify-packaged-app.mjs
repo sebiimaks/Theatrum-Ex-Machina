@@ -3,9 +3,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+
+import { collectRuntimePackagePaths } from './runtime-dependencies.mjs';
 
 const appPath = process.argv[2];
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -13,6 +15,9 @@ const projectDirectory = path.resolve(scriptDirectory, '..');
 const packageVersion = JSON.parse(
   fs.readFileSync(path.join(projectDirectory, 'package.json'), 'utf8'),
 ).version;
+const packageLock = JSON.parse(
+  fs.readFileSync(path.join(projectDirectory, 'package-lock.json'), 'utf8'),
+);
 const require = createRequire(import.meta.url);
 const asar = require('@electron/asar');
 
@@ -24,13 +29,15 @@ const resolvedAppPath = path.resolve(appPath);
 const buildOutputDirectory = path.dirname(path.dirname(resolvedAppPath));
 const correspondingSourcePath = process.argv[3] || path.join(
   buildOutputDirectory,
-  `video-hub-app-sin-media-source-v${packageVersion}.tar.xz`,
+  `theatrum-ex-machina-media-source-v${packageVersion}.tar.xz`,
 );
 
 const resourcesPath = path.join(resolvedAppPath, 'Contents', 'Resources');
+const infoPlistPath = path.join(resolvedAppPath, 'Contents', 'Info.plist');
 const ffmpegPath = path.join(resourcesPath, 'media-tools', 'ffmpeg');
 const ffprobePath = path.join(resourcesPath, 'media-tools', 'ffprobe');
 const requiredResources = [
+  infoPlistPath,
   path.join(resourcesPath, 'LICENSE'),
   path.join(resourcesPath, 'licenses', 'GPL-2.0-or-later.txt'),
   path.join(resourcesPath, 'licenses', 'FFMPEG-LICENSE.md'),
@@ -62,9 +69,92 @@ function sha256(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
+async function verifyPackagedStartup(executablePath) {
+  const smokeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-smoke-'));
+  const expectedMarker = 'THEATRUM_PACKAGED_SMOKE_READY';
+
+  try {
+    await new Promise((resolve, reject) => {
+      const child = spawn(executablePath, [], {
+        detached: true,
+        env: {
+          ...process.env,
+          PORTABLE_EXECUTABLE_DIR: smokeDirectory,
+          THEATRUM_PACKAGED_SMOKE_TEST: '1',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      let stdout = '';
+      let timedOut = false;
+      let forceKillTimer;
+
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      const terminateProcessGroup = (signal) => {
+        if (!child.pid) {
+          return;
+        }
+        try {
+          process.kill(-child.pid, signal);
+        } catch {
+          // The process may already have exited between the timer and signal.
+        }
+      };
+
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        terminateProcessGroup('SIGTERM');
+        forceKillTimer = setTimeout(() => terminateProcessGroup('SIGKILL'), 1_000);
+      }, 20_000);
+
+      child.on('error', (error) => {
+        clearTimeout(timeout);
+        clearTimeout(forceKillTimer);
+        reject(error);
+      });
+      child.on('close', (code, signal) => {
+        clearTimeout(timeout);
+        clearTimeout(forceKillTimer);
+        const output = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n');
+        if (timedOut) {
+          reject(new Error(`Packaged app startup timed out.\n${output}`));
+        } else if (code !== 0) {
+          reject(new Error(`Packaged app exited with code ${code} (${signal || 'no signal'}).\n${output}`));
+        } else if (!stdout.includes(expectedMarker)) {
+          reject(new Error(`Packaged app exited before renderer startup completed.\n${output}`));
+        } else {
+          resolve();
+        }
+      });
+    });
+  } finally {
+    fs.rmSync(smokeDirectory, { force: true, recursive: true });
+  }
+}
+
 for (const requiredResource of requiredResources) {
   assert.ok(fs.statSync(requiredResource).size > 0, `Missing or empty packaged resource: ${requiredResource}`);
 }
+
+const infoPlist = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', infoPlistPath]));
+const associatedExtensions = (infoPlist.CFBundleDocumentTypes || [])
+  .flatMap((documentType) => documentType.CFBundleTypeExtensions || [])
+  .map((extension) => String(extension).toLowerCase());
+assert.ok(
+  associatedExtensions.includes('scaena'),
+  'The packaged app does not associate .scaena catalogue files.',
+);
+assert.equal(
+  associatedExtensions.includes('vha2'),
+  false,
+  'The packaged app must not compete with Video Hub App SIN for legacy .vha2 file association.',
+);
 
 const packagedManifest = fs.readFileSync(
   path.join(resourcesPath, 'media-tools', 'BUILD-MANIFEST.txt'),
@@ -81,17 +171,15 @@ assert.ok(
 
 const applicationArchive = path.join(resourcesPath, 'app.asar');
 const archivedFiles = asar.listPackage(applicationArchive);
+const archivedFileSet = new Set(archivedFiles);
 assert.ok(
   archivedFiles.includes('/node/media-tool-paths.js'),
   'The packaged app is missing its fork-owned media-tool resolver.',
 );
-for (const requiredRuntimeFile of [
-  '/node_modules/electron-window-state/index.js',
-  '/node_modules/jsonfile/index.js',
-  '/node_modules/mkdirp/index.js',
-]) {
+for (const packagePath of collectRuntimePackagePaths(packageLock)) {
+  const requiredRuntimeFile = `/${packagePath}/package.json`;
   assert.ok(
-    archivedFiles.includes(requiredRuntimeFile),
+    archivedFileSet.has(requiredRuntimeFile),
     `The packaged app is missing a required runtime dependency: ${requiredRuntimeFile}`,
   );
 }
@@ -156,7 +244,7 @@ assert.match(ffmpegVersion, /--enable-gpl/);
 assert.match(ffmpegVersion, /--enable-libx264/);
 assert.doesNotMatch(ffmpegVersion, /--enable-nonfree/);
 
-const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'video-hub-app-sin-artifact-'));
+const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-artifact-'));
 try {
   const mediaPath = path.join(temporaryDirectory, 'packaged test with spaces; value.mp4');
   const thumbnailPath = path.join(temporaryDirectory, 'thumbnail with spaces; value.jpg');
@@ -215,13 +303,13 @@ if (correspondingSourcePath) {
   }
 
   const sourceVerificationDirectory = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'video-hub-app-sin-source-verification-'),
+    path.join(os.tmpdir(), 'theatrum-ex-machina-source-verification-'),
   );
   try {
     run('tar', ['-xf', path.resolve(correspondingSourcePath), '-C', sourceVerificationDirectory]);
     const sourceRoot = path.join(
       sourceVerificationDirectory,
-      `video-hub-app-sin-media-source-v${packageVersion}`,
+      `theatrum-ex-machina-media-source-v${packageVersion}`,
     );
     assert.equal(
       sha256(path.join(sourceRoot, 'sources', 'ffmpeg-8.1.2.tar.xz')),
@@ -248,4 +336,8 @@ if (correspondingSourcePath) {
   }
 }
 
-console.log('Packaged Mac application and licensing payload verified.');
+const executableName = infoPlist.CFBundleExecutable;
+assert.ok(executableName, 'The packaged application has no CFBundleExecutable.');
+await verifyPackagedStartup(path.join(resolvedAppPath, 'Contents', 'MacOS', executableName));
+
+console.log('Packaged Mac application, runtime startup, and licensing payload verified.');

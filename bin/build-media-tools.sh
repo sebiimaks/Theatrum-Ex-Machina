@@ -68,7 +68,7 @@ else
   media_jobs=$(getconf _NPROCESSORS_ONLN)
 fi
 
-media_work_dir=$(mktemp -d "${TMPDIR:-/tmp}/video-hub-app-sin-media.XXXXXX")
+media_work_dir=$(mktemp -d "${TMPDIR:-/tmp}/theatrum-ex-machina-media.XXXXXX")
 trap 'rm -rf "$media_work_dir"' EXIT HUP INT TERM
 
 mkdir -p "$media_output_dir" "$media_source_dir" "$media_legal_dir" "$media_cache_dir"
@@ -123,7 +123,7 @@ cp "$media_cache_dir/$x264_archive" "$media_source_dir/$x264_archive"
 tar -xf "$media_cache_dir/$ffmpeg_archive" -C "$media_work_dir"
 tar -xf "$media_cache_dir/$x264_archive" -C "$media_work_dir"
 
-media_prefix=/opt/video-hub-app-sin-media
+media_prefix=/opt/theatrum-ex-machina-media
 media_x264_stage="$media_work_dir/x264-stage"
 media_ffmpeg_stage="$media_work_dir/ffmpeg-stage"
 media_x264_source="$media_work_dir/x264-$x264_commit"
@@ -182,7 +182,7 @@ media_compiler_line=$($media_cc --version | sed -n '1p')
 media_ffmpeg_configuration=$($media_output_dir/ffmpeg -version)
 
 {
-  printf '%s\n' "Video Hub App SIN media-tool build manifest"
+  printf '%s\n' "Theatrum Ex Machina media-tool build manifest"
   printf '%s\n' "Target: $media_target"
   printf '%s\n' "Minimum operating system: $media_minimum_os"
   printf '%s\n' "Compiler: $media_compiler_line"

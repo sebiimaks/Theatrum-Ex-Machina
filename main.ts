@@ -30,11 +30,26 @@ import {
 } from './node/main-extract-async';
 import { sanitizeScreenshotSettings } from './node/thumbnail-count';
 import { recoverInterruptedPreviewTransactions } from './node/thumbnail-transaction';
+import {
+  CATALOGUE_PICKER_EXTENSIONS,
+  catalogueFileName,
+  hasCatalogueOrAssetNameCollision,
+  isCataloguePickerFilePath,
+} from './interfaces/catalogue-file';
 
 // Variables
 const pathToAppData = app.getPath('appData');
 const pathToPortableApp = process.env.PORTABLE_EXECUTABLE_DIR;
-GLOBALS.settingsPath = pathToPortableApp ? pathToPortableApp : path.join(pathToAppData, 'video-hub-app-2');
+const packagedSmokeTest = process.env.THEATRUM_PACKAGED_SMOKE_TEST === '1';
+if (packagedSmokeTest) {
+  if (!pathToPortableApp) {
+    throw new Error('Packaged smoke testing requires an isolated PORTABLE_EXECUTABLE_DIR.');
+  }
+  const smokeUserDataPath = path.join(pathToPortableApp, 'user-data');
+  fs.mkdirSync(smokeUserDataPath, { recursive: true });
+  app.setPath('userData', smokeUserDataPath);
+}
+GLOBALS.settingsPath = pathToPortableApp ? pathToPortableApp : path.join(pathToAppData, 'theatrum-ex-machina');
 
 const English = require('./i18n/en.json');
 let systemMessages = English.SYSTEM; // Set English as default; update via `system-messages-updated`
@@ -42,9 +57,40 @@ let systemMessages = English.SYSTEM; // Set English as default; update via `syst
 let screenWidth;
 let screenHeight;
 
-// TODO: CLEAN UP
-let macFirstRun = true; // detect if it's the 1st time Mac is opening the file or something like that
 let userWantedToOpen: string = null; // find a better pattern for handling this functionality
+let rendererStartupComplete = false;
+
+function requestCatalogueOpenFromSystem(filePath: string): void {
+  if (!filePath) {
+    return;
+  }
+  if (rendererStartupComplete && GLOBALS.angularApp) {
+    GLOBALS.angularApp.sender.send('open-catalogue-from-system', filePath);
+  } else {
+    userWantedToOpen = filePath;
+  }
+}
+
+function takeQueuedCataloguePath(): string | null {
+  const queuedPath = userWantedToOpen;
+  userWantedToOpen = null;
+  return queuedPath;
+}
+
+function removeEmptyCatalogueAssetFolders(hubAssetsDirectory: string): void {
+  for (const childDirectory of ['filmstrips', 'thumbnails', 'clips']) {
+    try {
+      fs.rmdirSync(path.join(hubAssetsDirectory, childDirectory));
+    } catch {
+      // Preserve non-empty or externally altered directories.
+    }
+  }
+  try {
+    fs.rmdirSync(hubAssetsDirectory);
+  } catch {
+    // Preserve non-empty or externally altered directories.
+  }
+}
 
 electron.Menu.setApplicationMenu(null);
 
@@ -71,7 +117,7 @@ if (args[0]) {
   }
 }
 
-const gotTheLock = app.requestSingleInstanceLock(); // Open file on windows from file double click
+const gotTheLock = packagedSmokeTest || app.requestSingleInstanceLock(); // Open file on windows from file double click
 
 if (!gotTheLock) {
   app.quit();
@@ -85,7 +131,7 @@ if (!gotTheLock) {
     // });
 
     if (argv.length > 1) {
-      openThisDamnFile(argv[argv.length - 1]);
+      requestCatalogueOpenFromSystem(argv[argv.length - 1]);
     }
 
     // Someone tried to run a second instance, we should focus our window.
@@ -154,7 +200,10 @@ function createWindow() {
     center: true,
     minWidth: 420,
     minHeight: 250,
-    icon: path.join(__dirname, 'src/assets/icons/png/64x64.png'),
+    show: !packagedSmokeTest,
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, 'assets', 'logo.png')
+      : path.join(__dirname, 'src/assets/icons/png/64x64.png'),
     frame: false  // removes the frame from the window completely
   });
   mainWindowState.manage(win);
@@ -218,10 +267,9 @@ try {
   // THIS RUNS (ONLY) on MAC !!!
   app.on('will-finish-launching', () => {
     app.on('open-file', (event, filePath: string) => {
+      event.preventDefault();
       if (filePath) {
-        if (!macFirstRun) {
-          openThisDamnFile(filePath);
-        }
+        requestCatalogueOpenFromSystem(filePath);
       }
     });
   });
@@ -296,9 +344,9 @@ function getAngularToShutDown(): void {
 }
 
 /**
- * Load the .vha2 file and send it to app.
+ * Load a catalogue file and send it to the app.
  * Invalid catalogues are handled here so a failed JSON parse cannot crash Electron.
- * @param pathToVhaFile full path to the .vha2 file
+ * @param pathToVhaFile full path to the catalogue file
  */
 async function openThisDamnFile(pathToVhaFile: string): Promise<void> {
 
@@ -325,13 +373,6 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
 
   resetAllQueues();
 
-  macFirstRun = false;     // TODO - figure out how to open file when double click first time on Mac
-
-  if (userWantedToOpen) {                                          // TODO - clean up messy override
-    pathToVhaFile = userWantedToOpen;
-    userWantedToOpen = undefined;
-  }
-
   try {
     const readResult = await readVhaFileWithBackup(pathToVhaFile);
     let finalObject: FinalObject;
@@ -343,7 +384,7 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
       await dialog.showMessageBox(win, {
         buttons: ['OK'],
         detail: `${readError}\n\nCheck that the drive is connected and that the catalogue can be read. No recovery was attempted and no files were changed.`,
-        message: 'This Video Hub catalogue could not be read.',
+        message: 'This catalogue could not be read.',
         title: 'Unable to Read Catalogue',
         type: 'error',
       });
@@ -355,9 +396,9 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
       cancelId: 1,
       defaultId: 0,
       detail: 'A valid backup is available. It may not contain the most recent changes. Any recoverable damaged contents will be preserved before recovery.',
-      message: 'This Video Hub catalogue is incomplete or invalid.',
+      message: 'This catalogue is incomplete or invalid.',
       noLink: true,
-      title: 'Recover Video Hub Catalogue',
+      title: 'Recover Catalogue',
       type: 'warning',
     });
 
@@ -376,7 +417,7 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
       await dialog.showMessageBox(win, {
         buttons: ['OK'],
         detail: preservationDetail,
-        message: 'The Video Hub catalogue was recovered successfully.',
+        message: 'The catalogue was recovered successfully.',
         title: 'Catalogue Recovered',
         type: 'info',
       });
@@ -398,7 +439,7 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
       await dialog.showMessageBox(win, {
         buttons: ['OK'],
         detail: `Catalogue: ${primaryError}\nBackup: ${backupError}\n\nNo files were changed.`,
-        message: 'This Video Hub catalogue and its backup could not be opened.',
+        message: 'This catalogue and its backup could not be opened.',
         title: 'Unable to Open Catalogue',
         type: 'error',
       });
@@ -444,7 +485,7 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
     await dialog.showMessageBox(win, {
       buttons: ['OK'],
       detail: `${unexpectedError}\n\nNo catalogue files were changed.`,
-      message: 'The Video Hub catalogue could not be initialized safely.',
+      message: 'The catalogue could not be initialized safely.',
       title: 'Unable to Open Catalogue',
       type: 'error',
     });
@@ -478,10 +519,15 @@ ipcMain.on('just-started', (event) => {
   const locale: string = app.getLocale();
 
   fs.readFile(path.join(GLOBALS.settingsPath, 'settings.json'), (err, data) => {
+    const requestedCataloguePath = takeQueuedCataloguePath();
     if (err) {
       win.setBounds({ x: 0, y: 0, width: screenWidth, height: screenHeight });
       event.sender.send('set-language-based-off-system-locale', locale);
-      event.sender.send('please-open-wizard', true); // firstRun = true!
+      if (requestedCataloguePath) {
+        void openThisDamnFile(requestedCataloguePath);
+      } else {
+        event.sender.send('please-open-wizard', true); // firstRun = true!
+      }
     } else {
 
       try {
@@ -489,13 +535,39 @@ ipcMain.on('just-started', (event) => {
         if (previouslySavedSettings.appState.addtionalExtensions) {
           GLOBALS.additionalExtensions = parseAdditionalExtensions(previouslySavedSettings.appState.addtionalExtensions);
         }
-        event.sender.send('settings-returning', previouslySavedSettings, locale);
+        event.sender.send(
+          'settings-returning',
+          previouslySavedSettings,
+          locale,
+          requestedCataloguePath,
+        );
 
       } catch (err) {
-        event.sender.send('please-open-wizard', false);
+        if (requestedCataloguePath) {
+          void openThisDamnFile(requestedCataloguePath);
+        } else {
+          event.sender.send('please-open-wizard', false);
+        }
       }
     }
   });
+});
+
+ipcMain.on('renderer-startup-complete', () => {
+  if (rendererStartupComplete) {
+    return;
+  }
+  rendererStartupComplete = true;
+  if (packagedSmokeTest) {
+    console.log('THEATRUM_PACKAGED_SMOKE_READY');
+    GLOBALS.readyToQuit = true;
+    setImmediate(() => app.quit());
+    return;
+  }
+  const queuedCataloguePath = takeQueuedCataloguePath();
+  if (queuedCataloguePath && GLOBALS.angularApp) {
+    GLOBALS.angularApp.sender.send('open-catalogue-from-system', queuedCataloguePath);
+  }
 });
 
 /**
@@ -518,18 +590,34 @@ ipcMain.on('start-the-import', (event, wizard: WizardOptions) => {
 
   const hubName = wizard.futureHubName;
   const outDir: string = wizard.selectedOutputFolder;
+  const hubAssetsDirectory = path.join(outDir, 'vha-' + hubName);
+  const hubNameAlreadyExists = hasCatalogueOrAssetNameCollision(
+    hubName,
+    fs.readdirSync(outDir),
+  );
 
-  if (fs.existsSync(path.join(outDir, hubName + '.vha2'))) { // make sure no hub name under the same name exists
+  if (hubNameAlreadyExists) {
     event.sender.send('show-msg-dialog', systemMessages.error, systemMessages.hubAlreadyExists, systemMessages.pleaseChangeName);
     event.sender.send('please-fix-hub-name');
   } else {
 
-    if (!fs.existsSync(path.join(outDir, 'vha-' + hubName))) { // create the folder `vha-hubName` inside the output directory
-      console.log('vha-hubName folder did not exist, creating');
-      fs.mkdirSync(path.join(outDir, 'vha-' + hubName));
-      fs.mkdirSync(path.join(outDir, 'vha-' + hubName + '/filmstrips'));
-      fs.mkdirSync(path.join(outDir, 'vha-' + hubName + '/thumbnails'));
-      fs.mkdirSync(path.join(outDir, 'vha-' + hubName + '/clips'));
+    try {
+      console.log('Catalogue asset folder did not exist, creating');
+      fs.mkdirSync(hubAssetsDirectory);
+      fs.mkdirSync(path.join(hubAssetsDirectory, 'filmstrips'));
+      fs.mkdirSync(path.join(hubAssetsDirectory, 'thumbnails'));
+      fs.mkdirSync(path.join(hubAssetsDirectory, 'clips'));
+    } catch (error) {
+      removeEmptyCatalogueAssetFolders(hubAssetsDirectory);
+      const directoryError = error instanceof Error ? error.message : String(error);
+      void dialog.showMessageBox(win, {
+        buttons: ['OK'],
+        detail: directoryError,
+        message: 'The catalogue asset folders could not be created.',
+        title: 'Catalogue Creation Failed',
+        type: 'error',
+      });
+      return;
     }
 
     GLOBALS.hubName = hubName;
@@ -566,15 +654,21 @@ function writeVhaFileAndStartExtraction(): void {
     version: GLOBALS.vhaFileVersion,
   };
 
-  const pathToTheFile = path.join(GLOBALS.selectedOutputFolder, GLOBALS.hubName + '.vha2');
+  const pathToTheFile = path.join(
+    GLOBALS.selectedOutputFolder,
+    catalogueFileName(GLOBALS.hubName),
+  );
 
   writeVhaFileToDisk(finalObject, pathToTheFile, (error: Error) => {
 
     if (error) {
+      removeEmptyCatalogueAssetFolders(
+        path.join(GLOBALS.selectedOutputFolder, 'vha-' + GLOBALS.hubName),
+      );
       dialog.showMessageBox(win, {
         buttons: ['OK'],
         detail: error.message,
-        message: 'The new Video Hub catalogue could not be saved.',
+        message: 'The new catalogue could not be saved.',
         title: 'Catalogue Save Failed',
         type: 'error',
       });
@@ -596,23 +690,33 @@ function writeVhaFileAndStartExtraction(): void {
 ipcMain.on('system-open-file-through-modal', (event, somethingElse) => {  // TODO -- check -- do I need to save vha to disk?
   dialog.showOpenDialog(win, {
     title: systemMessages.selectPreviousHub,
-    filters: [{
-      name: 'Video Hub catalogue files', // TODO -- i18n FIX ME
-      extensions: ['vha2', 'json']
-    }],
+    ...(GLOBALS.macVersion ? {} : {
+      filters: [{
+        name: 'Theatrum Ex Machina catalogue files', // TODO -- i18n FIX ME
+        extensions: [...CATALOGUE_PICKER_EXTENSIONS]
+      }],
+    }),
     properties: ['openFile']
   }).then(result => {
     const chosenFile: string = result.filePaths[0];
 
-    if (chosenFile) {
+    if (chosenFile && isCataloguePickerFilePath(chosenFile)) {
       openThisDamnFile(chosenFile);
+    } else if (chosenFile) {
+      void dialog.showMessageBox(win, {
+        buttons: ['OK'],
+        detail: 'Choose a .scaena, .vha2, or .json catalogue file.',
+        message: 'The selected file is not a supported catalogue.',
+        title: 'Unsupported Catalogue File',
+        type: 'warning',
+      });
     }
   }).catch(err => {});
 });
 
 /**
- * Open .vha2 file (from given path)
- * save current VHA file to disk, if provided
+ * Open a catalogue file from the given path.
+ * Save the current catalogue to disk first, if provided.
  */
 ipcMain.on('load-this-vha-file', (event, pathToVhaFile: string, finalObjectToSave: FinalObject) => {
 
@@ -635,7 +739,7 @@ ipcMain.on('load-this-vha-file', (event, pathToVhaFile: string, finalObjectToSav
         event.sender.send('current-vha-file-save-failed', error.message);
         return;
       }
-      console.log('.vha2 file saved before opening another');
+      console.log('Catalogue saved before opening another');
       openThisDamnFile(pathToVhaFile);
     });
 
@@ -669,7 +773,7 @@ ipcMain.on('system-messages-updated', (event, newSystemMessages): void => {
 });
 
 /**
- * Opens vha file while the app is running. Only works for mac OS.
+ * Opens a catalogue file while the app is running. Only works for macOS.
  */
 ipcMain.on('open-file', (event, pathToVhaFile) => {
   event.preventDefault();

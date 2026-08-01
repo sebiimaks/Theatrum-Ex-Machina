@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1200" role="img" aria-labelledby="title desc">
+  <title id="title">Theatrum Ex Machina circular emblem</title>
+  <desc id="desc">A simple green and white football-style roundel with bold curved lettering and a central cog combined with a theatre arch.</desc>
+
+  <!-- Two-colour roundel -->
+  <circle cx="600" cy="600" r="590" fill="#ffffff"/>
+  <circle cx="600" cy="600" r="558" fill="#076443"/>
+  <circle cx="600" cy="600" r="365" fill="#ffffff"/>
+
+  <!-- THEATRUM: individually positioned so the curve remains portable and editable -->
+  <g fill="#ffffff" font-family="Avenir Next, Montserrat, Arial Black, Arial, sans-serif"
+     font-size="98" font-weight="900" text-anchor="middle">
+    <text transform="translate(278 320) rotate(-48)">T</text>
+    <text transform="translate(350 250) rotate(-36)">H</text>
+    <text transform="translate(435 200) rotate(-24)">E</text>
+    <text transform="translate(535 174) rotate(-9)">A</text>
+    <text transform="translate(645 174) rotate(9)">T</text>
+    <text transform="translate(750 200) rotate(24)">R</text>
+    <text transform="translate(842 250) rotate(36)">U</text>
+    <text transform="translate(922 320) rotate(48)">M</text>
+  </g>
+
+  <!-- EX MACHINA -->
+  <g fill="#ffffff" font-family="Avenir Next, Montserrat, Arial Black, Arial, sans-serif"
+     font-size="86" font-weight="900" text-anchor="middle">
+    <text transform="translate(230 885) rotate(52)">E</text>
+    <text transform="translate(305 963) rotate(40)">X</text>
+    <text transform="translate(405 1022) rotate(27)">M</text>
+    <text transform="translate(505 1057) rotate(13)">A</text>
+    <text transform="translate(600 1068)">C</text>
+    <text transform="translate(695 1057) rotate(-13)">H</text>
+    <text transform="translate(790 1022) rotate(-27)">I</text>
+    <text transform="translate(885 963) rotate(-40)">N</text>
+    <text transform="translate(970 885) rotate(-52)">A</text>
+  </g>
+
+  <!-- Bold side separators -->
+  <circle cx="116" cy="600" r="25" fill="#ffffff"/>
+  <circle cx="1084" cy="600" r="25" fill="#ffffff"/>
+
+  <!-- Central machine cog: eight heavy teeth and one solid hub -->
+  <g fill="#076443">
+    <rect x="566" y="320" width="68" height="128" rx="13"/>
+    <rect x="566" y="320" width="68" height="128" rx="13" transform="rotate(45 600 600)"/>
+    <rect x="566" y="320" width="68" height="128" rx="13" transform="rotate(90 600 600)"/>
+    <rect x="566" y="320" width="68" height="128" rx="13" transform="rotate(135 600 600)"/>
+    <rect x="566" y="320" width="68" height="128" rx="13" transform="rotate(180 600 600)"/>
+    <rect x="566" y="320" width="68" height="128" rx="13" transform="rotate(225 600 600)"/>
+    <rect x="566" y="320" width="68" height="128" rx="13" transform="rotate(270 600 600)"/>
+    <rect x="566" y="320" width="68" height="128" rx="13" transform="rotate(315 600 600)"/>
+    <circle cx="600" cy="600" r="225"/>
+  </g>
+
+  <!-- Single heavy theatre-arch symbol -->
+  <path d="M 485 696 V 575 C 485 500 536 450 600 450 C 664 450 715 500 715 575 V 696"
+        fill="none" stroke="#ffffff" stroke-width="48" stroke-linecap="round"/>
+  <rect x="455" y="680" width="290" height="54" rx="27" fill="#ffffff"/>
+</svg>

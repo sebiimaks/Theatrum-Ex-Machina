@@ -13,6 +13,7 @@ import { replaceThumbnailWithNewImage } from './main-extract';
 import {
   closeWatcher,
   cancelFolderThumbnailRegeneration,
+  cancelThumbnailRegeneration,
   startWatcher,
   extractAnyMissingThumbs,
   isFolderThumbnailRegenerationActive,
@@ -207,7 +208,9 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
           icon: imgPath,
         });
       } else {
-        const tempIcon: string = app.isPackaged ? './resources/assets/logo.png' : './src/assets/logo.png';
+        const tempIcon: string = app.isPackaged
+          ? path.join(process.resourcesPath, 'assets', 'logo.png')
+          : path.join(__dirname, '../src/assets/logo.png');
         event.sender.startDrag({
           file: filePath,
           icon: tempIcon,
@@ -524,6 +527,10 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
     cancelFolderThumbnailRegeneration();
   });
 
+  trustedIpcOn('cancel-thumbnail-regeneration', () => {
+    cancelThumbnailRegeneration();
+  });
+
   /**
    * Remove any thumbnails for files no longer present in the hub
    */
@@ -564,7 +571,7 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
 
   /**
    * Summon system modal to choose OUTPUT directory
-   * where the final .vha2 file, vha-folder, and all screenshots will be saved
+   * where the final catalogue file, asset folder, and all screenshots will be saved
    */
   trustedIpcOn('choose-output', (event) => {
     showOpenDialog({
@@ -659,40 +666,76 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
       }
     };
 
-    if (isThumbnailRegenerationActive() || activeCustomThumbnailReplacements > 0) {
+    const saveAndClose = (): void => {
+      let json: string;
+      try {
+        // convert shortcuts map to object
+        settingsToSave.shortcuts = <any>Object.fromEntries(settingsToSave.shortcuts);
+        json = JSON.stringify(settingsToSave);
+        fs.mkdirSync(GLOBALS.settingsPath, { recursive: true });
+      } catch (error) {
+        reportCloseFailure(error, 'The application settings could not be prepared for saving. The app will remain open.');
+        return;
+      }
+
+      writeJsonAtomically(path.join(GLOBALS.settingsPath, 'settings.json'), json).then(() => {
+        if (finalObjectToSave === null) {
+          closeWindow();
+          return;
+        }
+
+        writeVhaFileToDisk(finalObjectToSave, GLOBALS.currentlyOpenVhaFile, (error: Error) => {
+          if (error) {
+            reportCloseFailure(error, 'The current catalogue could not be saved. The app will remain open to protect your changes.');
+            return;
+          }
+          closeWindow();
+        });
+      }).catch((error: Error) => {
+        reportCloseFailure(error, 'The application settings could not be saved. The app will remain open.');
+      });
+    };
+
+    if (activeCustomThumbnailReplacements > 0) {
       reportCloseFailure(
-        new Error('Thumbnail regeneration or replacement is still in progress.'),
-        'Wait for the current thumbnail operation to finish before closing the application.',
+        new Error('A custom thumbnail replacement is still in progress.'),
+        'Wait for the current thumbnail replacement to finish before closing the application.',
       );
       return;
     }
 
-    let json: string;
-    try {
-      // convert shortcuts map to object
-      settingsToSave.shortcuts = <any>Object.fromEntries(settingsToSave.shortcuts);
-      json = JSON.stringify(settingsToSave);
-      fs.mkdirSync(GLOBALS.settingsPath, { recursive: true });
-    } catch (error) {
-      reportCloseFailure(error, 'The application settings could not be prepared for saving. The app will remain open.');
+    if (!isThumbnailRegenerationActive()) {
+      saveAndClose();
       return;
     }
 
-    writeJsonAtomically(path.join(GLOBALS.settingsPath, 'settings.json'), json).then(() => {
-      if (finalObjectToSave === null) {
-        closeWindow();
+    const ownerWindow = activeWindow();
+    const dialogOptions = {
+      buttons: ['Keep Working', 'Cancel Generation and Quit'],
+      cancelId: 0,
+      defaultId: 0,
+      detail: 'Completed thumbnail changes will be kept. Unfinished thumbnail generation will be cancelled safely.',
+      message: 'Thumbnail generation is still in progress.',
+      noLink: true,
+      title: 'Cancel Thumbnail Generation?',
+      type: 'warning' as const,
+    };
+    const closeChoice = ownerWindow && !ownerWindow.isDestroyed()
+      ? dialog.showMessageBox(ownerWindow, dialogOptions)
+      : dialog.showMessageBox(dialogOptions);
+
+    void closeChoice.then((result) => {
+      if (result.response !== 1) {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('close-window-cancelled');
+        }
         return;
       }
 
-      writeVhaFileToDisk(finalObjectToSave, GLOBALS.currentlyOpenVhaFile, (error: Error) => {
-        if (error) {
-          reportCloseFailure(error, 'The current catalogue could not be saved. The app will remain open to protect your changes.');
-          return;
-        }
-        closeWindow();
-      });
+      cancelThumbnailRegeneration();
+      saveAndClose();
     }).catch((error: Error) => {
-      reportCloseFailure(error, 'The application settings could not be saved. The app will remain open.');
+      reportCloseFailure(error, 'The thumbnail operation could not be cancelled. The app will remain open.');
     });
   });
 

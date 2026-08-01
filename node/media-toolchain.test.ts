@@ -70,7 +70,7 @@ function readVersion(command: string): { line: string; major: number; minor: num
 }
 
 function createTemporaryDirectory(): string {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'video-hub-app-sin-media-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-media-'));
   temporaryDirectories.push(directory);
   return directory;
 }

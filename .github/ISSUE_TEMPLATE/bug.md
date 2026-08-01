@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a bug in VHA
+about: Report a bug in Theatrum Ex Machina
 title: "[BUG] "
 labels: bug
 assignees: ""
@@ -14,9 +14,9 @@ assignees: ""
 
 #### To Reproduce
 
-1. 🖱
-2. 💥
-3. 🤦‍♂️
+1.
+2.
+3.
 
 #### Expected behavior
 
@@ -33,7 +33,7 @@ assignees: ""
 #### Environment
 
 - OS: `Windows` / `Mac` / `Linux`
-- VHA version: `3.2.0`
+- Theatrum Ex Machina version:
 
 #### Additional context
 

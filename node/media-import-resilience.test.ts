@@ -17,7 +17,7 @@ import {
 const temporaryDirectories: string[] = [];
 
 function createTemporaryFile(contents = 'not a valid video'): string {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'video-hub-app-sin-import-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-import-'));
   temporaryDirectories.push(directory);
   const filePath = path.join(directory, 'network sample.mp4');
   fs.writeFileSync(filePath, contents);

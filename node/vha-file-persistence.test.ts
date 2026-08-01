@@ -16,7 +16,7 @@ import {
 const temporaryDirectories: string[] = [];
 
 function createTemporaryDirectory(): string {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'video-hub-app-sin-persistence-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-persistence-'));
   temporaryDirectories.push(directory);
   return directory;
 }
@@ -52,9 +52,9 @@ afterEach(() => {
   });
 });
 
-test('loads a valid primary catalogue without consulting the backup', async () => {
+test('loads a valid legacy catalogue without consulting the backup', async () => {
   const directory = createTemporaryDirectory();
-  const cataloguePath = path.join(directory, 'valid.vha2');
+  const cataloguePath = path.join(directory, 'legacy.vha2');
   fs.writeFileSync(cataloguePath, JSON.stringify(createCatalogue('Primary')));
   fs.writeFileSync(cataloguePath + '.bak', 'invalid backup');
 
@@ -62,6 +62,18 @@ test('loads a valid primary catalogue without consulting the backup', async () =
 
   assert.equal(result.source, 'primary');
   assert.equal(result.finalObject?.hubName, 'Primary');
+});
+
+test('saves an opened legacy catalogue in place without creating a branded copy', async () => {
+  const directory = createTemporaryDirectory();
+  const legacyPath = path.join(directory, 'legacy.vha2');
+  fs.writeFileSync(legacyPath, JSON.stringify(createCatalogue('Original')));
+
+  await writeVhaJsonAtomically(legacyPath, JSON.stringify(createCatalogue('Updated')));
+
+  assert.equal(parseVhaJson(fs.readFileSync(legacyPath)).hubName, 'Updated');
+  assert.equal(parseVhaJson(fs.readFileSync(legacyPath + '.bak')).hubName, 'Original');
+  assert.equal(fs.existsSync(path.join(directory, 'legacy.scaena')), false);
 });
 
 test('preserves Date Added while legacy entries remain valid without it', () => {
@@ -79,7 +91,7 @@ test('preserves Date Added while legacy entries remain valid without it', () => 
 
 test('offers a valid backup for an empty primary catalogue', async () => {
   const directory = createTemporaryDirectory();
-  const cataloguePath = path.join(directory, 'empty.vha2');
+  const cataloguePath = path.join(directory, 'empty.scaena');
   fs.writeFileSync(cataloguePath, '');
   fs.writeFileSync(cataloguePath + '.bak', JSON.stringify(createCatalogue('Backup')));
 
@@ -92,7 +104,7 @@ test('offers a valid backup for an empty primary catalogue', async () => {
 
 test('offers a valid backup for a truncated primary catalogue', async () => {
   const directory = createTemporaryDirectory();
-  const cataloguePath = path.join(directory, 'truncated.vha2');
+  const cataloguePath = path.join(directory, 'truncated.scaena');
   fs.writeFileSync(cataloguePath, '{"hubName":"Incomplete"');
   fs.writeFileSync(cataloguePath + '.bak', JSON.stringify(createCatalogue('Backup')));
 
@@ -104,7 +116,7 @@ test('offers a valid backup for a truncated primary catalogue', async () => {
 
 test('returns a controlled invalid result when neither file is usable', async () => {
   const directory = createTemporaryDirectory();
-  const cataloguePath = path.join(directory, 'invalid.vha2');
+  const cataloguePath = path.join(directory, 'invalid.scaena');
   fs.writeFileSync(cataloguePath, '');
   fs.writeFileSync(cataloguePath + '.bak', '{');
 
@@ -124,7 +136,7 @@ test('rejects syntactically valid JSON with an invalid catalogue structure', () 
 
 test('serializes rapid writes and keeps the prior valid catalogue as backup', async () => {
   const directory = createTemporaryDirectory();
-  const cataloguePath = path.join(directory, 'queued.vha2');
+  const cataloguePath = path.join(directory, 'queued.scaena');
   fs.writeFileSync(cataloguePath, JSON.stringify(createCatalogue('Original')));
 
   const firstWrite = writeVhaJsonAtomically(cataloguePath, JSON.stringify(createCatalogue('First')));
@@ -137,7 +149,7 @@ test('serializes rapid writes and keeps the prior valid catalogue as backup', as
 
 test('recovers a backup without preserving a misleading empty corrupt file', async () => {
   const directory = createTemporaryDirectory();
-  const cataloguePath = path.join(directory, 'recover.vha2');
+  const cataloguePath = path.join(directory, 'recover.scaena');
   fs.writeFileSync(cataloguePath, '');
   fs.writeFileSync(cataloguePath + '.bak', JSON.stringify(createCatalogue('Recovered')));
 
@@ -151,7 +163,7 @@ test('recovers a backup without preserving a misleading empty corrupt file', asy
 
 test('preserves a non-empty malformed primary before recovering its backup', async () => {
   const directory = createTemporaryDirectory();
-  const cataloguePath = path.join(directory, 'recover-malformed.vha2');
+  const cataloguePath = path.join(directory, 'recover-malformed.scaena');
   const malformedCatalogue = '{"hubName":"Incomplete"';
   fs.writeFileSync(cataloguePath, malformedCatalogue);
   fs.writeFileSync(cataloguePath + '.bak', JSON.stringify(createCatalogue('Recovered')));
@@ -165,7 +177,7 @@ test('preserves a non-empty malformed primary before recovering its backup', asy
 
 test('continues the write queue after an invalid write is rejected', async () => {
   const directory = createTemporaryDirectory();
-  const cataloguePath = path.join(directory, 'failed-queue.vha2');
+  const cataloguePath = path.join(directory, 'failed-queue.scaena');
   fs.writeFileSync(cataloguePath, JSON.stringify(createCatalogue('Original')));
 
   const invalidWrite = writeVhaJsonAtomically(cataloguePath, '{');
@@ -178,7 +190,7 @@ test('continues the write queue after an invalid write is rejected', async () =>
 
 test('does not overwrite an existing invalid catalogue or its valid backup', async () => {
   const directory = createTemporaryDirectory();
-  const cataloguePath = path.join(directory, 'externally-damaged.vha2');
+  const cataloguePath = path.join(directory, 'externally-damaged.scaena');
   const invalidPrimary = '{"hubName":"Externally damaged"';
   const validBackup = JSON.stringify(createCatalogue('Backup'));
   fs.writeFileSync(cataloguePath, invalidPrimary);

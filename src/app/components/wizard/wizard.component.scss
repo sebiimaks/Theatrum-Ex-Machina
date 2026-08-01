@@ -287,6 +287,96 @@
   max-width: 210px;
 }
 
+.wizard.wizard-dark {
+  background: variables.$gray-85;
+  color: variables.$gray-05;
+  color-scheme: dark;
+
+  h1,
+  h2,
+  h3 {
+    color: variables.$gray-15;
+  }
+
+  .right-side {
+    border-left-color: variables.$gray-60;
+  }
+
+  .wizard-button {
+    background: variables.$gray-80;
+    border-color: variables.$gray-60;
+    color: variables.$gray-05;
+
+    &:hover {
+      background: variables.$gray-70;
+    }
+  }
+
+  .start-import {
+    background: variables.$gray-70;
+    border-color: variables.$pretty-blue;
+    color: variables.$white;
+    text-shadow: none;
+
+    &:hover {
+      background: variables.$gray-60;
+    }
+
+    &:disabled {
+      background: variables.$gray-80;
+      border-color: variables.$gray-60;
+      color: variables.$gray-50;
+    }
+  }
+
+  .hub-name-input,
+  .size-dropdown {
+    border-color: variables.$gray-50;
+    color: variables.$gray-05;
+  }
+
+  .hub-name-input {
+    background: transparent;
+  }
+
+  .size-dropdown {
+    background-color: variables.$gray-80;
+  }
+
+  .path,
+  .step-four-text {
+    color: variables.$gray-15;
+  }
+
+  .step-description,
+  .recent,
+  .clear-history {
+    color: variables.$gray-30;
+  }
+
+  .recently-opened-wizard {
+    color: variables.$gray-15;
+
+    li:hover .history-name {
+      text-shadow: 0 0 5px variables.$black;
+    }
+  }
+
+  .screenshot-preview {
+    background-color: variables.$gray-70;
+    border-color: variables.$gray-50;
+    color: variables.$gray-05;
+  }
+
+  input[type="radio"]:checked:before {
+    border-color: variables.$gray-85;
+  }
+
+  .gradient-to-indicate-scrolling {
+    background-image: linear-gradient(rgba(34, 34, 34, 0), variables.$gray-85);
+  }
+}
+
 @media (max-width: 760px) {
   .wizard {
     margin: 0;
@@ -315,5 +405,9 @@
     & .steps {
       transform: translate(-48px, 24px);
     }
+  }
+
+  .wizard-dark .right-side {
+    border-top-color: variables.$gray-60;
   }
 }

@@ -17,7 +17,7 @@ import {
 } from './local-operation-safety.ts';
 
 test('allows ordinary HTTP and HTTPS links only', () => {
-  assert.equal(isAllowedExternalUrl('https://github.com/sebiimaks/Video-Hub-App-SIN'), true);
+  assert.equal(isAllowedExternalUrl('https://github.com/sebiimaks/Theatrum-Ex-Machina'), true);
   assert.equal(isAllowedExternalUrl('http://www.videohubapp.com/'), true);
   assert.equal(isAllowedExternalUrl('file:///etc/passwd'), false);
   assert.equal(isAllowedExternalUrl('javascript:alert(1)'), false);
@@ -66,8 +66,8 @@ test('authorizes destructive operations only for configured source roots', () =>
 });
 
 test('rejects existing files and rename destinations that escape through symlinks', () => {
-  const rootDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'video-hub-app-sin-root-'));
-  const outsideDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'video-hub-app-sin-outside-'));
+  const rootDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-root-'));
+  const outsideDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-outside-'));
   try {
     fs.mkdirSync(path.join(rootDirectory, 'ordinary'));
     fs.writeFileSync(path.join(rootDirectory, 'ordinary', 'safe.mp4'), 'safe');

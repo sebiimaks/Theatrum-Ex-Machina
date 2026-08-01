@@ -56,6 +56,7 @@ import type {
 import type { RemoteSettings, SettingsButtonSavedProperties, SettingsObject } from '../../../interfaces/settings-object.interface';
 import type { SortType } from '../pipes/sorting.pipe';
 import type { WizardOptions } from '../../../interfaces/wizard-options.interface';
+import { isSupportedCatalogueFilePath } from '../../../interfaces/catalogue-file';
 import type {
   HistoryItem,
   RemoteVideoClick,
@@ -106,6 +107,12 @@ interface FolderThumbnailRegenerationRequest {
   succeededVideos: number;
   updatedHashes: Set<string>;
   videoCountsByHash: Map<string, number>;
+}
+
+interface IndividualThumbnailRegenerationStatus {
+  cancelling: boolean;
+  fileHash: string;
+  fileName: string;
 }
 
 @Component({
@@ -184,6 +191,8 @@ export class HomeComponent implements OnInit, AfterViewInit {
   settingsModalOpen = false;
   flickerReduceOverlay = true;
   isFirstRunEver = false;
+  private hasResolvedInitialTheme = false;
+  private rendererStartupComplete = false;
 
   // Tag color picker state
   showTagColorPicker = false;
@@ -214,8 +223,12 @@ export class HomeComponent implements OnInit, AfterViewInit {
   textPaddingHeight: number;            // for text padding below filmstrip or thumbnail element
 
   folderThumbnailRegenerationStatus: FolderThumbnailRegenerationStatus | null = null;
+  individualThumbnailRegenerationStatus: IndividualThumbnailRegenerationStatus | null = null;
+  thumbnailRegenerationElapsedSeconds = 0;
   private folderThumbnailRegenerationRequest: FolderThumbnailRegenerationRequest | null = null;
   private nextFolderThumbnailRegenerationRequestId = 1;
+  private thumbnailRegenerationStartedAt = 0;
+  private thumbnailRegenerationTimer: number | null = null;
 
   // ========================================================================
   // Duration filter
@@ -640,6 +653,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       'thumbnail-regeneration-complete',
       (event, fileHash: string, screenshotCount: number) => {
       this.zone.run(() => {
+        this.clearIndividualThumbnailRegeneration(fileHash);
         this.applyThumbnailRegenerationResult(fileHash, screenshotCount, true);
         this.modalService.openSnackbar(this.translate.instant('RIGHTCLICK.thumbnailRegenerationComplete'));
       });
@@ -649,6 +663,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       'thumbnail-regeneration-failed',
       (event, fileHash: string, reason?: string, coreStatus?: ThumbnailCoreStatus) => {
         this.zone.run(() => {
+          this.clearIndividualThumbnailRegeneration(fileHash);
           const catalogueChanged = applyThumbnailRegenerationFailure(
             this.imageElementService.imageElements,
             fileHash,
@@ -918,6 +933,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       }
 
       this.cd.detectChanges();
+      this.markRendererStartupComplete();
     });
 
     // If no previously saved settings exist, this gets sent over
@@ -931,10 +947,16 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.electronService.ipcRenderer.on('settings-returning', (
       event,
       settingsObject: SettingsObject,
-      locale: string
+      locale: string,
+      requestedCataloguePath?: string,
     ) => {
       this.vhaFileHistory = (settingsObject.vhaFileHistory || []);
+      const hasSavedTheme = typeof settingsObject.buttonSettings?.darkMode?.toggled === 'boolean';
       this.restoreSettingsFromBefore(settingsObject);
+      if (!hasSavedTheme) {
+        this.settingsButtons['darkMode'].toggled = true;
+      }
+      this.hasResolvedInitialTheme = true;
       this.setOrRestoreLanguage(settingsObject.appState.language, locale);
       if (settingsObject.wizardOptions) {
         this.wizard = settingsObject.wizardOptions;
@@ -946,10 +968,12 @@ export class HomeComponent implements OnInit, AfterViewInit {
           this.cd.detectChanges();
         }, 10);
       }
-      if (settingsObject.appState.currentVhaFile) {
-        this.loadThisVhaFile(settingsObject.appState.currentVhaFile);
+      const cataloguePathToOpen = requestedCataloguePath || settingsObject.appState.currentVhaFile;
+      if (cataloguePathToOpen) {
+        this.loadThisVhaFile(cataloguePathToOpen);
       } else {
         this.showOpeningWizard(false);
+        this.markRendererStartupComplete();
       }
       if (settingsObject.shortcuts) {
         this.shortcutService.initializeFromSaved(settingsObject.shortcuts);
@@ -962,8 +986,13 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.electronService.ipcRenderer.on('please-open-wizard', (event, firstRun, failedPath?: string) => {
       // Correlated with the first time ever starting the app !!!
       // Can happen when no settings present
-      // Can happen when trying to open a .vha2 file that no longer exists
+      // Can happen when trying to open a catalogue file that no longer exists
       this.showOpeningWizard(firstRun, failedPath);
+      this.markRendererStartupComplete();
+    });
+
+    this.electronService.ipcRenderer.on('open-catalogue-from-system', (event, fullPath: string) => {
+      this.loadThisVhaFile(fullPath);
     });
 
     // This happens when the computer is about to SHUT DOWN
@@ -1007,6 +1036,11 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.isClosing = false;
       this.catalogueEditorSaving = false;
       this.catalogueEditorSaveStatus = errorMessage ? 'Save failed: ' + errorMessage : 'Save failed';
+      this.cd.detectChanges();
+    });
+
+    this.electronService.ipcRenderer.on('close-window-cancelled', () => {
+      this.isClosing = false;
       this.cd.detectChanges();
     });
 
@@ -1109,7 +1143,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
         console.warn("TODO: FIX - DRAG & DROP BROKEN");
         const fullPath = "TODO";
         ev.preventDefault();
-        if (fullPath.endsWith('.vha2')) {
+        if (isSupportedCatalogueFilePath(fullPath)) {
           this.loadThisVhaFile(fullPath);
         }
       }
@@ -1277,6 +1311,14 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.electronService.ipcRenderer.send('load-this-vha-file', fullPath, this.getFinalObjectForSaving());
   }
 
+  private markRendererStartupComplete(): void {
+    if (this.rendererStartupComplete) {
+      return;
+    }
+    this.rendererStartupComplete = true;
+    this.electronService.ipcRenderer.send('renderer-startup-complete');
+  }
+
   public loadFromFile(): void {
     if (this.blockActionDuringFolderThumbnailRegeneration()) {
       return;
@@ -1286,6 +1328,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
   private showOpeningWizard(firstRun: boolean, failedPath?: string): void {
     this.zone.run(() => {
+      if (!this.hasResolvedInitialTheme) {
+        this.settingsButtons['darkMode'].toggled = true;
+        this.hasResolvedInitialTheme = true;
+      }
       if (firstRun) {
         this.firstRunLogic();
       }
@@ -1363,9 +1409,6 @@ export class HomeComponent implements OnInit, AfterViewInit {
   }
 
   public initiateClose(): void {
-    if (this.blockActionDuringFolderThumbnailRegeneration()) {
-      return;
-    }
     this.isClosing = true;
     this.savePreviousViewSize();
     this.appState.imgsPerRow = this.imgsPerRow;
@@ -2491,9 +2534,18 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * Recreate all generated preview assets for the selected video.
    */
   regenerateThumbnails(item: ImageElement): void {
-    if (this.blockActionDuringFolderThumbnailRegeneration()) {
+    if (this.thumbnailRegenerationActive) {
+      this.modalService.openSnackbar(
+        this.translate.instant('RIGHTCLICK.thumbnailRegenerationBusy'),
+      );
       return;
     }
+    this.individualThumbnailRegenerationStatus = {
+      cancelling: false,
+      fileHash: item.hash,
+      fileName: item.fileName,
+    };
+    this.startThumbnailRegenerationClock();
     this.electronService.ipcRenderer.send('regenerate-thumbnails', item);
   }
 
@@ -2503,9 +2555,9 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * response cannot operate on stale catalogue entries.
    */
   confirmRegenerateFolderThumbnails(sourceIndex: number): void {
-    if (this.folderThumbnailRegenerationRequest) {
+    if (this.thumbnailRegenerationActive) {
       this.modalService.openSnackbar(
-        this.translate.instant('STATISTICS.folderThumbnailRegenerationBusy'),
+        this.translate.instant('RIGHTCLICK.thumbnailRegenerationBusy'),
       );
       return;
     }
@@ -2611,6 +2663,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
         sourceIndex,
         totalJobs: currentPlan.targets.length,
       };
+      this.startThumbnailRegenerationClock();
       this.electronService.ipcRenderer.send(
         'regenerate-folder-thumbnails',
         requestId,
@@ -2630,6 +2683,45 @@ export class HomeComponent implements OnInit, AfterViewInit {
       cancelling: true,
     };
     this.electronService.ipcRenderer.send('cancel-folder-thumbnail-regeneration');
+  }
+
+  cancelThumbnailRegeneration(): void {
+    if (this.folderThumbnailRegenerationRequest) {
+      this.cancelFolderThumbnailRegeneration();
+      return;
+    }
+    if (!this.individualThumbnailRegenerationStatus) {
+      return;
+    }
+    this.individualThumbnailRegenerationStatus = {
+      ...this.individualThumbnailRegenerationStatus,
+      cancelling: true,
+    };
+    this.electronService.ipcRenderer.send('cancel-thumbnail-regeneration');
+  }
+
+  get thumbnailRegenerationActive(): boolean {
+    return this.individualThumbnailRegenerationStatus !== null
+      || this.folderThumbnailRegenerationRequest !== null;
+  }
+
+  get thumbnailRegenerationCancelling(): boolean {
+    return this.individualThumbnailRegenerationStatus?.cancelling === true
+      || this.folderThumbnailRegenerationStatus?.cancelling === true;
+  }
+
+  get thumbnailRegenerationFolderName(): string {
+    const sourceIndex = this.folderThumbnailRegenerationStatus?.sourceIndex;
+    const folderPath = sourceIndex === undefined
+      ? ''
+      : this.sourceFolderService.selectedSourceFolder[sourceIndex]?.path;
+    return folderPath ? path.basename(folderPath) || folderPath : '';
+  }
+
+  get thumbnailRegenerationElapsedLabel(): string {
+    const minutes = Math.floor(this.thumbnailRegenerationElapsedSeconds / 60);
+    const seconds = this.thumbnailRegenerationElapsedSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   }
 
   private blockActionDuringFolderThumbnailRegeneration(): boolean {
@@ -2782,6 +2874,42 @@ export class HomeComponent implements OnInit, AfterViewInit {
   private clearFolderThumbnailRegenerationRequest(): void {
     this.folderThumbnailRegenerationRequest = null;
     this.folderThumbnailRegenerationStatus = null;
+    this.stopThumbnailRegenerationClockIfIdle();
+  }
+
+  private clearIndividualThumbnailRegeneration(fileHash: string): void {
+    if (this.individualThumbnailRegenerationStatus?.fileHash !== fileHash) {
+      return;
+    }
+    this.individualThumbnailRegenerationStatus = null;
+    this.stopThumbnailRegenerationClockIfIdle();
+  }
+
+  private startThumbnailRegenerationClock(): void {
+    if (this.thumbnailRegenerationTimer !== null) {
+      window.clearInterval(this.thumbnailRegenerationTimer);
+    }
+    this.thumbnailRegenerationStartedAt = Date.now();
+    this.thumbnailRegenerationElapsedSeconds = 0;
+    this.thumbnailRegenerationTimer = window.setInterval(() => {
+      this.thumbnailRegenerationElapsedSeconds = Math.max(
+        0,
+        Math.floor((Date.now() - this.thumbnailRegenerationStartedAt) / 1000),
+      );
+      this.cd.detectChanges();
+    }, 1000);
+  }
+
+  private stopThumbnailRegenerationClockIfIdle(): void {
+    if (this.thumbnailRegenerationActive) {
+      return;
+    }
+    if (this.thumbnailRegenerationTimer !== null) {
+      window.clearInterval(this.thumbnailRegenerationTimer);
+      this.thumbnailRegenerationTimer = null;
+    }
+    this.thumbnailRegenerationStartedAt = 0;
+    this.thumbnailRegenerationElapsedSeconds = 0;
   }
 
   /**
@@ -2872,7 +3000,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * Gets triggered when the settings.json is missing from the app folder
    */
   firstRunLogic(): void {
-    console.log('WELCOME TO VIDEO HUB APP!');
+    console.log('WELCOME TO THEATRUM EX MACHINA!');
     console.log('this is the first time you are running this app');
     this.isFirstRunEver = true;
   }
