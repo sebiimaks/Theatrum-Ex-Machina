@@ -49,7 +49,6 @@
 @if (showMeta() && !compactView()) {
   <span
     [ngClass]="{ 'larger-font': largerFont() }"
-    [ngStyle]="{ color: darkMode() ? '#BBBBBB' : '#000000' }"
     class="title"
   >
     {{ video().cleanName }}

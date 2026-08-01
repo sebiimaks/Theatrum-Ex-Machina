@@ -28,6 +28,57 @@ $dark-blue:    #0031ad; // only on file/text view on hover
 $light-blue:   #b5cbff; // only on flat settings button active
                           // using `$pretty-blue` is not bright enough
 
+
+// =============================================================
+// Frosted Graphite palette with Precision Charcoal geometry
+// -------------------------------------------------------------
+// These values feed the global CSS custom properties in `styles.scss`.
+// Keep the existing grayscale variables above for component styles that
+// have not yet moved to the semantic theme foundation.
+$frosted-gallery-light:          #e9ecf1;
+$frosted-sidebar-light:          rgba(244, 245, 248, 0.92);
+$frosted-toolbar-light:          rgba(236, 239, 244, 0.90);
+$frosted-title-light:            rgba(246, 247, 249, 0.96);
+$frosted-tray-light:             rgba(244, 245, 248, 0.96);
+$frosted-elevated-light:         #f7f8fa;
+$frosted-tab-light:              #e3e7ed;
+$frosted-control-light:          rgba(0, 0, 0, 0.045);
+$frosted-control-hover-light:    rgba(0, 0, 0, 0.08);
+$frosted-text-primary-light:     #202227;
+$frosted-text-secondary-light:   #626873;
+$frosted-border-strong-light:    rgba(0, 0, 0, 0.17);
+$frosted-border-subtle-light:    rgba(0, 0, 0, 0.10);
+$frosted-highlight-light:        rgba(255, 255, 255, 0.72);
+$frosted-accent-light:           #007aff;
+$frosted-accent-soft-light:      rgba(0, 122, 255, 0.14);
+$frosted-accent-text-light:      #0066d6;
+$frosted-action-light:           #0066d6;
+$frosted-action-hover-light:     #005bbf;
+$frosted-destructive-light:      #b42318;
+$frosted-destructive-soft-light: #fde7e5;
+
+$frosted-gallery-dark:          #111318;
+$frosted-sidebar-dark:          rgba(27, 30, 35, 0.92);
+$frosted-toolbar-dark:          rgba(31, 34, 40, 0.88);
+$frosted-title-dark:            rgba(42, 45, 52, 0.94);
+$frosted-tray-dark:             rgba(31, 34, 40, 0.95);
+$frosted-elevated-dark:         #20242b;
+$frosted-tab-dark:              #292d35;
+$frosted-control-dark:          rgba(255, 255, 255, 0.065);
+$frosted-control-hover-dark:    rgba(255, 255, 255, 0.11);
+$frosted-text-primary-dark:     #f5f6f8;
+$frosted-text-secondary-dark:   #a9afba;
+$frosted-border-strong-dark:    rgba(255, 255, 255, 0.16);
+$frosted-border-subtle-dark:    rgba(255, 255, 255, 0.10);
+$frosted-highlight-dark:        rgba(255, 255, 255, 0.08);
+$frosted-accent-dark:           #0a84ff;
+$frosted-accent-soft-dark:      rgba(10, 132, 255, 0.18);
+$frosted-accent-text-dark:      #8dc4ff;
+$frosted-action-dark:           #0b64c0;
+$frosted-action-hover-dark:     #0d6fd1;
+$frosted-destructive-dark:      #ff7b72;
+$frosted-destructive-soft-dark: #4a2527;
+
 // =============================================================
 // Filter / tag colors -- also see `filters.ts`
 // -------------------------------------------------------------

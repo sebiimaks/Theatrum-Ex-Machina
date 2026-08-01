@@ -1,7 +1,7 @@
 @use "variables";
 
 .click-away-overlay {
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: rgba(0, 0, 0, 0.18);
   cursor: initial;
   height: 100vh;
   position: fixed;
@@ -10,11 +10,12 @@
 }
 
 .right-click-menu {
-  background: variables.$gray-10;
-  border: 1px solid variables.$gray-50;
-  border-radius: 10px;
-  box-shadow: 0 3px 7px 3px rgba(0, 0, 0, 0.3);
+  background: var(--app-elevated-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-panel-radius);
+  box-shadow: var(--app-shadow-elevated);
   box-sizing: border-box;
+  color: var(--app-text-primary);
   font-size: 12px;
   overflow: hidden;
   position: absolute;
@@ -28,38 +29,41 @@
       cursor: pointer;
       list-style-type: none;
       padding: 6px;
-      transition: 100ms;
-      transition-property: transform text-shadow;
+      transition: background-color var(--app-motion-fast), color var(--app-motion-fast);
 
       &:hover {
-        // transform: translate(0, -1px);
-        text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.3);
-        transition: 100ms;
-        transition-property: transform text-shadow;
+        background: var(--app-control-hover);
+        color: var(--app-accent-text);
       }
     }
   }
 
   .right-click-delete {
-    border-top: 1px solid variables.$gray-20;
-    color: variables.$dark-red;
+    border-top: 1px solid var(--app-border-subtle);
+    color: var(--app-destructive);
     margin-top: 6px;
-    padding-top: 14px !important;
+    padding: 10px 6px !important;
     text-align: center;
+
+    &:hover {
+      background: var(--app-destructive-soft);
+      color: var(--app-destructive);
+    }
   }
 
   .right-click-disabled {
-    color: variables.$gray-50;
+    color: var(--app-text-secondary);
     pointer-events: none;
   }
 }
 
 .rename-popup {
-  background: variables.$gray-10;
-  border: 1px solid variables.$gray-50;
-  border-radius: 10px;
-  box-shadow: 0 3px 7px 3px rgba(0, 0, 0, 0.3);
+  background: var(--app-elevated-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-panel-radius);
+  box-shadow: var(--app-shadow-elevated);
   box-sizing: border-box;
+  color: var(--app-text-primary);
   height: 275px;
   left: 10%;
   padding: 20px;
@@ -70,11 +74,11 @@
 }
 
 .rename-dark {
-  background: variables.$gray-90;
+  background: var(--app-elevated-background);
 }
 
 .dark-mode-on {
-  color: white;
+  color: var(--app-text-primary);
 }
 
 .disable-mouse-clicks {

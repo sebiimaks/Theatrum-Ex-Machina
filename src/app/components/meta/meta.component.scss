@@ -1,7 +1,7 @@
 @use "../variables";
 
 .darkModeText {
-  color: variables.$gray-10;
+  color: var(--app-text-primary);
 }
 
 .meta-container {
@@ -14,15 +14,16 @@
 }
 
 .metadata-text {
+  color: var(--app-text-secondary);
   display: block;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
   font-size: 10px;
   line-height: 16px;
   margin: 5px 0;
   opacity: 0.8;
 
   em {
-    color: variables.$gray-50;
+    color: var(--app-text-secondary);
     font-style: unset;
     opacity: 0.5;
   }
@@ -49,25 +50,26 @@ input[type=number]:hover::-webkit-inner-spin-button {
 .meta-title {
   background: transparent;
   border: 0;
+  color: var(--app-text-primary);
   height: 18px;
   outline: none;
   padding-left: 0;
 }
 
 .renaming-message {
-  color: variables.$dark-blue;
+  color: var(--app-accent-text);
 }
 
 .renaming-message-dark-mode {
-  color: variables.$light-blue;
+  color: var(--app-accent-text);
 }
 
 .renaming-error {
-  color: variables.$dark-red;
+  color: var(--app-destructive);
 }
 
 .renaming-error-dark-mode {
-  color: variables.$pretty-red;
+  color: var(--app-destructive);
 }
 
 .larger-font {
@@ -99,7 +101,8 @@ input[type=number]:hover::-webkit-inner-spin-button {
   background-color: transparent;
   border-radius: 0;
   border: 0;
-  font-family: monospace;
+  color: var(--app-text-primary);
+  font-family: var(--app-font-mono);
   font-size: 10px;
   outline: none;
   padding: 0;
@@ -125,20 +128,26 @@ textarea {
   @include variables.scrollBar;
   background: transparent;
   border: 0;
-  border-left: 1px solid variables.$gray-30;
+  border-left: 1px solid var(--app-border-strong);
   box-sizing: border-box;
-  font-family: sans-serif;
+  color: var(--app-text-primary);
+  font-family: var(--app-font-sans);
   font-size: 12px;
   margin-top: 5px;
   outline: none;
   padding: 0 5px;
   resize: none;
   width: 100%;
+
+  &::placeholder {
+    color: var(--app-text-secondary);
+    opacity: 1;
+  }
 }
 
 .notes-dark-mode {
-  border-left: 1px solid variables.$gray-70;
-  color: white;
+  border-left: 1px solid var(--app-border-strong);
+  color: var(--app-text-primary);
 }
 
 :host-context(.sheet-modal) {

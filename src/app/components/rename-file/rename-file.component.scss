@@ -3,9 +3,11 @@
 .rename-file {
   background: transparent;
   border: 0;
-  border-bottom: 1px solid variables.$gray-40;
+  border-bottom: 1px solid var(--app-border-strong);
   box-sizing: border-box;
   font-size: 16px;
+  color: var(--app-text-primary);
+  caret-color: var(--app-accent);
   left: 40px;
   outline: none;
   padding: 6px 6px 6px 2px;
@@ -13,10 +15,15 @@
   position: absolute;
   top: 170px;
   width: 90%;
+
+  &:focus {
+    border-bottom-color: var(--app-accent);
+    box-shadow: 0 1px 0 var(--app-accent);
+  }
 }
 
 .rename-err-msg {
-  color: red;
+  color: var(--app-destructive);
   font-size: 14px;
   position: absolute;
   right: 157px;
@@ -25,15 +32,24 @@
 }
 
 .button-rename {
+  background: var(--app-action-background);
+  border-color: var(--app-action-background);
+  color: var(--app-on-action);
   border-radius: 5px;
   margin: 0;
   min-width: 100px;
   position: absolute;
   right: 40px;
   top: 216px;
+
+  &:hover:not(:disabled) {
+    background: var(--app-action-hover);
+    border-color: var(--app-action-hover);
+  }
 }
 
 .extension-hack {
+  color: var(--app-text-primary);
   font-size: 16px;
   left: 43px;
   pointer-events: none;
@@ -47,7 +63,8 @@
   & .extension {
     display: inline-block;
     font-size: 12px;
-    opacity: 0.5;
+    color: var(--app-text-secondary);
+    opacity: 1;
     transform: translate(0px, 1px);
   }
 }

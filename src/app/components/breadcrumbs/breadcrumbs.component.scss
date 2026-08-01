@@ -1,8 +1,8 @@
 @use "../variables";
 
 .breadcrumbs {
-  background: variables.$gray-10;
-  border-bottom: 1px solid variables.$gray-40;
+  background: var(--app-toolbar-background);
+  border-bottom: 1px solid var(--app-border-strong);
   box-sizing: border-box;
   height: 30px;
   left: #{variables.$sidebar-width};
@@ -16,24 +16,24 @@
   z-index: 100;
 
   span:last-child {
-    color: variables.$dark-blue;
+    color: var(--app-text-primary);
     pointer-events: none;
   }
 
   .breadcrumb-folder-icon {
     cursor: pointer;
-    fill: variables.$gray-60;
+    fill: var(--app-text-secondary);
     left: 7px;
     max-height: 18px;
     max-width: 18px;
     position: absolute;
     top: 6px;
-    transition-duration: 200ms;
+    transition-duration: var(--app-motion-fast);
     transition-property: fill;
     width: 18px;
 
     &:hover {
-      fill: variables.$dark-blue;
+      fill: var(--app-accent);
     }
   }
 }
@@ -44,17 +44,17 @@
 }
 
 .breadcrumb-folder-word {
-  color: variables.$gray-60;
+  color: var(--app-text-secondary);
   cursor: pointer;
   display: inline-block;
   font-size: 12px;
   margin-right: 5px;
   padding-bottom: 5px; // to hide spillover words if screen is narrow
-  transition: 300ms;
+  transition: color var(--app-motion-fast);
   transition-property: color;
 
   &:hover {
-    color: variables.$dark-blue;
+    color: var(--app-accent-text);
   }
 
   &:after {
@@ -66,26 +66,26 @@
 }
 
 .breadcrumbs-dark-mode {
-  background: variables.$gray-80;
-  border-bottom: 1px solid variables.$gray-70;
+  background: var(--app-toolbar-background);
+  border-bottom: 1px solid var(--app-border-strong);
 
   .breadcrumb-folder-icon {
-    fill: variables.$gray-30;
+    fill: var(--app-text-secondary);
 
     &:hover {
-      fill: variables.$light-blue;
+      fill: var(--app-accent);
     }
   }
 
   .breadcrumb-folder-word {
-    color: variables.$gray-30;
+    color: var(--app-text-secondary);
 
     &:hover {
-      color: variables.$light-blue;
+      color: var(--app-accent-text);
     }
   }
 
   span:last-child {
-    color: variables.$light-blue;
+    color: var(--app-text-primary);
   }
 }

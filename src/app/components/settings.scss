@@ -3,7 +3,7 @@
 $transition-length: 300ms;
 
 h2, h3 {
-  color: variables.$gray-60;
+  color: var(--app-text-secondary);
   font-size: 16px;
   margin: 15px 0 0 10px;
 }
@@ -14,7 +14,7 @@ h3 {
 
 .gearButton {
   cursor: pointer;
-  fill: variables.$gray-40;
+  fill: var(--app-text-secondary);
   font-size: 17px;
   height: 18px;
   position: absolute;
@@ -24,17 +24,18 @@ h3 {
   width: 18px;
 
   &:hover {
-    fill: variables.$gray-50;
-    text-shadow: 0 0 7px rgba(255, 255, 255, 0.5);
+    fill: var(--app-accent);
+    text-shadow: none;
     transition: 370ms;
   }
 }
 
 .catalogueEditorButton {
-  border: 1px solid variables.$gray-40;
-  border-radius: 4px;
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
   box-sizing: border-box;
-  color: variables.$gray-60;
+  color: var(--app-text-secondary);
   cursor: pointer;
   font-size: 12px;
   font-weight: bold;
@@ -49,18 +50,19 @@ h3 {
   width: 46px;
 
   &:hover {
-    background: variables.$gray-10;
-    color: variables.$gray-80;
+    background: var(--app-control-hover);
+    color: var(--app-text-primary);
   }
 }
 
 .catalogueEditorButtonActive {
-  background: variables.$gray-40;
-  color: variables.$white;
+  background: var(--app-accent-soft);
+  border-color: var(--app-accent-text);
+  color: var(--app-accent-text);
 }
 
 .credits-and-help {
-  color: variables.$gray-60;
+  color: var(--app-text-secondary);
   cursor: pointer;
   display: block;
   font-size: 14px;
@@ -70,7 +72,7 @@ h3 {
   transition: 200ms color;
 
   &:hover {
-    color: variables.$pretty-blue;
+    color: var(--app-accent-text);
   }
 }
 
@@ -79,7 +81,7 @@ h3 {
 }
 
 .credits-attribution {
-  color: variables.$gray-60;
+  color: var(--app-text-secondary);
   font-size: 14px;
   margin: 14px 70px 0;
   text-align: center;
@@ -96,7 +98,7 @@ h3 {
   }
 
   span {
-    color: variables.$gray-40;
+    color: var(--app-text-secondary);
     font-size: 12px;
   }
 
@@ -104,6 +106,7 @@ h3 {
 
 .close-settings {
   cursor: pointer;
+  fill: var(--app-text-secondary);
   float: right;
   margin-right: 3px;
   opacity: 1;
@@ -114,7 +117,8 @@ h3 {
   z-index: 101;
 
   &:hover {
-    color: variables.$dark-red;
+    color: var(--app-destructive);
+    fill: var(--app-destructive);
     transition-duration: 300ms;
   }
 }
@@ -127,19 +131,19 @@ h3 {
 }
 
 .gearButtonActive {
-  color: variables.$gray-60;
+  color: var(--app-text-secondary);
   transform: rotate(180deg);
   transform-origin: 9px 9px;
   transition: 370ms;
 }
 
 .settings-modal-dark {
-  background-color: variables.$gray-85;
-  border-color: variables.$gray-60;
-  color: variables.$gray-10;
+  background-color: var(--app-elevated-background);
+  border-color: var(--app-border-strong);
+  color: var(--app-text-primary);
 
   .modal-fade-out {
-    background: linear-gradient(variables.$gray-85, variables.$gray-85, transparent);
+    background: linear-gradient(var(--app-elevated-background), var(--app-elevated-background), transparent);
   }
 }
 
@@ -182,14 +186,14 @@ h3 {
 }
 
 .extraSettingsText {
-  color: variables.$gray-50;
+  color: var(--app-text-secondary);
   font-size: 12px;
   left: 27px;
   line-height: 20px;
 }
 
 .setting-heading {
-  border-top: 1px solid variables.$gray-40;
+  border-top: 1px solid var(--app-border-strong);
   display: block;
   margin-bottom: 24px;
   padding-top: 20px;
@@ -215,7 +219,7 @@ h3 {
   overflow: hidden;
   // above all needed together for line-clamp
 
-  color: variables.$black;
+  color: var(--app-text-primary);
   font-size: 14px;
   left: 80px;
   position: absolute;
@@ -223,11 +227,16 @@ h3 {
 }
 
 .eye-icon-container {
+  color: var(--app-text-secondary);
   cursor: pointer;
   display: block;
   left: 42px;
   position: absolute;
   top: 1px;
+
+  &:hover {
+    color: var(--app-accent-text);
+  }
 }
 
 .eye-open {
@@ -248,7 +257,7 @@ h3 {
 
 .showButtonLabel {
   bottom: 0;
-  color: variables.$gray-40;
+  color: var(--app-text-secondary);
   font-size: 10px;
   left: 0;
   position: absolute;
@@ -263,7 +272,10 @@ h3 {
 }
 
 .language-drop-down {
-  border-radius: 5px;
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  color: var(--app-text-primary);
   padding: 6px;
 
   &:disabled {
@@ -273,11 +285,14 @@ h3 {
 }
 
 .monospace {
-  font-family: monospace;
+  font-family: var(--app-font-mono);
 }
 
 .num-select {
-  border: 1px solid variables.$gray-50;
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  color: var(--app-text-primary);
   margin: 0 3px 0 !important;
   user-select: none;
   width: 30px;
@@ -290,7 +305,8 @@ h3 {
 
 input[type="radio"] {
   -webkit-appearance: inherit;
-  border: 1px solid variables.$gray-50;
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
   border-radius: 10px;
   cursor: pointer;
   height: 15px;
@@ -300,8 +316,8 @@ input[type="radio"] {
 }
 
 input[type="radio"]:checked:before {
-  background: variables.$pretty-blue;
-  border: 3px solid variables.$gray-10;
+  background: var(--app-accent);
+  border: 3px solid var(--app-elevated-background);
   border-radius: 10px;
   content:"";
   height: 7px;
@@ -314,7 +330,7 @@ input[type="radio"]:checked:before {
 }
 
 .modal-fade-out {
-  background: linear-gradient(variables.$gray-10, variables.$gray-10, transparent);
+  background: linear-gradient(var(--app-elevated-background), var(--app-elevated-background), transparent);
   display: block;
   height: 50px;
   margin-bottom: -50px;
@@ -326,9 +342,9 @@ input[type="radio"]:checked:before {
 }
 
 .more-info {
-  border: 1px solid variables.$pretty-blue;
+  border: 1px solid var(--app-accent);
   border-radius: 50%;
-  color: variables.$pretty-blue;
+  color: var(--app-accent-text);
   cursor: help;
   display: inline-block;
   font-family: monospace;
@@ -341,8 +357,8 @@ input[type="radio"]:checked:before {
   width: 12px;
 
   &:hover {
-    border-color: white;
-    color: white;
+    border-color: var(--app-accent);
+    color: var(--app-accent-text);
     transition-duration: 150ms;
     transition-property: color border-color;
   }
@@ -387,28 +403,35 @@ input[type="radio"]:checked:before {
   left: 210px;
   pointer-events: none;
   position: fixed;
-  top: 159px;
+  top: calc(var(--app-settings-modal-top) - 41px);
   width: calc(100% - 255px);
   z-index: 501;
 
   button {
-    background-color: variables.$gray-15;
-    border: 1px solid variables.$gray-50;
-    border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
+    background-color: var(--app-tab-background);
+    border: 1px solid var(--app-border-strong);
+    border-top-left-radius: var(--app-control-radius);
+    border-top-right-radius: var(--app-control-radius);
+    color: var(--app-text-secondary);
     font-size: 12px;
     margin: 10px 10px -1px;
     padding: 8px;
     pointer-events: all;
     position: relative;
-    transition: 300ms;
-    transition-property: text-shadow background-color;
+    transition: background-color var(--app-motion-fast), color var(--app-motion-fast);
+
+    &:not(.active-tab):hover {
+      background-color: var(--app-control-hover);
+      color: var(--app-text-primary);
+    }
   }
 
   .active-tab {
-    background-color: variables.$gray-10;
-    border-bottom: 1px solid variables.$gray-10;
-    text-shadow:0px 0px 1px black;
+    background-color: var(--app-elevated-background);
+    border-bottom: 1px solid var(--app-elevated-background);
+    border-top-color: var(--app-accent-text);
+    color: var(--app-text-primary);
+    text-shadow: none;
     transition: 300ms;
     transition-property: text-shadow background-color;
     z-index: 10;
@@ -417,16 +440,16 @@ input[type="radio"]:checked:before {
 
 .all-settings-tabs.settings-tabs-dark {
   button {
-    background-color: variables.$gray-80;
-    border-color: variables.$gray-60;
-    color: variables.$gray-10;
+    background-color: var(--app-tab-background);
+    border-color: var(--app-border-strong);
+    color: var(--app-text-primary);
   }
 
   .active-tab {
-    background-color: variables.$gray-85;
-    border-bottom-color: variables.$gray-85;
-    border-top-color: variables.$pretty-blue;
-    color: variables.$white;
+    background-color: var(--app-elevated-background);
+    border-bottom-color: var(--app-elevated-background);
+    border-top-color: var(--app-accent-text);
+    color: var(--app-text-primary);
     text-shadow: none;
   }
 }

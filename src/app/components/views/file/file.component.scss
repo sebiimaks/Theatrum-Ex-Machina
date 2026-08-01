@@ -8,28 +8,30 @@
   position: relative;
 
   &:hover {
+    background: var(--app-accent-soft);
+
     .folder-name,
     .title {
-      color: variables.$dark-blue;
+      color: var(--app-accent-text);
     }
     .folder-name-dark-mode,
     .title-dark-mode {
-      color: variables.$pretty-blue;
+      color: var(--app-accent-text);
     }
     .back-icon {
-      fill: variables.$dark-blue;
+      fill: var(--app-accent);
     }
     .back-icon-dark-mode {
-      fill: variables.$pretty-blue;
+      fill: var(--app-accent);
     }
     .icon-folder-lol {
-      fill: variables.$pretty-blue;
+      fill: var(--app-accent);
     }
   }
 }
 
 .back-icon {
-  fill: black;
+  fill: var(--app-text-primary);
   height: 18px;
   left: 9px;
   position: absolute;
@@ -40,14 +42,14 @@
 }
 
 .back-icon-dark-mode {
-  fill: white;
+  fill: var(--app-text-primary);
 }
 
 .length,
 .size {
-  color: variables.$gray-50;
+  color: var(--app-text-secondary);
   display: block;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
   font-size: 10px;
   position: absolute;
   top: 6px;
@@ -78,39 +80,39 @@
 }
 
 .file-size {
-  color: variables.$gray-60;
+  color: var(--app-text-secondary);
   display: inline-block;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
   font-size: 10px;
   opacity: 0.8;
 }
 
 .meta-dark-mode {
-  color: variables.$gray-30;
+  color: var(--app-text-secondary);
 }
 
 .folder-name {
-  color: variables.$black;
+  color: var(--app-text-primary);
   font-size: 12px;
   left: 36px;
   position: absolute;
 }
 
 .folder-size {
-  color: variables.$gray-60;
+  color: var(--app-text-secondary);
   display: inline-block;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
   font-size: 10px;
 }
 
 .folder-name-dark-mode {
-  color: variables.$gray-10;
+  color: var(--app-text-primary);
 }
 
 .number-of-files {
-  color: variables.$gray-60;
+  color: var(--app-text-secondary);
   display: block;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
   font-size: 10px;
   left: -25px;
   position: absolute;
@@ -120,7 +122,7 @@
 }
 
 .icon-folder-lol {
-  fill: variables.$gray-50;
+  fill: var(--app-text-secondary);
   height: 15px;
   left: 10px;
   position: absolute;
@@ -131,7 +133,7 @@
 }
 
 .title {
-  color: variables.$black;
+  color: var(--app-text-primary);
   display: inline-block;
   font-size: 12px;
   overflow: hidden;
@@ -145,7 +147,7 @@
 }
 
 .title-dark-mode {
-  color: variables.$gray-10;
+  color: var(--app-text-primary);
 }
 
 .larger-font {

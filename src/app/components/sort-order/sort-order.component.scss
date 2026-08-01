@@ -4,6 +4,10 @@
 }
 
 .sort-dropdown {
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  color: var(--app-text-primary);
   height: 30px;
   cursor: pointer;
   margin: 10px 0 0;
@@ -13,6 +17,7 @@
 }
 
 .sort-dropdown-dark-mode {
-  background: black;
-  color: white;
+  background: var(--app-control-background);
+  border-color: var(--app-border-strong);
+  color: var(--app-text-primary);
 }

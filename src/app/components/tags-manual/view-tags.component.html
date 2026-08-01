@@ -7,7 +7,7 @@
     [ngClass]="{ 'tag-draggable': draggable() }"
     [ngStyle]="{
       background: tag.colour,
-      color: tag.colour ? getContrastColor(tag.colour) : undefined
+      color: tag.colour ? getContrastColor(tag.colour) : 'black'
     }"
     (click)="tagClick(tag, $event)"
     (contextmenu)="onTagRightClick($event, tag)"

@@ -5,8 +5,9 @@
 }
 
 .folder {
-  border: 3px solid white;
-  border-radius: 10px;
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-panel-radius);
+  box-shadow: var(--app-shadow-subtle);
   box-sizing: border-box;
 }
 

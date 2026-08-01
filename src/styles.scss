@@ -2,38 +2,150 @@
 
 @import "~@angular/cdk/overlay-prebuilt.css";
 
+:root {
+  --app-gallery-background: #{variables.$frosted-gallery-light};
+  --app-sidebar-background: #{variables.$frosted-sidebar-light};
+  --app-toolbar-background: #{variables.$frosted-toolbar-light};
+  --app-title-background: #{variables.$frosted-title-light};
+  --app-tray-background: #{variables.$frosted-tray-light};
+  --app-elevated-background: #{variables.$frosted-elevated-light};
+  --app-tab-background: #{variables.$frosted-tab-light};
+  --app-control-background: #{variables.$frosted-control-light};
+  --app-control-hover: #{variables.$frosted-control-hover-light};
+  --app-text-primary: #{variables.$frosted-text-primary-light};
+  --app-text-secondary: #{variables.$frosted-text-secondary-light};
+  --app-border-strong: #{variables.$frosted-border-strong-light};
+  --app-border-subtle: #{variables.$frosted-border-subtle-light};
+  --app-highlight: #{variables.$frosted-highlight-light};
+  --app-accent: #{variables.$frosted-accent-light};
+  --app-accent-soft: #{variables.$frosted-accent-soft-light};
+  --app-accent-text: #{variables.$frosted-accent-text-light};
+  --app-action-background: #{variables.$frosted-action-light};
+  --app-action-hover: #{variables.$frosted-action-hover-light};
+  --app-on-action: #fff;
+  --app-destructive: #{variables.$frosted-destructive-light};
+  --app-destructive-soft: #{variables.$frosted-destructive-soft-light};
+  --app-control-radius: 6px;
+  --app-panel-radius: 8px;
+  --app-shadow-subtle: 0 1px 2px rgba(20, 22, 26, 0.12);
+  --app-shadow-elevated: 0 8px 24px rgba(46, 52, 64, 0.13);
+  --app-motion-fast: 140ms;
+  --app-titlebar-height: 28px;
+  --app-settings-modal-top: clamp(96px, 22vh, 200px);
+  --app-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  --app-font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  color-scheme: light;
+}
+
+body:has(.window-dark-mode),
+.window-dark-mode {
+  --app-gallery-background: #{variables.$frosted-gallery-dark};
+  --app-sidebar-background: #{variables.$frosted-sidebar-dark};
+  --app-toolbar-background: #{variables.$frosted-toolbar-dark};
+  --app-title-background: #{variables.$frosted-title-dark};
+  --app-tray-background: #{variables.$frosted-tray-dark};
+  --app-elevated-background: #{variables.$frosted-elevated-dark};
+  --app-tab-background: #{variables.$frosted-tab-dark};
+  --app-control-background: #{variables.$frosted-control-dark};
+  --app-control-hover: #{variables.$frosted-control-hover-dark};
+  --app-text-primary: #{variables.$frosted-text-primary-dark};
+  --app-text-secondary: #{variables.$frosted-text-secondary-dark};
+  --app-border-strong: #{variables.$frosted-border-strong-dark};
+  --app-border-subtle: #{variables.$frosted-border-subtle-dark};
+  --app-highlight: #{variables.$frosted-highlight-dark};
+  --app-accent: #{variables.$frosted-accent-dark};
+  --app-accent-soft: #{variables.$frosted-accent-soft-dark};
+  --app-accent-text: #{variables.$frosted-accent-text-dark};
+  --app-action-background: #{variables.$frosted-action-dark};
+  --app-action-hover: #{variables.$frosted-action-hover-dark};
+  --app-on-action: #fff;
+  --app-destructive: #{variables.$frosted-destructive-dark};
+  --app-destructive-soft: #{variables.$frosted-destructive-soft-dark};
+  --app-shadow-subtle: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --app-shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.28);
+  color-scheme: dark;
+}
+
 .cdk-overlay-container {
   z-index: 8000;
 }
 
 html, body {
-  font-family: sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: var(--app-gallery-background);
+  color: var(--app-text-primary);
+  font-family: var(--app-font-sans);
   margin: 0;
   padding: 0;
 }
 
-.mat-dialog-container {
-  background-color: white;
-  border: 1px solid gray;
-  border-radius: 8px !important;
-  box-shadow: 0 10px 20px 10px rgba(0,0,0,0.1);
+button,
+input,
+select,
+textarea {
+  font-family: var(--app-font-sans);
+}
+
+button:focus-visible,
+[role="button"]:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 2px;
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .title-bar,
+  .top-of-buttons,
+  .all-settings {
+    -webkit-backdrop-filter: blur(14px) saturate(1.15);
+    backdrop-filter: blur(14px) saturate(1.15);
+  }
+}
+
+.mat-dialog-container,
+.mat-mdc-dialog-surface {
+  background-color: var(--app-elevated-background);
+  border: 1px solid var(--app-border-subtle);
+  border-radius: var(--app-panel-radius) !important;
+  box-shadow: var(--app-shadow-elevated);
+  color: var(--app-text-primary);
+}
+
+.mat-mdc-dialog-container {
+  --mat-dialog-container-color: var(--app-elevated-background);
+  --mat-dialog-subhead-color: var(--app-text-primary);
+  --mat-dialog-supporting-text-color: var(--app-text-primary);
 }
 
 // Snackbar container styles (for Angular Material v14+)
 .mat-mdc-snack-bar-container,
 .custom-snackbar {
-  --mdc-snackbar-container-color: #{variables.$pretty-red};
-  --mat-snack-bar-button-color: white;
+  --mdc-snackbar-container-color: var(--app-destructive-soft);
+  --mat-snack-bar-button-color: var(--app-destructive);
 
   .mdc-snackbar__surface {
-    background: variables.$pretty-red !important;
-    border: 1px solid red;
-    border-radius: 10px !important;
+    background: var(--app-destructive-soft) !important;
+    border: 1px solid var(--app-destructive);
+    border-radius: var(--app-panel-radius) !important;
     padding: 0;
   }
 
   .mat-mdc-snack-bar-label {
-    color: white;
+    color: var(--app-destructive);
     text-align: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }

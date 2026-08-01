@@ -1,7 +1,7 @@
 @use "../variables.scss";
 
 .rename-heading {
-  color: variables.$gray-50;
+  color: var(--app-text-primary);
   font-size: 16px;
   left: 40px;
   position: absolute;
@@ -10,7 +10,7 @@
 
 .rename-from,
 .rename-to {
-  color: variables.$gray-50;
+  color: var(--app-text-secondary);
   display: block;
   font-size: 12px;
   left: 0px;
@@ -34,5 +34,5 @@
 }
 
 .close-rename-dark {
-  color: white;
+  color: var(--app-text-primary);
 }

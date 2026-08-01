@@ -29,8 +29,31 @@
     display: none;
   }
 
+  button:not(.flatSettingsButton):not(.flatSettingsButtonToggled) {
+    background: var(--app-control-background);
+    border: 1px solid var(--app-border-subtle);
+    border-radius: var(--app-control-radius);
+    box-shadow: none;
+    color: var(--app-text-primary);
+    transition:
+      background-color var(--app-motion-fast),
+      border-color var(--app-motion-fast),
+      color var(--app-motion-fast);
+
+    &:hover {
+      background: var(--app-control-hover);
+      border-color: var(--app-border-strong);
+    }
+
+    &:active {
+      background: var(--app-accent-soft);
+      border-color: var(--app-accent-text);
+      color: var(--app-accent-text);
+    }
+  }
+
   button:focus-visible {
-    outline: 2px solid variables.$gray-90;
+    outline: 2px solid var(--app-accent);
     outline-offset: 1px;
     position: relative;
     z-index: 3;
@@ -40,7 +63,7 @@
 .ribbon-hover-label {
   align-items: center;
   box-sizing: border-box;
-  color: variables.$gray-70;
+  color: var(--app-text-secondary);
   display: flex;
   flex: 1 1 180px;
   float: left;
@@ -52,7 +75,7 @@
   overflow: hidden;
   padding: 0 8px;
   pointer-events: none;
-  transition: opacity 100ms ease-in-out;
+  transition: opacity var(--app-motion-fast);
   min-width: 0;
   max-width: 360px;
 }
@@ -70,11 +93,11 @@
 
 :host-context(.all-settings-dark-mode) {
   .settings-buttons-group button:focus-visible {
-    outline-color: variables.$pretty-blue;
+    outline-color: var(--app-accent-text);
   }
 
   .ribbon-hover-label {
-    color: variables.$gray-10;
+    color: var(--app-text-secondary);
   }
 }
 

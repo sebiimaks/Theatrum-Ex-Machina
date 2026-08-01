@@ -12,7 +12,6 @@
     class="meta-title"
     [ngClass]="{ 'larger-font': largerFont() }"
     [ngStyle]="{
-        color: darkMode() ? '#DDDDDD' : '#000000',
         width: renamingWIP.length + 10 + 'ch',
         'max-width': maxWidth() - 20 + 'px'
       }"
@@ -49,7 +48,6 @@
         #yearInput
 
         class="year"
-        [ngStyle]="{color: darkMode() ? '#DDDDDD' : '#000000'}"
 
         (change)="validateYear($event)"
         (click)="autoFillYear()"
@@ -135,7 +133,7 @@
 
 <!-- Times played -->
 @if (video.timesPlayed) {
-  <span class="metadata-text times-played" [ngStyle]="{color: darkMode() ? '#DDDDDD' : '#000000'}" >
+  <span class="metadata-text times-played">
     <em>{{ 'TAGS.timesPlayed' | translate }}:</em> {{ video.timesPlayed }}
   </span>
 }

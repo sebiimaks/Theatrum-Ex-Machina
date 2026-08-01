@@ -16,6 +16,7 @@
 
 .column {
   box-sizing: border-box;
+  color: var(--app-text-primary);
   float: left;
   height: 100%;
   margin-top: 0;
@@ -39,6 +40,7 @@ ul {
 }
 
 .clickable {
+  color: var(--app-text-primary);
   cursor: pointer;
   margin-left: 25px;
   transition: 200ms;
@@ -46,14 +48,14 @@ ul {
   transition-property: color;
 
   &:hover {
-    color: variables.$pretty-blue;
+    color: var(--app-accent-text);
     transition: 30ms;
     transition-property: color;
   }
 }
 
 .frequency {
-  color: variables.$gray-50;
+  color: var(--app-text-secondary);
   cursor: default;
   font-size: 10px;
   position: absolute;
@@ -63,7 +65,7 @@ ul {
 }
 
 .prefix {
-  color: variables.$gray-30;
+  color: var(--app-text-secondary);
   cursor: default;
   display: block;
   font-size: 20px;
@@ -76,8 +78,8 @@ ul {
 
 .edit-bar {
   align-items: baseline;
-  background: variables.$gray-10;
-  border-top: 1px solid variables.$gray-30;
+  background: var(--app-elevated-background);
+  border-top: 1px solid var(--app-border-strong);
   bottom: 16px;
   box-sizing: border-box;
   display: flex;
@@ -90,13 +92,15 @@ ul {
 }
 
 .filter-description {
-  color: variables.$gray-50;
+  color: var(--app-text-secondary);
   font-size: 12px;
 }
 
 .num-select {
-  background-color: variables.$gray-10;
-  border: none;
+  background-color: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  color: var(--app-text-primary);
   margin: 0 0 0 14px;
   outline: none;
   padding: 0;
@@ -123,7 +127,7 @@ ul {
 
 .num-found {
   bottom: 15px;
-  color: variables.$gray-50;
+  color: var(--app-text-secondary);
   display: block;
   font-size: 12px;
   line-height: 0;
@@ -136,7 +140,7 @@ ul {
 }
 
 .delete-tag-hack {
-  color: variables.$pretty-red;
+  color: var(--app-destructive);
   font-size: 12px;
   position: absolute;
   transform: translate(8px, 1px);
@@ -146,13 +150,13 @@ ul {
 
 .strikethrough {
   &:hover {
-    color: variables.$pretty-red;
+    color: var(--app-destructive);
     text-decoration: line-through !important;
   }
 }
 
 .add-error {
-  color: variables.$pretty-blue;
+  color: var(--app-accent-text);
 }
 
 .break-point-hack {

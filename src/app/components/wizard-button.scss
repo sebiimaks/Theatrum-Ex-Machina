@@ -1,9 +1,11 @@
 @use "variables";
 
 .wizard-button {
-  background: variables.$gray-15;
-  border: 1px solid variables.$gray-30;
-  border-radius: 10px;
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  box-shadow: var(--app-shadow-subtle);
+  color: var(--app-text-primary);
   cursor: pointer;
   margin: 15px;
   max-height: 50px;
@@ -11,44 +13,45 @@
   min-width: 190px;
   outline: none;
   padding: 10px;
-  transition: 300ms;
-  transition-property: background-color, box-shadow, color;
-
-  &:enabled {
-    box-shadow: 1px 2px 4px rgba(0,0,0,0.5);
-  }
+  transition: var(--app-motion-fast);
+  transition-property: background-color, border-color, box-shadow, color;
 
   &:hover {
-    background: variables.$gray-10;
+    background: var(--app-control-hover);
+    border-color: var(--app-accent);
   }
 
   &:disabled {
     cursor: initial;
+    color: var(--app-text-secondary);
+    opacity: 0.55;
     pointer-events: none;
   }
 
   &:active {
-    box-shadow: 0px 0px 0px rgba(0, 0, 0, 0.5);
-    transform: translateY(1px);
-    transition: 100ms;
+    background: var(--app-accent-soft);
+    box-shadow: none;
+    transform: none;
+    transition: var(--app-motion-fast);
   }
 }
 
 .start-import {
-  background: variables.$light-blue;
-  border-color: variables.$pretty-blue;
-  color: black;
+  background: var(--app-action-background);
+  border-color: var(--app-action-background);
+  color: var(--app-on-action);
   font-weight: bold;
-  text-shadow: 0 0 5px white;
+  text-shadow: none;
 
   &:hover {
-    background-color: variables.$pretty-blue;
+    background-color: var(--app-action-hover);
+    border-color: var(--app-action-hover);
   }
 
   &:disabled {
-    background: variables.$gray-15;
-    border-color: variables.$gray-30;
-    color: variables.$gray-50;
+    background: var(--app-control-background);
+    border-color: var(--app-border-strong);
+    color: var(--app-text-secondary);
   }
 }
 
@@ -62,43 +65,46 @@
 }
 
 .edit-mode-active {
-  background-color: variables.$pretty-red;
-  border: 1px solid variables.$dark-red;
-  box-shadow: 0px 0px 0px rgba(0, 0, 0, 0) !important;
-  transform: translateY(1px);
+  background-color: var(--app-destructive-soft);
+  border: 1px solid var(--app-destructive);
+  box-shadow: none !important;
+  color: var(--app-destructive);
+  transform: none;
   transition-duration: 50ms;
   transition-property: background-color, border;
 
   &:hover {
-    background-color: variables.$pretty-red-lighter;
+    background-color: var(--app-destructive-soft);
   }
 }
 
 :host-context(.settings-modal-dark) {
   .wizard-button {
-    background: variables.$gray-80;
-    border-color: variables.$gray-60;
-    color: variables.$gray-05;
+    background: var(--app-control-background);
+    border-color: var(--app-border-strong);
+    color: var(--app-text-primary);
 
     &:hover {
-      background: variables.$gray-70;
+      background: var(--app-control-hover);
+      border-color: var(--app-accent);
     }
   }
 
   .start-import {
-    background: variables.$gray-70;
-    border-color: variables.$pretty-blue;
-    color: variables.$white;
+    background: var(--app-action-background);
+    border-color: var(--app-action-background);
+    color: var(--app-on-action);
     text-shadow: none;
 
     &:hover {
-      background: variables.$gray-60;
+      background: var(--app-action-hover);
+      border-color: var(--app-action-hover);
     }
   }
 
   .edit-mode-active {
-    background-color: variables.$pretty-red;
-    border-color: variables.$dark-red;
-    color: variables.$white;
+    background-color: var(--app-destructive-soft);
+    border-color: var(--app-destructive);
+    color: var(--app-destructive);
   }
 }

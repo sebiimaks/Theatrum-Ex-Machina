@@ -524,7 +524,6 @@
           #magicSearch
           (keydown.escape)="magicSearchString = ''"
           [(ngModel)]="magicSearchString"
-          [ngStyle]="{ color: settingsButtons['darkMode'].toggled ? 'white' : 'black' }"
           type="text"
           class="filter-general input-filter"
           placeholder="{{ 'SIDEBAR.magic' | translate }}"
@@ -533,8 +532,7 @@
         @if (magicSearchString !== '') {
           <span
             (click)="magicSearchString = ''"
-            [ngStyle]="{ background: '#aaffaa' }"
-            class="search-or-tag-general search-word"
+            class="generated-search-chip search-or-tag-general search-word"
           >
             {{ magicSearchString }}
           </span>
@@ -555,7 +553,6 @@
           #regexSearch
           (keydown.escape)="regexSearchString = ''"
           [(ngModel)]="regexSearchString"
-          [ngStyle]="{ color: settingsButtons['darkMode'].toggled ? 'white' : 'black' }"
           type="text"
           class="filter-general input-filter"
           placeholder="{{ 'SIDEBAR.regex' | translate }}"
@@ -564,8 +561,7 @@
         @if (regexSearchString !== '') {
           <span
             (click)="regexSearchString = ''"
-            [ngStyle]="{ background: '#aaffaa' }"
-            class="search-or-tag-general search-word"
+            class="generated-search-chip search-or-tag-general search-word"
             [attr.title]="regexError ? ( 'SIDEBAR.invalidRegex' | translate ) : ''"
             [ngClass]="{ 'regex-error': regexError }"
           >
@@ -588,7 +584,6 @@
           #fuzzySearch
           (keydown.escape)="fuzzySearchString = ''"
           [(ngModel)]="fuzzySearchString"
-          [ngStyle]="{ color: settingsButtons['darkMode'].toggled ? 'white' : 'black' }"
           type="text"
           class="filter-general input-filter"
           placeholder="{{ 'SIDEBAR.fuzzy' | translate }}"
@@ -597,8 +592,7 @@
         @if (fuzzySearchString !== '' && fuzzySearchString.length > 2) {
           <span
             (click)="fuzzySearchString = ''"
-            [ngStyle]="{ background: '#aaffaa' }"
-            class="search-or-tag-general search-word"
+            class="generated-search-chip search-or-tag-general search-word"
           >
             {{ fuzzySearchString }}
           </span>
@@ -619,7 +613,6 @@
           #startsWithSearch
           (keydown.escape)="startsWithSearchString = ''"
           [(ngModel)]="startsWithSearchString"
-          [ngStyle]="{ color: settingsButtons['darkMode'].toggled ? 'white' : 'black' }"
           type="text"
           class="filter-general input-filter"
           placeholder="{{ 'SIDEBAR.startsWith' | translate }}"
@@ -628,8 +621,7 @@
           <span
             *ngIf="startsWithSearchString !== ''"
             (click)="startsWithSearchString = ''"
-            [ngStyle]="{ background: '#aaffaa' }"
-            class="search-or-tag-general search-word"
+            class="generated-search-chip search-or-tag-general search-word"
           >
             {{ startsWithSearchString }}
           </span>
@@ -1217,8 +1209,7 @@
     <div
       class="no-results"
       [ngStyle]="{
-        'padding-left': settingsButtons['hideSidebar'].toggled ? 0 : '190px',
-        'color': settingsButtons['darkMode'].toggled ? '#aaaaaa' : 'initial'
+        'padding-left': settingsButtons['hideSidebar'].toggled ? 0 : '190px'
       }"
     >
       @if ((appState.currentView === 'showClips' && currentScreenshotSettings.clipSnippets === 0)) {

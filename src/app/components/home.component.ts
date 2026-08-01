@@ -172,7 +172,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
   appState = AppState;
 
   demo = GLOBALS.demo;
-  macVersion = GLOBALS.macVersion;
+  macVersion = window.process?.platform === 'darwin' || GLOBALS.macVersion;
   versionNumber = GLOBALS.version;
 
   vhaFileHistory: HistoryItem[] = [];

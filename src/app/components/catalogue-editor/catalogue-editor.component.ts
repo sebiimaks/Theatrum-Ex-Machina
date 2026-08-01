@@ -59,7 +59,7 @@ export class CatalogueEditorComponent implements OnChanges {
   hashCopiedIndex: number | undefined;
   searchRowsStatus = '';
   searchCriteria: CatalogueSearchCriterion[] = [
-    { field: 'all', id: 0, query: '' },
+    { field: 'all', id: 0, operator: 'contains', query: '' },
   ];
   showDeleted = false;
 
@@ -155,6 +155,7 @@ export class CatalogueEditorComponent implements OnChanges {
     this.searchCriteria.push({
       field: 'all',
       id: criterionId,
+      operator: 'contains',
       query: '',
     });
     this.searchRowsStatus = `Search line ${this.searchCriteria.length} added. All completed search lines must match.`;

@@ -1,7 +1,16 @@
 @use "variables";
 
 .filter-container {
+  background: var(--app-sidebar-background);
+  color: var(--app-text-primary);
+  isolation: isolate;
   overflow: hidden;
+  position: relative;
+
+  .input-filter {
+    position: relative;
+    z-index: 1;
+  }
 }
 
 .slider-container {
@@ -24,7 +33,7 @@
 }
 
 .hiding-settings-menu-dark {
-  fill: white;
+  fill: var(--app-text-primary);
 }
 
 .mini-chevron {
@@ -50,14 +59,14 @@
   justify-content: flex-end;
   // flex controls
 
-  color: variables.$gray-60;
+  color: var(--app-text-secondary);
   font-family: monospace;
   font-size: 12px;
   margin: 0;
 
   .container-icon-total {
     display: inline-block;
-    fill: variables.$gray-40;
+    fill: var(--app-text-secondary);
     margin-left: 14px;
     transform: translate(-4px, 2px);
     width: 15px;
@@ -65,47 +74,47 @@
 }
 
 .total-found {
-  color: variables.$gray-40;
+  color: var(--app-text-secondary);
   font-family: unset;
 
   em {
-    color: variables.$gray-60;
+    color: var(--app-text-primary);
     font-style: unset;
     font-family: monospace;
   }
 }
 
 .total-found-dark {
-  color: variables.$gray-30;
+  color: var(--app-text-secondary);
 
   em {
-    color: variables.$gray-20;
+    color: var(--app-text-primary);
   }
 }
 
 .clear-all-filters {
   &:hover {
     cursor: not-allowed;
-    color: variables.$pretty-red;
+    color: var(--app-destructive);
     text-decoration: line-through !important;
 
     em {
-      color: variables.$pretty-red;
+      color: var(--app-destructive);
     }
   }
 }
 
 .input-icon {
-  fill: white;
-  filter: drop-shadow( 0px 0px 1px rgba(0, 0, 0, .7));
+  fill: var(--app-text-secondary);
+  filter: none;
   position: absolute;
   transform: translate(0, 12px);
   width: 15px;
 }
 
 .search-or-tag-general {
-  border-radius: 4px;
-  box-shadow: 1px 1px 3px 0px rgba(0,0,0,0.3);
+  border-radius: var(--app-control-radius);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
   cursor: pointer;
   display: inline-block;
   font-size: 10px;
@@ -114,6 +123,7 @@
 }
 
 .search-word {
+  // Tag backgrounds are assigned dynamically; retain their tested dark label colour.
   color: variables.$gray-90;
   margin: 3px 0;
 
@@ -122,8 +132,13 @@
   }
 }
 
+.generated-search-chip {
+  background: var(--app-accent-soft);
+  color: var(--app-accent-text);
+}
+
 .delete-playlist {
-  color: variables.$pretty-red;
+  color: var(--app-destructive);
   cursor: not-allowed;
   float: right;
   font-size: 10px;
@@ -137,16 +152,18 @@
 }
 
 .conjunction {
+  color: var(--app-text-secondary);
   font-size: 10px;
   margin: 3px; // coincides with .search-word margin-left: 0;
 }
 
 .notFiltered {
+  color: var(--app-text-secondary);
   font-size: 10px;
 }
 
 .cloud-frequency {
-  color: variables.$gray-90;
+  color: var(--app-text-primary);
   display: flex;
   line-height: 26px;
   max-height: 140px;
@@ -157,7 +174,7 @@
     margin-right: 20px;
 
     app-button {
-      border-radius: 5px !important;
+      border-radius: var(--app-control-radius) !important;
       display: block !important;
       margin-bottom: 10px;
     }
@@ -172,7 +189,7 @@
     margin: 0 4px;
 
     &:hover {
-      color: variables.$pretty-blue;
+      color: var(--app-accent-text);
     }
   }
 
@@ -196,7 +213,7 @@
   .must-click-first {
     animation: preventFlicker;
     animation-duration: 0.1s;
-    color: variables.$gray-70;
+    color: var(--app-text-secondary);
     font-size: 14px;
     margin-top: 80px;
     text-align: center;
@@ -204,7 +221,7 @@
   }
 
   .must-click-dark-mode {
-    color: variables.$gray-30;
+    color: var(--app-text-secondary);
   }
 }
 
@@ -219,13 +236,13 @@
 }
 
 .tag-type-ahead-on-home {
-  color: variables.$pretty-blue;
+  color: var(--app-accent-text);
   display: block;
   font-size: 15px;
   pointer-events: none;
   position: absolute;
   transform: translate(20px, -28px);
-  z-index: -1;
+  z-index: 0;
 }
 
 .lev-distance {
@@ -241,7 +258,7 @@
 }
 
 .lev-description {
-  color: variables.$gray-50;
+  color: var(--app-text-secondary);
   cursor: default;
   display: block;
   font-size: 12px;
@@ -251,12 +268,13 @@
 }
 
 .regex-error {
-  background-color: #d4d4d4 !important;
+  background-color: var(--app-control-hover) !important;
+  color: var(--app-text-secondary) !important;
   text-decoration: line-through;
 }
 
 .hiding-offline {
-  background-color: variables.$pretty-red;
+  background-color: var(--app-destructive);
   margin-top: 15px;
   position: absolute;
 }

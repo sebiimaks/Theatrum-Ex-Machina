@@ -37,7 +37,7 @@
 }
 
 .reduceFlicker {
-  background: variables.$gray-10;
+  background: var(--app-gallery-background);
   height: 100vh;
   position: fixed;
   width: 100vw;
@@ -46,6 +46,8 @@
 
 // LAYOUT STYLING
 .window {
+  background: var(--app-gallery-background);
+  color: var(--app-text-primary);
   height: 100vh;
   overflow: hidden;
   width: 100vw;
@@ -57,12 +59,12 @@
 
 .thumbnail-regeneration-banner {
   align-items: center;
-  background: variables.$gray-05;
-  border: 1px solid variables.$gray-50;
-  border-radius: 6px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
+  background: var(--app-elevated-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-panel-radius);
+  box-shadow: var(--app-shadow-subtle);
   box-sizing: border-box;
-  color: variables.$gray-90;
+  color: var(--app-text-primary);
   display: flex;
   flex: 0 1 520px;
   font-size: 12px;
@@ -77,16 +79,16 @@
 }
 
 .thumbnail-regeneration-banner-dark {
-  background: variables.$gray-80;
-  border-color: variables.$gray-60;
-  color: variables.$gray-05;
+  background: var(--app-elevated-background);
+  border-color: var(--app-border-strong);
+  color: var(--app-text-primary);
 }
 
 .thumbnail-regeneration-spinner {
   animation: thumbnail-regeneration-spin 900ms linear infinite;
-  border: 2px solid variables.$gray-40;
+  border: 2px solid var(--app-border-strong);
   border-radius: 50%;
-  border-top-color: variables.$pretty-blue;
+  border-top-color: var(--app-accent);
   box-sizing: border-box;
   flex: 0 0 auto;
   height: 14px;
@@ -102,19 +104,19 @@
 }
 
 .thumbnail-regeneration-elapsed {
-  color: variables.$gray-60;
+  color: var(--app-text-secondary);
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
 }
 
 .thumbnail-regeneration-banner-dark .thumbnail-regeneration-elapsed {
-  color: variables.$gray-30;
+  color: var(--app-text-secondary);
 }
 
 .thumbnail-regeneration-cancel {
   background: transparent;
-  border: 1px solid variables.$gray-50;
-  border-radius: 4px;
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
   color: inherit;
   cursor: pointer;
   flex: 0 0 auto;
@@ -123,8 +125,10 @@
 
   &:hover:not(:disabled),
   &:focus-visible {
-    border-color: variables.$pretty-blue;
-    outline: 1px solid variables.$pretty-blue;
+    background: var(--app-accent-soft);
+    border-color: var(--app-accent);
+    outline: 2px solid var(--app-accent);
+    outline-offset: 1px;
   }
 
   &:disabled {
@@ -140,8 +144,9 @@
 }
 
 .top-of-buttons {
-  background-image: linear-gradient(to bottom, variables.$gray-10 0%, variables.$gray-20 100%);
-  border-bottom: 1px solid variables.$gray-30;
+  background: var(--app-title-background);
+  border-bottom: 1px solid var(--app-border-subtle);
+  box-shadow: inset 0 1px 0 var(--app-highlight);
   height: variables.$top-region;
   overflow: hidden;
   position: relative;
@@ -152,8 +157,8 @@
 }
 
 .top-of-buttons-dark-mode {
-  background-image: linear-gradient(to bottom, variables.$gray-70 0%, variables.$gray-80 100%);
-  border-bottom: 1px solid variables.$gray-80;
+  background: var(--app-title-background);
+  border-bottom: 1px solid var(--app-border-subtle);
 }
 
 .top-content-position {
@@ -170,9 +175,9 @@
 
 .all-settings {
   align-items: flex-start;
-  background-color: variables.$gray-20;
-  border-bottom: 1px solid variables.$gray-30;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  background-color: var(--app-toolbar-background);
+  border-bottom: 1px solid var(--app-border-subtle);
+  box-shadow: inset 0 1px 0 var(--app-highlight), var(--app-shadow-subtle);
   box-sizing: border-box;
   display: flex;
   gap: 8px;
@@ -193,8 +198,8 @@
 }
 
 .all-settings-dark-mode {
-  background-color: variables.$gray-85;
-  border-bottom: 1px solid variables.$gray-70;
+  background-color: var(--app-toolbar-background);
+  border-bottom: 1px solid var(--app-border-subtle);
 }
 
 .all-settings-flat-icons {
@@ -214,32 +219,36 @@
 }
 
 .settings-modal {
-  background-color: variables.$gray-10;
-  border: 1px solid variables.$gray-50;
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+  background-color: var(--app-elevated-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-panel-radius);
+  box-shadow: var(--app-shadow-elevated);
   box-sizing: border-box;
-  height: calc(100vh - 215px);
+  bottom: 15px;
+  height: auto;
   left: 200px;
+  min-height: 0;
   min-width: 270px;
+  overscroll-behavior: contain;
   overflow-x: hidden;
-  overflow-y: scroll;
+  overflow-y: auto;
   padding: 20px 5px 25px;
   position: fixed;
-  top: 200px;
+  scrollbar-gutter: stable;
+  top: var(--app-settings-modal-top);
   width: calc(100% - 215px);
   z-index: 500;
 
   @include variables.scrollBar;
 
   .defaultSettingsButton {
-    border-radius: 5px !important;
+    border-radius: var(--app-control-radius) !important;
   }
 }
 
 .sidebar {
-  background-color: variables.$gray-15;
-  border-right: 1px solid variables.$gray-30;
+  background-color: var(--app-sidebar-background);
+  border-right: 1px solid var(--app-border-subtle);
   box-sizing: border-box;
   height: 100vh;
   max-width: variables.$sidebar-width !important;
@@ -256,9 +265,9 @@
 }
 
 .sidebar-dark-mode {
-  background: variables.$gray-90;
-  border-right: 1px solid variables.$gray-70;
-  color: variables.$gray-30;
+  background: var(--app-sidebar-background);
+  border-right: 1px solid var(--app-border-subtle);
+  color: var(--app-text-secondary);
 }
 
 .sidebar-hidden {
@@ -267,7 +276,7 @@
 }
 
 .gallery-container {
-  background: variables.$gray-20;
+  background: var(--app-gallery-background);
   box-sizing: border-box;
   left: variables.$sidebar-width;
   overflow-y: scroll;
@@ -281,7 +290,7 @@
 }
 
 .gallery-container-dark-mode {
-  background: variables.$black;
+  background: var(--app-gallery-background);
 }
 
 .gallery-container-full-width {
@@ -298,35 +307,35 @@
   font-size: 12px;
   position: fixed;
   right: 4px;
-  top: 26px;
+  top: calc(var(--app-titlebar-height) + 6px);
   z-index: 9999;
 }
 
 .cancel-progress {
-  color: black;
+  color: var(--app-text-primary);
   cursor: pointer;
   font-size: 10px;
   position: fixed;
   right: 42px;
-  top: 32px;
+  top: calc(var(--app-titlebar-height) + 12px);
   z-index: 9999;
 
   &:hover {
-    color: variables.$pretty-red;
+    color: var(--app-destructive);
   }
 }
 
 .cancel-progress-dark {
-  color: white;
+  color: var(--app-text-primary);
 
   &:hover {
-    color: variables.$pretty-red;
+    color: var(--app-destructive);
   }
 }
 
 .bottom-tray {
-  background: variables.$gray-10;
-  border-top: 1px solid variables.$gray-50;
+  background: var(--app-tray-background);
+  border-top: 1px solid var(--app-border-strong);
   bottom: 0;
   box-sizing: border-box;
   display: flex;
@@ -342,6 +351,7 @@
   .close-bottom-tray {
     cursor: pointer;
     display: block;
+    fill: var(--app-text-secondary);
     position: absolute;
     right: 12px; // not 5px - to account for scrollbar when too many tags
     top: 5px;
@@ -349,7 +359,7 @@
   }
 
   .close-bottom-tray-dark {
-    fill: variables.$gray-30;
+    fill: var(--app-text-secondary);
   }
 }
 
@@ -367,44 +377,45 @@
 }
 
 .bottom-tray-dark {
-  background: variables.$gray-85;
-  border-top: 1px solid variables.$gray-60;
+  background: var(--app-tray-background);
+  border-top: 1px solid var(--app-border-strong);
 
   button,
   span,
   input {
-    color: variables.$gray-20;
+    color: var(--app-text-primary);
   }
 
   .tag-sort-by-toggle,
   .show-frequency {
-    color: variables.$gray-30;
+    color: var(--app-text-secondary);
   }
 
   input {
     &::placeholder {
-      color: variables.$gray-30 !important;
+      color: var(--app-text-secondary) !important;
     }
   }
 }
 
 .all-settings-tabs.bottom-tray-tabs-dark {
   button {
-    background: variables.$gray-80 !important;
-    border: 1px solid variables.$gray-60 !important;
-    color: variables.$gray-10;
+    background: var(--app-toolbar-background) !important;
+    border: 1px solid var(--app-border-strong) !important;
+    color: var(--app-text-primary);
   }
 
   .active-tab {
-    background: variables.$gray-85 !important;
-    border-bottom: 1px solid variables.$gray-85 !important;
-    border-top-color: variables.$pretty-blue !important;
-    color: variables.$white;
+    background: var(--app-tray-background) !important;
+    border-bottom: 1px solid var(--app-tray-background) !important;
+    border-top-color: var(--app-accent) !important;
+    color: var(--app-text-primary);
   }
 }
 
 .no-results {
   box-sizing: border-box;
+  color: var(--app-text-secondary);
   position: absolute;
   text-align: center;
   top: 130px;
@@ -420,11 +431,11 @@
 
 .disabled-overlay {
   background: rgba(0, 0, 0, 0.2);
-  height: 100vh;
+  height: calc(100vh - var(--app-titlebar-height));
   left: 0;
   pointer-events: none;
   position: fixed;
-  top: 20px;
+  top: var(--app-titlebar-height);
   width: 100%;
   z-index: 100;
 }

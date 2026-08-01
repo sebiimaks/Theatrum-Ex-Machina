@@ -2,8 +2,8 @@
 
 .preview {
   background-size: cover;
-  border-radius: 5px;
-  border: 1px solid variables.$gray-50;
+  border-radius: var(--app-control-radius);
+  border: 1px solid var(--app-border-strong);
   cursor: pointer;
   display: block;
   float: left;
@@ -16,17 +16,17 @@
 .icon {
   cursor: pointer;
   display: inline-block;
-  fill: variables.$gray-50;
+  fill: var(--app-text-secondary);
   max-height: 18px;
   max-width: 18px;
   position: absolute;
   transform: translate(0, 2px);
-  transition-duration: 200ms;
+  transition-duration: var(--app-motion-fast);
   transition-property: fill;
   width: 18px;
 
   &:hover {
-    fill: variables.$pretty-blue;
+    fill: var(--app-accent);
   }
 }
 
@@ -41,15 +41,15 @@
 
   .folder-word,
   .file-word {
-    color: variables.$gray-60;
+    color: var(--app-text-secondary);
     cursor: pointer;
     display: inline-block;
     margin-right: 5px;
     transition-property: color;
-    transition: 300ms;
+    transition: color var(--app-motion-fast);
 
     &:hover {
-      color: variables.$dark-blue;
+      color: var(--app-accent-text);
     }
   }
 }
@@ -79,35 +79,43 @@
 
   .file-word {
     font-size: 14px;
+
+    &:last-child {
+      color: var(--app-text-primary);
+    }
   }
 }
 
 .dark-mode-override {
   & .folder-word {
-    color: variables.$gray-30;
-    transition: 300ms;
+    color: var(--app-text-secondary);
+    transition: var(--app-motion-fast);
     transition-property: color;
 
     &:hover {
-      color: variables.$pretty-blue;
+      color: var(--app-accent-text);
     }
   }
 
   & .file-word {
-    color: variables.$gray-20;
-    transition: 300ms;
+    color: var(--app-text-secondary);
+    transition: var(--app-motion-fast);
     transition-property: color;
 
+    &:last-child {
+      color: var(--app-text-primary);
+    }
+
     &:hover {
-      color: variables.$pretty-blue;
+      color: var(--app-accent-text);
     }
   }
 
   & .icon {
-    fill: variables.$gray-10;
+    fill: var(--app-text-secondary);
 
     &:hover {
-      fill: variables.$light-blue;
+      fill: var(--app-accent);
     }
   }
 }

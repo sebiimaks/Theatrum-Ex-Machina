@@ -1,19 +1,21 @@
 @use "../variables.scss";
 
 .wizard {
-  background: variables.$gray-10;
-  height: calc(100vh - 50px);
+  background: var(--app-gallery-background);
+  color: var(--app-text-primary);
+  height: calc(100vh - var(--app-titlebar-height) - 30px);
   overflow-x: hidden;
   overflow-y: scroll;
   padding-top: 30px;
   position: fixed;
-  top: 20px; // accounts for draggable region
+  top: var(--app-titlebar-height); // accounts for draggable region
   width: 100%;
   z-index: 30;
 
   h1 {
-    color: variables.$gray-60;
-    font-size: 14px;
+    color: var(--app-text-primary);
+    font-size: 17px;
+    font-weight: 600;
   }
 
   span {
@@ -31,15 +33,16 @@
 
   .close-wizard {
     cursor: pointer;
+    fill: var(--app-text-primary);
     float: right;
     position: sticky;
     right: 15px;
     top: 0;
-    transition-duration: 300ms;
+    transition-duration: 150ms;
+    transition-property: fill;
 
     &:hover {
-      color: variables.$dark-red;
-      transition-duration: 300ms;
+      fill: var(--app-destructive);
     }
   }
 
@@ -53,7 +56,7 @@
   }
 
   .right-side {
-    border-left: 1px solid variables.$gray-20;
+    border-left: 1px solid var(--app-border-subtle);
     // box-sizing: border-box;
     float: left;
     min-height: calc(100vh - 180px);
@@ -64,10 +67,10 @@
   }
 
   .steps {
-    background-color: variables.$gray-20;
+    background-color: var(--app-control-hover);
     border-radius: 9px;
-    box-shadow: 0px 0px 5px 1px rgba(0,0,0,0.07);
-    color: variables.$white;
+    box-shadow: var(--app-shadow-subtle);
+    color: var(--app-text-secondary);
     font-size: 9px;
     height: 18px;
     line-height: 18px;
@@ -80,18 +83,20 @@
   }
 
   .fulfilled {
-    background-color: variables.$pretty-green;
+    background-color: var(--app-action-background);
+    color: var(--app-on-action);
   }
 
   .current-step {
-    background-color: variables.$pretty-green;
+    background-color: var(--app-action-background);
+    color: var(--app-on-action);
     padding-right: 8px;
     transition: 300ms;
 
     &:after {
       animation: triangleSlide 0.5s forwards;
       border: solid transparent;
-      border-left-color: variables.$pretty-green;
+      border-left-color: var(--app-action-background);
       border-width: 7px;
       content: " ";
       height: 0;
@@ -113,24 +118,24 @@
   }
 
   .description {
-    color: variables.$gray-50;
+    color: var(--app-text-secondary);
     margin-bottom: 10px;
     pointer-events: none;
   }
 
   .clear-history {
-    color: variables.$gray-50;
+    color: var(--app-text-secondary);
     cursor: pointer;
     font-style: italic;
     margin: 20px 0 0 20px;
 
     &:hover {
-      color: variables.$pretty-red;
+      color: var(--app-destructive);
     }
   }
 
   .recently-opened-wizard {
-    color: variables.$gray-70;
+    color: var(--app-text-primary);
     display: block;
     font-size: 12px;
     margin: 0 0 20px 0;
@@ -155,8 +160,8 @@
 
         &:hover {
           .history-name {
-            color: variables.$pretty-blue;
-            text-shadow: 0px 0px 5px rgba(255, 255, 255, 1);
+            color: var(--app-accent-text);
+            text-shadow: none;
             transition: 300ms;
             transition-property: color;
           }
@@ -170,7 +175,7 @@
           width: 15px;
 
           &:hover {
-            fill: variables.$pretty-red;
+            fill: var(--app-destructive);
             opacity: 1;
             pointer-events: all;
 
@@ -179,7 +184,7 @@
                 // really hacky way to select the `span`
                 // following the `.clear-history-item`
                 // which happens to be after `img`
-                color: variables.$pretty-red;
+                color: var(--app-destructive);
                 text-decoration: line-through;
               }
             }
@@ -201,8 +206,11 @@
 
   .screenshot-preview {
     align-items: center;
-    background-color: variables.$wizard-screenshot;
-    border: 1px solid variables.$gray-50;
+    background-color: var(--app-elevated-background);
+    border: 1px solid var(--app-border-strong);
+    border-radius: var(--app-panel-radius);
+    box-shadow: var(--app-shadow-subtle);
+    color: var(--app-text-primary);
     display: flex;
     font-size: 12px;
     justify-content: center;
@@ -214,28 +222,28 @@
   }
 
   .path {
-    color: black;
+    color: var(--app-text-primary);
     margin-left: 26px;
     min-height: 20px;
     pointer-events: none;
   }
 
   .recent {
-    color: variables.$gray-50;
+    color: var(--app-text-secondary);
     font-style: normal !important;
     margin-left: 0;
     padding-top: 5px;
   }
 
   .step-description {
-    color: variables.$gray-60;
+    color: var(--app-text-secondary);
     margin-left: 16px;
     min-height: 20px;
     pointer-events: none;
   }
 
   .step-four-text {
-    color: black;
+    color: var(--app-text-primary);
     display: inline;
     margin-left: 0;
     min-height: 20px;
@@ -253,6 +261,10 @@
 }
 
 .size-dropdown {
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  color: var(--app-text-primary);
   margin: 10px 14px 14px;
 
   &:not([disabled]) {
@@ -261,6 +273,10 @@
 }
 
 .hub-name-input {
+  background: var(--app-control-background);
+  border-color: var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  color: var(--app-text-primary);
   margin-left: 15px;
   margin-top: 16px;
   padding-left: 5px;
@@ -272,7 +288,7 @@
 }
 
 .gradient-to-indicate-scrolling {
-  background-image: linear-gradient(rgba(230, 230, 230, 0), variables.$gray-10);
+  background-image: linear-gradient(transparent, var(--app-gallery-background));
   bottom: 0;
   display: block;
   height: 100px;
@@ -288,93 +304,7 @@
 }
 
 .wizard.wizard-dark {
-  background: variables.$gray-85;
-  color: variables.$gray-05;
   color-scheme: dark;
-
-  h1,
-  h2,
-  h3 {
-    color: variables.$gray-15;
-  }
-
-  .right-side {
-    border-left-color: variables.$gray-60;
-  }
-
-  .wizard-button {
-    background: variables.$gray-80;
-    border-color: variables.$gray-60;
-    color: variables.$gray-05;
-
-    &:hover {
-      background: variables.$gray-70;
-    }
-  }
-
-  .start-import {
-    background: variables.$gray-70;
-    border-color: variables.$pretty-blue;
-    color: variables.$white;
-    text-shadow: none;
-
-    &:hover {
-      background: variables.$gray-60;
-    }
-
-    &:disabled {
-      background: variables.$gray-80;
-      border-color: variables.$gray-60;
-      color: variables.$gray-50;
-    }
-  }
-
-  .hub-name-input,
-  .size-dropdown {
-    border-color: variables.$gray-50;
-    color: variables.$gray-05;
-  }
-
-  .hub-name-input {
-    background: transparent;
-  }
-
-  .size-dropdown {
-    background-color: variables.$gray-80;
-  }
-
-  .path,
-  .step-four-text {
-    color: variables.$gray-15;
-  }
-
-  .step-description,
-  .recent,
-  .clear-history {
-    color: variables.$gray-30;
-  }
-
-  .recently-opened-wizard {
-    color: variables.$gray-15;
-
-    li:hover .history-name {
-      text-shadow: 0 0 5px variables.$black;
-    }
-  }
-
-  .screenshot-preview {
-    background-color: variables.$gray-70;
-    border-color: variables.$gray-50;
-    color: variables.$gray-05;
-  }
-
-  input[type="radio"]:checked:before {
-    border-color: variables.$gray-85;
-  }
-
-  .gradient-to-indicate-scrolling {
-    background-image: linear-gradient(rgba(34, 34, 34, 0), variables.$gray-85);
-  }
 }
 
 @media (max-width: 760px) {
@@ -391,7 +321,7 @@
 
   .right-side {
     border-left: 0 !important;
-    border-top: 1px solid variables.$gray-20;
+    border-top: 1px solid var(--app-border-subtle);
     margin-bottom: 100px;
     margin-left: 20px;
     min-height: initial !important;
@@ -407,7 +337,4 @@
     }
   }
 
-  .wizard-dark .right-side {
-    border-top-color: variables.$gray-60;
-  }
 }

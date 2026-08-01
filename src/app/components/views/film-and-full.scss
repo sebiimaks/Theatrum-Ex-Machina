@@ -9,12 +9,20 @@
 .filmstrip-container {
     background-color: black;
     background-repeat: no-repeat;
+    border: 1px solid var(--app-border-strong);
+    border-radius: var(--app-panel-radius);
+    box-shadow: var(--app-shadow-subtle);
+    box-sizing: border-box;
     cursor: pointer;
     height: 100px;
-    outline: 3px solid black;
     overflow-y: hidden;
     position: relative;
+    transition: border-color var(--app-motion-fast);
     width: 100%;
+
+    &:hover {
+        border-color: var(--app-accent);
+    }
 }
 
 .title {

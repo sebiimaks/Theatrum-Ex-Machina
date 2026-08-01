@@ -22,6 +22,7 @@
 .length,
 .size {
   color: rgba(255, 255, 255, 0.5);
+  font-family: var(--app-font-mono);
   font-size: 10px;
   position: absolute;
   z-index: 200;
@@ -46,14 +47,19 @@
   text-overflow: ellipsis;
   // above all needed together for line-clamp
 
-  color: variables.$gray-70;
+  color: var(--app-text-secondary);
   cursor: pointer;
   font-size: 12px;
   margin: 6px 2px 0px;
   max-height: 54px;
   text-align: left;
+  transition: color var(--app-motion-fast);
   width: 100%;
   word-wrap: break-word;
+
+  &:hover {
+    color: var(--app-accent-text);
+  }
 }
 
 .larger-font {
@@ -62,7 +68,7 @@
 
 // add arrows styling to what the folder-arrows.pipe puts out
 ::ng-deep .icon-arrow:before {
-  color: variables.$gray-50;
+  color: var(--app-text-secondary);
   content: '\f1a0'; // chevron-right
   display: inline-block;
   font-family: "vh-icon-font";

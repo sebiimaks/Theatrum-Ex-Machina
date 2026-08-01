@@ -1,5 +1,16 @@
 @use "../variables";
 
+:host {
+  color: var(--app-text-primary);
+}
+
+input,
+select {
+  background-color: var(--app-control-background);
+  border-color: var(--app-border-strong);
+  color: var(--app-text-primary);
+}
+
 .additional-extenstions-setting {
   font-size: 14px;
   font-style: italic;
@@ -41,29 +52,29 @@
 :host-context(.settings-modal-dark) {
   .button-description-text,
   .misc-settings {
-    color: variables.$gray-10;
+    color: var(--app-text-primary);
   }
 
   input,
   select {
-    background-color: variables.$gray-90;
-    border-color: variables.$gray-60;
-    color: variables.$gray-05;
+    background-color: var(--app-control-background);
+    border-color: var(--app-border-strong);
+    color: var(--app-text-primary);
   }
 
   .credits-and-help {
-    color: variables.$gray-20;
+    color: var(--app-text-secondary);
 
     &:hover {
-      color: variables.$light-blue;
+      color: var(--app-accent-text);
     }
   }
 
   .credits-attribution {
-    color: variables.$gray-30;
+    color: var(--app-text-secondary);
   }
 
   .zoom-buttons .zoom-icon-button app-icon {
-    fill: variables.$gray-05;
+    fill: var(--app-text-primary);
   }
 }

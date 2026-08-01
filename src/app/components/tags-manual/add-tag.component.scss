@@ -13,22 +13,22 @@
   z-index: 2;
 
   &::placeholder {
-    color: variables.$gray-50;
-    opacity: 0.8;
+    color: var(--app-text-secondary);
+    opacity: 1;
   }
 }
 
 .dark-mode {
-  border-color: variables.$gray-60;
-  color: white;
+  border-color: var(--app-border-strong);
+  color: var(--app-text-primary);
 
   &::placeholder {
-    color: variables.$gray-60;
+    color: var(--app-text-secondary);
   }
 }
 
 .typeahead {
-  color: variables.$pretty-blue;
+  color: var(--app-accent-text);
   font-size: 12px;
   left: 4px;
   pointer-events: none;

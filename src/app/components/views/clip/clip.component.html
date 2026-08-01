@@ -73,7 +73,6 @@
   @if (showMeta() && video.fileName !== '*UP*') {
     <span
       [ngClass]="{ 'larger-font': largerFont() }"
-      [ngStyle]="{ color: darkMode() ? '#BBBBBB' : '#000000' }"
       class="title"
     >
       {{ video.fileName }}
@@ -169,7 +168,6 @@
 @if (showMeta()) {
   <span
     [ngClass]="{ 'larger-font': largerFont() }"
-    [ngStyle]="{ color: darkMode() ? '#BBBBBB' : '#000000' }"
     class="title"
   >
     {{ video.cleanName }}

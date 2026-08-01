@@ -17,13 +17,13 @@
 }
 
 .shortcut-key {
-  background: variables.$white;
-  border: 1px solid variables.$gray-50;
-  border-radius: 3px;
-  box-shadow: 1px 1px 3px rgba(0,0,0,0.1);
-  color: black;
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  box-shadow: var(--app-shadow-subtle);
+  color: var(--app-text-primary);
   display: inline-block;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
   font-style: normal;
   margin-right: 6px;
   padding: 3px 5px 3px 5px;
@@ -49,11 +49,13 @@
 }
 
 .selected-for-change {
-  box-shadow: 0 0 5px 2px variables.$pretty-blue;
+  background: var(--app-accent-soft);
+  border-color: var(--app-accent);
+  box-shadow: 0 0 0 2px var(--app-accent-soft);
 }
 
 .empty {
-  color: white;
+  color: var(--app-text-secondary);
 }
 
 .space-after {
@@ -62,6 +64,7 @@
 
 .disabled {
   cursor: not-allowed;
+  opacity: 0.55;
 }
 
 @media (max-width: 700px) {

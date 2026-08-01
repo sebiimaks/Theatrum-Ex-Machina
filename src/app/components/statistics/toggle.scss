@@ -18,7 +18,9 @@
 
 /* The slider */
 .slider {
-  background-color: #ccc;
+  background-color: var(--app-control-hover);
+  border: 1px solid var(--app-border-strong);
+  box-sizing: border-box;
   bottom: 0;
   cursor: pointer;
   left: 0;
@@ -30,7 +32,8 @@
 }
 
 .slider:before {
-  background-color: white;
+  background-color: var(--app-elevated-background);
+  box-shadow: var(--app-shadow-subtle);
   bottom: 4px;
   content: "";
   height: 26px;
@@ -42,11 +45,12 @@
 }
 
 input:checked + .slider {
-  background-color: #2196F3;
+  background-color: var(--app-accent);
+  border-color: var(--app-accent);
 }
 
 input:focus + .slider {
-  box-shadow: 0 0 1px #2196F3;
+  box-shadow: 0 0 0 2px var(--app-accent-soft);
 }
 
 input:checked + .slider:before {

@@ -47,6 +47,7 @@
         >
 
         <select
+          class="catalogue-search-field"
           [(ngModel)]="criterion.field"
           (ngModelChange)="refreshFilteredEntries()"
           [attr.aria-label]="'Search field for line ' + (criterionIndex + 1)"
@@ -58,6 +59,17 @@
           <option value="path">Folder</option>
           <option value="tags">Tags</option>
           <option value="hash">Hash</option>
+        </select>
+
+        <select
+          class="catalogue-search-operator"
+          [(ngModel)]="criterion.operator"
+          (ngModelChange)="refreshFilteredEntries()"
+          [attr.aria-label]="'Search match type for line ' + (criterionIndex + 1)"
+          title="Search Condition"
+        >
+          <option value="contains">Contains</option>
+          <option value="doesNotContain">Does not contain</option>
         </select>
 
         <button

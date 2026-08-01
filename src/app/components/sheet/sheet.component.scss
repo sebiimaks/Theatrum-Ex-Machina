@@ -1,17 +1,18 @@
 @use "../variables";
 
 .sheet-modal {
-  background: variables.$gray-10;
-  border: 1px solid variables.$gray-50;
-  border-radius: 10px;
-  box-shadow: 0 3px 7px 3px rgba(0, 0, 0, 0.3);
+  background: var(--app-elevated-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-panel-radius);
+  box-shadow: var(--app-shadow-elevated);
   box-sizing: border-box;
-  height: calc(100vh - 50px);
+  color: var(--app-text-primary);
+  height: calc(100vh - var(--app-titlebar-height) - 30px);
   left: 10vw;
   overflow-y: scroll;
   padding: 2%;
   position: fixed;
-  top: 35px;
+  top: calc(var(--app-titlebar-height) + 15px);
   width: calc(80vw + 10px);
   z-index: 30;
 
@@ -19,6 +20,8 @@
 }
 
 .full-path {
+  color: var(--app-text-secondary);
+  fill: var(--app-text-secondary);
   cursor: pointer;
   font-size: 12px;
   margin: 20px;
@@ -31,6 +34,9 @@
   }
 
   &:hover {
+    color: var(--app-accent-text);
+    fill: var(--app-accent);
+
     .copy-to-clipboard {
       display: inline-block;
     }
@@ -38,26 +44,26 @@
 }
 
 .dark-path {
-  color: variables.$gray-30;
-  fill: variables.$gray-30;
+  color: var(--app-text-secondary);
+  fill: var(--app-text-secondary);
 }
 
 .sheet-modal-dark-mode {
-  background-color: variables.$gray-80;
+  background-color: var(--app-elevated-background);
 
   .details-zoom-buttons {
     .defaultSettingsButton {
-      background: variables.$gray-70;
-      border-color: variables.$gray-50;
-      color: variables.$white;
+      background: var(--app-control-background);
+      border-color: var(--app-border-strong);
+      color: var(--app-text-primary);
 
       &:hover {
-        background-color: variables.$gray-60 !important;
+        background-color: var(--app-control-hover) !important;
       }
     }
 
     app-icon {
-      fill: variables.$white;
+      fill: var(--app-text-primary);
     }
 
     .reset-button {
@@ -86,7 +92,8 @@
 .video-box {
   background-color: black;
   background-size: cover;
-  border-radius: 6px;
+  border-radius: var(--app-panel-radius);
+  box-shadow: var(--app-shadow-subtle);
   cursor: pointer;
   height: 100%;
   overflow: hidden;

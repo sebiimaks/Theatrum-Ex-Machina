@@ -6,6 +6,7 @@
 }
 
 .statistics {
+  color: var(--app-text-primary);
   font-size: 12px;
 }
 
@@ -21,10 +22,10 @@
 
     tr {
       td:first-child:not(.span-both) {
-        color: variables.$gray-50;
+        color: var(--app-text-secondary);
       }
       td:nth-child(2) {
-        font-family: monospace;
+        font-family: var(--app-font-mono);
       }
     }
 
@@ -32,7 +33,7 @@
 }
 
 .stats-heading {
-  color: variables.$gray-70;
+  color: var(--app-text-primary);
   display: block;
   font-size: 14px;
   margin-top: 20px;
@@ -55,7 +56,7 @@
 }
 
 .title {
-  color: variables.$black;
+  color: var(--app-text-primary);
   font-weight: bold;
 }
 
@@ -74,6 +75,7 @@
 }
 
 .folder {
+  color: var(--app-text-secondary);
   font-style: italic;
   margin-top: 10px;
 }
@@ -136,10 +138,10 @@
 }
 
 .regenerate-folder-thumbnails {
-  background: transparent;
-  border: 1px solid variables.$gray-50;
-  border-radius: 5px;
-  color: variables.$dark-blue;
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  color: var(--app-accent-text);
   cursor: pointer;
   flex: 0 0 auto;
   font-size: 11px;
@@ -148,8 +150,9 @@
 
   &:hover:not(:disabled),
   &:focus-visible {
-    border-color: variables.$pretty-blue;
-    outline: 1px solid variables.$pretty-blue;
+    background: var(--app-accent-soft);
+    border-color: var(--app-accent);
+    outline: 1px solid var(--app-accent);
   }
 
   &:disabled {
@@ -159,7 +162,7 @@
 }
 
 .folder-thumbnail-regeneration-progress {
-  color: variables.$gray-70;
+  color: var(--app-text-secondary);
   font-size: 12px;
   grid-column: 2 / 4;
   min-height: 16px;
@@ -172,6 +175,7 @@
 }
 
 .watch-folder-note {
+  color: var(--app-text-secondary);
   display: block;
   left: -52px;
   position: absolute;
@@ -187,7 +191,7 @@
 }
 
 .delete-input-folder {
-  color: variables.$pretty-red;
+  color: var(--app-destructive);
   cursor: pointer;
   font-weight: bold;
   right: calc(100% + 10px);
@@ -199,13 +203,14 @@
 }
 
 .rescan-input-folder {
-  color: variables.$pretty-blue;
+  color: var(--app-accent-text);
   cursor: pointer;
   font-weight: bold;
   right: calc(100% + 47px);
 }
 
 .input-not-connected {
+  color: var(--app-destructive);
   cursor: pointer;
   font-style: italic;
   min-width: 200px;
@@ -248,7 +253,7 @@
 
 .number-of-thumbs-deleted {
   bottom: -26px;
-  color: variables.$pretty-blue;
+  color: var(--app-accent-text);
   position: absolute;
   right: 0;
   width: 100%;
@@ -256,9 +261,9 @@
 
 .progress-gradient-animation {
   animation: gradient 3s infinite;
-  background: linear-gradient(90deg, rgba(255,255,255,0) 35%, variables.$pretty-blue 50% , rgba(255,255,255,0) 65%);
+  background: linear-gradient(90deg, transparent 35%, var(--app-accent) 50%, transparent 65%);
   background-size: 300%;
-  color: variables.$gray-70;
+  color: var(--app-text-secondary);
   pointer-events: none;
 }
 
@@ -281,21 +286,23 @@
 }
 
 .port-select {
-  background-color: variables.$gray-10;
-  border: 0;
+  background-color: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  color: var(--app-text-primary);
   cursor: pointer;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
   margin-left: 12px;
   outline: none;
   width: 56px;
 }
 
 .ip-address {
-  font-family: monospace;
+  font-family: var(--app-font-mono);
 }
 
 .server-location {
-  color: variables.$dark-blue;
+  color: var(--app-accent-text);
   display: flex;
   font-size: 20px;
   justify-content: center;
@@ -311,15 +318,17 @@
 }
 
 .or {
-  color: variables.$black;
+  color: var(--app-text-primary);
   font-size: 14px;
   margin-right: 14px;
 }
 
 .manual-tag-tray-label-info { // copied from `tag-tray.component.scss`
-  background-color: #eeeeee;
-  border: 1px solid #888888;
-  border-radius: 5px;
+  background-color: var(--app-elevated-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-panel-radius);
+  box-shadow: var(--app-shadow-elevated);
+  color: var(--app-text-primary);
   font-size: 12px;
   left: calc(50% - 100px); // changed after copy/paste
   opacity: 0;
@@ -336,7 +345,7 @@
 }
 
 .gray {
-  color: #888888;
+  color: var(--app-text-secondary);
 }
 
 .ip-text-container {
@@ -349,37 +358,37 @@
 
 :host-context(.settings-modal-dark) {
   ::ng-deep .input-folder .folder-path-final-segment {
-    color: variables.$white;
+    color: var(--app-text-primary);
   }
 
   .stats-heading,
   .watch-folder-note {
-    color: variables.$gray-20;
+    color: var(--app-text-primary);
   }
 
   .title {
-    color: variables.$white;
+    color: var(--app-text-primary);
   }
 
   .table-container .stats-table tr td:first-child:not(.span-both) {
-    color: variables.$gray-30;
+    color: var(--app-text-secondary);
   }
 
   .or {
-    color: variables.$gray-20;
+    color: var(--app-text-primary);
   }
 
   .port-select {
-    background-color: variables.$gray-90;
-    color: variables.$gray-05;
+    background-color: var(--app-control-background);
+    color: var(--app-text-primary);
   }
 
   .regenerate-folder-thumbnails {
-    border-color: variables.$gray-40;
-    color: variables.$gray-05;
+    border-color: var(--app-border-strong);
+    color: var(--app-accent-text);
   }
 
   .folder-thumbnail-regeneration-progress {
-    color: variables.$gray-20;
+    color: var(--app-text-secondary);
   }
 }

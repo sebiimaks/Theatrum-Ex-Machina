@@ -15,7 +15,13 @@ Changes under Unreleased are present on the production branch but have not yet b
 
 ## Unreleased
 
-No unreleased changes.
+### Modernise the Interface with a Mac-Sleek Frosted Graphite Design
+
+Refined the application-wide interface around a compact Frosted Graphite design while preserving the existing workflows and information density. The update introduces consistent system-style typography, spacing, borders, focus states, controls, and semantic colours across the title bar, ribbon, sidebar, gallery, bottom trays, settings, wizard, Catalogue Editor, video details, dialogs, and contextual menus. Light and dark modes now remain visually coherent throughout the interface, with stronger tag and text contrast, readable inactive tabs, correctly contained settings selections, a more conventionally proportioned macOS title bar, a visible dark-mode wizard close control, and a centred Delete action. The toolbar, gallery, settings, and tray layouts retain their established functionality while presenting clearer hierarchy and more consistent interaction feedback.
+
+### Add Inclusive and Exclusive Catalogue Editor Search
+
+Each Catalogue Editor search row can now be set to Contains or Does Not Contain. Matching is case-insensitive, multiple non-empty rows continue to narrow results together, and exclusion searches include entries whose selected field is missing because those entries do not contain the excluded value. The search controls remain compact and responsive when several criteria are added, and focused tests cover combined inclusion and exclusion filters, missing fields, whitespace-only criteria, and searches across all supported fields.
 
 ## [v3.3.0-tem.1](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.1) — 1 August 2026
 

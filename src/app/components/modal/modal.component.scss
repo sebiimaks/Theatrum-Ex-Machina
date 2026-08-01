@@ -1,17 +1,20 @@
 @use "../variables";
 
 h1 {
+  color: var(--app-text-primary);
   font-size: 16px;
   margin-bottom: 20px;
   text-align: center;
 }
 
 span {
+  color: var(--app-text-primary);
   display: block;
   margin: 10px 10px 20px;
 }
 
 .message {
+  color: var(--app-text-secondary);
   font-style: italic;
 }
 
@@ -23,17 +26,28 @@ span {
 }
 
 .dialog-button {
-  background: variables.$gray-10;
-  border: 1px solid variables.$gray-40;
-  border-radius: 6px;
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  color: var(--app-text-primary);
   cursor: pointer;
   min-width: 80px;
   padding: 8px 14px;
+
+  &:hover {
+    background: var(--app-control-hover);
+    border-color: var(--app-accent);
+  }
 }
 
 .dialog-button-delete {
-  background: variables.$pretty-red;
-  border-color: variables.$dark-red;
-  color: variables.$black;
+  background: var(--app-action-background);
+  border-color: var(--app-action-background);
+  color: var(--app-on-action);
   font-weight: bold;
+
+  &:hover {
+    background: var(--app-action-hover);
+    border-color: var(--app-action-hover);
+  }
 }

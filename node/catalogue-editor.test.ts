@@ -32,18 +32,51 @@ test('combines non-empty search lines as narrowing criteria', () => {
     second,
     third,
   ], [
-    { field: 'name', id: 0, query: 'alpine' },
-    { field: 'tags', id: 1, query: 'blue' },
-    { field: 'hash', id: 2, query: '   ' },
+    { field: 'name', id: 0, operator: 'contains', query: 'alpine' },
+    { field: 'tags', id: 1, operator: 'contains', query: 'blue' },
+    { field: 'hash', id: 2, operator: 'doesNotContain', query: '   ' },
   ], false);
 
   assert.deepEqual(results, [first]);
 });
 
+test('supports contains and does not contain as combined case-insensitive criteria', () => {
+  const first = image({ cleanName: 'Forest Walk', tags: ['Travel', 'green'] });
+  const second = image({ cleanName: 'Forest Drive', tags: ['travel', 'green'], index: 2 });
+  const third = image({ cleanName: 'City Walk', tags: ['travel', 'BLUE'], index: 3 });
+
+  const results = filterCatalogueEntries([
+    first,
+    second,
+    third,
+  ], [
+    { field: 'name', id: 0, operator: 'contains', query: 'WALK' },
+    { field: 'tags', id: 1, operator: 'doesNotContain', query: 'blue' },
+  ], false);
+
+  assert.deepEqual(results, [first]);
+});
+
+test('applies does not contain across all searchable fields and includes missing values', () => {
+  const first = image({ notes: 'Private reference' });
+  const second = image({ index: 2, notes: 'Public reference' });
+  const third = image({ index: 3 });
+
+  const results = filterCatalogueEntries([
+    first,
+    second,
+    third,
+  ], [
+    { field: 'all', id: 0, operator: 'doesNotContain', query: 'PRIVATE' },
+  ], false);
+
+  assert.deepEqual(results, [second, third]);
+});
+
 test('keeps deleted entries hidden unless explicitly requested', () => {
   const active = image({ cleanName: 'Active' });
   const deleted = image({ cleanName: 'Deleted', deleted: true, index: 2 });
-  const criteria = [{ field: 'all' as const, id: 0, query: '' }];
+  const criteria = [{ field: 'all' as const, id: 0, operator: 'contains' as const, query: '' }];
 
   assert.deepEqual(filterCatalogueEntries([active, deleted], criteria, false), [active]);
   assert.deepEqual(filterCatalogueEntries([active, deleted], criteria, true), [active, deleted]);

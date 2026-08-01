@@ -6,12 +6,14 @@ import {
 } from '../../../../interfaces/date-added';
 
 export type CatalogueSearchField = 'all' | 'name' | 'file' | 'path' | 'tags' | 'hash';
+export type CatalogueSearchOperator = 'contains' | 'doesNotContain';
 export type CatalogueOverwriteField = 'cleanName' | 'dateAdded' | 'stars' | 'year' | 'timesPlayed' | 'defaultScreen' | 'notes';
 export type CatalogueOverwriteValue = number | string | undefined;
 
 export interface CatalogueSearchCriterion {
   field: CatalogueSearchField;
   id: number;
+  operator: CatalogueSearchOperator;
   query: string;
 }
 
@@ -81,17 +83,28 @@ export function filterCatalogueEntries(
     .map((criterion: CatalogueSearchCriterion) => ({
       field: criterion.field,
       needle: criterion.query.trim().toLowerCase(),
+      operator: criterion.operator,
     }))
-    .filter((criterion: { field: CatalogueSearchField; needle: string }) => Boolean(criterion.needle));
+    .filter((criterion: { field: CatalogueSearchField; needle: string; operator: CatalogueSearchOperator }) => (
+      Boolean(criterion.needle)
+    ));
 
   return images.filter((item: ImageElement) => {
     if (!showDeleted && item.deleted) {
       return false;
     }
 
-    return activeCriteria.every((criterion: { field: CatalogueSearchField; needle: string }) => (
-      getCatalogueSearchText(item, criterion.field).includes(criterion.needle)
-    ));
+    return activeCriteria.every((criterion: {
+      field: CatalogueSearchField;
+      needle: string;
+      operator: CatalogueSearchOperator;
+    }) => {
+      const fieldContainsQuery = getCatalogueSearchText(item, criterion.field).includes(criterion.needle);
+
+      return criterion.operator === 'doesNotContain'
+        ? !fieldContainsQuery
+        : fieldContainsQuery;
+    });
   });
 }
 
