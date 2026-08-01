@@ -4,7 +4,7 @@
 
 **All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
 
-- Current fork version: `v3.3.0-sin.8`
+- Current fork version: `v3.3.0-tem.1`
 - Change summary updated: 01/08/2026
 
 # Fork Changelog
@@ -14,6 +14,10 @@ This changelog covers fork-specific commits made after the upstream baseline at 
 Changes under Unreleased are present on the production branch but have not yet been assigned to a tagged release.
 
 ## Unreleased
+
+No unreleased changes.
+
+## [v3.3.0-tem.1](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.1) — 1 August 2026
 
 ### Rebrand the Application as Theatrum Ex Machina
 
