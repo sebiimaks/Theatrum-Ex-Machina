@@ -50,6 +50,7 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
   readonly startServerOnPort = output<number>();
 
   readonly appState = input<AppStateInterface>();
+  readonly darkMode = input<boolean>(false);
   readonly hubName = input<string>();
   readonly inputFolders = input<InputSources>();
   readonly folderThumbnailRegenerationStatus = input<FolderThumbnailRegenerationStatus | null>(null);

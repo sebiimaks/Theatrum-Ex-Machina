@@ -938,6 +938,11 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
     // If no previously saved settings exist, this gets sent over
     this.electronService.ipcRenderer.on('set-language-based-off-system-locale', (event, localeString: string) => {
+      if (!this.hasResolvedInitialTheme) {
+        this.settingsButtons['darkMode'].toggled = true;
+        this.hasResolvedInitialTheme = true;
+        this.syncAppIconTheme();
+      }
       if (localeString) {
         this.setOrRestoreLanguage(undefined, localeString);
       }
@@ -957,6 +962,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
         this.settingsButtons['darkMode'].toggled = true;
       }
       this.hasResolvedInitialTheme = true;
+      this.syncAppIconTheme();
       this.setOrRestoreLanguage(settingsObject.appState.language, locale);
       if (settingsObject.wizardOptions) {
         this.wizard = settingsObject.wizardOptions;
@@ -1331,6 +1337,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       if (!this.hasResolvedInitialTheme) {
         this.settingsButtons['darkMode'].toggled = true;
         this.hasResolvedInitialTheme = true;
+        this.syncAppIconTheme();
       }
       if (firstRun) {
         this.firstRunLogic();
@@ -2076,6 +2083,9 @@ export class HomeComponent implements OnInit, AfterViewInit {
         }, 300);
       }
     }
+    if (uniqueKey === 'darkMode') {
+      this.syncAppIconTheme();
+    }
     if (!fromIpc) {
       this.electronService.ipcRenderer.send('app-to-touchBar', uniqueKey);
     } else {
@@ -2394,6 +2404,17 @@ export class HomeComponent implements OnInit, AfterViewInit {
   resetSettingsToDefault(): void {
     this.settingsButtons = JSON.parse(JSON.stringify(this.defaultSettingsButtons)); // JSON hack to allow resetting more than once
     this.toggleButton('showThumbnails');
+    this.syncAppIconTheme();
+  }
+
+  private syncAppIconTheme(): void {
+    if (!this.macVersion || !this.hasResolvedInitialTheme) {
+      return;
+    }
+    this.electronService.ipcRenderer.send(
+      'set-app-icon-theme',
+      this.settingsButtons['darkMode'].toggled ? 'dark' : 'light',
+    );
   }
 
   /**

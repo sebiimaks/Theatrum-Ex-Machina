@@ -9,7 +9,13 @@
   <div
     class="draggable"
   >
-    <img width="16px" height="16px" class="top-logo" src="./assets/logo.png">
+    <img
+      width="16px"
+      height="16px"
+      class="top-logo"
+      [src]="settingsButtons().darkMode.toggled ? './assets/logo-dark.png' : './assets/logo-light.png'"
+      alt=""
+    >
     <span
       class="heading-title"
     >

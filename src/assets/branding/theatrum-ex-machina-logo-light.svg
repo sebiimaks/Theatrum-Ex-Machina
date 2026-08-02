@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Blue T macOS-style icon — Georgia, light</title>
+  <desc id="desc">A blue capital T set in Georgia on a white squircle with prominent translucent binary digits.</desc>
+  <defs>
+    <path id="squircle" d="M512 30 C718 30 828 30 908 110 C988 190 988 300 988 506 C988 712 988 822 908 902 C828 982 718 982 512 982 C306 982 196 982 116 902 C36 822 36 712 36 506 C36 300 36 190 116 110 C196 30 306 30 512 30 Z"/>
+    <clipPath id="iconClip"><use href="#squircle"/></clipPath>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.55" stop-color="#f5f8fc"/><stop offset="1" stop-color="#e7edf5"/></linearGradient>
+    <radialGradient id="blueGlow" cx="50%" cy="42%" r="55%"><stop offset="0" stop-color="#288fff" stop-opacity="0.13"/><stop offset="0.72" stop-color="#288fff" stop-opacity="0.035"/><stop offset="1" stop-color="#288fff" stop-opacity="0"/></radialGradient>
+    <linearGradient id="blueT" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#55b4ff"/><stop offset="0.46" stop-color="#1687ff"/><stop offset="1" stop-color="#0560db"/></linearGradient>
+    <pattern id="bits" width="372" height="92" patternUnits="userSpaceOnUse" patternTransform="rotate(-5)">
+      <text x="-8" y="28" fill="#071a31" fill-opacity="0.23" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="24" letter-spacing="5">01001101 10100110 01101001</text>
+      <text x="-58" y="68" fill="#123c68" fill-opacity="0.18" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="24" letter-spacing="5">10110010 01011001 11000110</text>
+    </pattern>
+    <filter id="iconShadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#122033" flood-opacity="0.22"/></filter>
+    <filter id="letterShadow" x="-30%" y="-25%" width="160%" height="170%"><feDropShadow dx="0" dy="16" stdDeviation="14" flood-color="#0055aa" flood-opacity="0.28"/></filter>
+  </defs>
+  <use href="#squircle" fill="url(#background)" filter="url(#iconShadow)"/>
+  <g clip-path="url(#iconClip)">
+    <rect width="1024" height="1024" fill="url(#background)"/>
+    <rect width="1024" height="1024" fill="url(#bits)"/>
+    <circle cx="512" cy="450" r="430" fill="url(#blueGlow)"/>
+    <path d="M65 205 C260 65 760 20 958 238 L958 78 L65 78 Z" fill="#ffffff" opacity="0.48"/>
+  </g>
+  <text x="512" y="742" text-anchor="middle" fill="#0a60c2" opacity="0.24" font-family="Georgia, sans-serif" font-size="650" font-weight="700" filter="url(#letterShadow)">T</text>
+  <text x="512" y="724" text-anchor="middle" fill="url(#blueT)" font-family="Georgia, sans-serif" font-size="650" font-weight="700">T</text>
+  <text x="512" y="724" text-anchor="middle" fill="none" stroke="#ffffff" stroke-opacity="0.42" stroke-width="3" font-family="Georgia, sans-serif" font-size="650" font-weight="700">T</text>
+  <use href="#squircle" fill="none" stroke="#0f2741" stroke-opacity="0.15" stroke-width="8"/>
+</svg>

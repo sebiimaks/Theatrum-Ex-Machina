@@ -7,6 +7,8 @@
   <base href="">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="icon" type="image/png" href="assets/favicon-light.png" media="(prefers-color-scheme: light)">
+  <link rel="icon" type="image/png" href="assets/favicon-dark.png" media="(prefers-color-scheme: dark)">
   <style>
     body {
       background-color: #eeeeee;
@@ -85,7 +87,10 @@
 
 <body>
   <app-root>
-    <img src='./assets/favicon.png' class="logo">
+    <picture>
+      <source srcset="./assets/favicon-dark.png" media="(prefers-color-scheme: dark)">
+      <img src="./assets/favicon-light.png" class="logo" alt="">
+    </picture>
     <div class="spinner">
       <div class="rect1"></div>
       <div class="rect2"></div>

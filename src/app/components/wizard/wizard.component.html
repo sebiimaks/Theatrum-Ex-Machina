@@ -48,7 +48,11 @@
           >
             <app-icon [icon]="'icon-close'" />
           </div>
-          <img class="history-icon" src="./assets/logo.png">
+          <img
+            class="history-icon"
+            [src]="darkMode() ? './assets/logo-dark.png' : './assets/logo-light.png'"
+            alt=""
+          >
           <span
             class="history-name"
           >{{ historyItem.hubName }}</span>

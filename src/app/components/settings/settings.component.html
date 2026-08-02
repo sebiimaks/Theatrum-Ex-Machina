@@ -244,7 +244,12 @@
 
     <div class="app-version">
       <span>v{{ versionNumber() }} {{ demo() ? ' DEMO - limited to 50 video files' : '' }}</span>
-      <img width="30px" height="30px" src="./assets/logo.png">
+      <img
+        width="30px"
+        height="30px"
+        [src]="settingsButtons.darkMode.toggled ? './assets/logo-dark.png' : './assets/logo-light.png'"
+        alt=""
+      >
     </div>
 
   </div>

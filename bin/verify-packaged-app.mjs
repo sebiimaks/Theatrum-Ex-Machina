@@ -34,10 +34,20 @@ const correspondingSourcePath = process.argv[3] || path.join(
 
 const resourcesPath = path.join(resolvedAppPath, 'Contents', 'Resources');
 const infoPlistPath = path.join(resolvedAppPath, 'Contents', 'Info.plist');
+const packagedIconPath = path.join(resourcesPath, 'icon.icns');
+const packagedLogoPath = path.join(resourcesPath, 'assets', 'logo.png');
+const packagedThemeIconPaths = {
+  light: path.join(resourcesPath, 'assets', 'favicon-light.png'),
+  dark: path.join(resourcesPath, 'assets', 'favicon-dark.png'),
+};
 const ffmpegPath = path.join(resourcesPath, 'media-tools', 'ffmpeg');
 const ffprobePath = path.join(resourcesPath, 'media-tools', 'ffprobe');
 const requiredResources = [
   infoPlistPath,
+  packagedIconPath,
+  packagedLogoPath,
+  packagedThemeIconPaths.light,
+  packagedThemeIconPaths.dark,
   path.join(resourcesPath, 'LICENSE'),
   path.join(resourcesPath, 'licenses', 'GPL-2.0-or-later.txt'),
   path.join(resourcesPath, 'licenses', 'FFMPEG-LICENSE.md'),
@@ -143,6 +153,24 @@ for (const requiredResource of requiredResources) {
 }
 
 const infoPlist = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', infoPlistPath]));
+assert.equal(infoPlist.CFBundleIconFile, 'icon.icns', 'The packaged app does not use the reviewed icon bundle.');
+assert.equal(
+  sha256(packagedIconPath),
+  sha256(path.join(projectDirectory, 'src', 'assets', 'icons.icns')),
+  'The packaged application icon differs from the reviewed generated icon.',
+);
+assert.equal(
+  sha256(packagedLogoPath),
+  sha256(path.join(projectDirectory, 'src', 'assets', 'logo.png')),
+  'The packaged fallback logo differs from the reviewed generated logo.',
+);
+for (const [theme, packagedThemeIconPath] of Object.entries(packagedThemeIconPaths)) {
+  assert.equal(
+    sha256(packagedThemeIconPath),
+    sha256(path.join(projectDirectory, 'src', 'assets', `favicon-${theme}.png`)),
+    `The packaged ${theme} Dock icon differs from the reviewed generated icon.`,
+  );
+}
 const associatedExtensions = (infoPlist.CFBundleDocumentTypes || [])
   .flatMap((documentType) => documentType.CFBundleTypeExtensions || [])
   .map((extension) => String(extension).toLowerCase());
@@ -172,6 +200,24 @@ assert.ok(
 const applicationArchive = path.join(resourcesPath, 'app.asar');
 const archivedFiles = asar.listPackage(applicationArchive);
 const archivedFileSet = new Set(archivedFiles);
+for (const themedAsset of [
+  'assets/logo-light.png',
+  'assets/logo-dark.png',
+  'assets/favicon-light.png',
+  'assets/favicon-dark.png',
+]) {
+  const archivedAsset = `/dist/${themedAsset}`;
+  assert.ok(archivedFileSet.has(archivedAsset), `The packaged app is missing ${archivedAsset}.`);
+  const packagedAssetHash = crypto
+    .createHash('sha256')
+    .update(asar.extractFile(applicationArchive, archivedAsset.slice(1)))
+    .digest('hex');
+  assert.equal(
+    packagedAssetHash,
+    sha256(path.join(projectDirectory, 'src', themedAsset)),
+    `The packaged themed branding asset differs from its generated source: ${archivedAsset}`,
+  );
+}
 assert.ok(
   archivedFiles.includes('/node/media-tool-paths.js'),
   'The packaged app is missing its fork-owned media-tool resolver.',

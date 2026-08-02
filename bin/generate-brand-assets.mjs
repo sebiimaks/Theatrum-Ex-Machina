@@ -8,12 +8,21 @@ import { fileURLToPath } from 'node:url';
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(scriptDirectory, '..');
 const brandingDirectory = path.join(projectDirectory, 'src', 'assets', 'branding');
-const sourceSvg = path.join(brandingDirectory, 'theatrum-ex-machina-logo.svg');
-const masterPng = path.join(brandingDirectory, 'theatrum-ex-machina-logo-master.png');
-const expectedSourceHashes = new Map([
-  [sourceSvg, '1663e853ff6ee1f96ce6299cc09dc4f1156725214814deef936303557046a2ff'],
-  [masterPng, 'dc095b5e784bd3ffdd54b6332343bd1dbd0fcafdb23aaccb3a847baeb4982aac'],
-]);
+const sourceVariants = {
+  light: {
+    svg: path.join(brandingDirectory, 'theatrum-ex-machina-logo-light.svg'),
+    png: path.join(brandingDirectory, 'theatrum-ex-machina-logo-light.png'),
+    svgHash: '0cb36fc31b839d898034af6743a017d9387e828fcc5c5278f495ef49e5da7fed',
+    pngHash: '0c2a9c2797b4eaf198969634f243b65a2f5318b0974ed9f938ca79678f0ec786',
+  },
+  dark: {
+    svg: path.join(brandingDirectory, 'theatrum-ex-machina-logo-dark.svg'),
+    png: path.join(brandingDirectory, 'theatrum-ex-machina-logo-dark.png'),
+    svgHash: '0784d277c8c97fba170b349dda9b17cc95e12254a6ea5f83b6a5d14f3b896a53',
+    pngHash: '05a987157905f7259f071082a8eb2e47f5b1aebc2cd55a212d5bdd200f87007b',
+  },
+};
+const platformMasterPng = sourceVariants.dark.png;
 
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-branding-'));
 const stagingDirectory = path.join(temporaryDirectory, 'staged');
@@ -40,19 +49,23 @@ function sha256(filePath) {
 }
 
 function verifySources() {
-  for (const [sourcePath, expectedHash] of expectedSourceHashes) {
-    if (!fs.existsSync(sourcePath)) {
-      throw new Error(`Missing branding source: ${sourcePath}`);
+  for (const variant of Object.values(sourceVariants)) {
+    for (const [sourcePath, expectedHash] of [
+      [variant.svg, variant.svgHash],
+      [variant.png, variant.pngHash],
+    ]) {
+      if (!fs.existsSync(sourcePath)) {
+        throw new Error(`Missing branding source: ${sourcePath}`);
+      }
+      if (sha256(sourcePath) !== expectedHash) {
+        throw new Error(
+          `Branding source changed without review: ${sourcePath}. `
+          + 'Review all supplied light and dark source files and update their approved hashes together.',
+        );
+      }
     }
-    if (sha256(sourcePath) !== expectedHash) {
-      throw new Error(
-        `Branding source changed without review: ${sourcePath}. `
-        + 'Review both supplied source files and update their approved hashes together.',
-      );
-    }
+    assertPng(variant.png, 1024);
   }
-
-  assertPng(masterPng, 1600);
 }
 
 function imageProperties(imagePath) {
@@ -82,11 +95,11 @@ function assertPng(imagePath, expectedSize) {
   }
 }
 
-function resize(size, outputPath) {
+function resize(sourcePath, size, outputPath) {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   run('sips', [
     '--resampleHeightWidth', String(size), String(size),
-    masterPng,
+    sourcePath,
     '--out', outputPath,
   ]);
 }
@@ -183,7 +196,7 @@ const filesToInstall = [];
 const pngSizes = [16, 24, 32, 48, 64, 96, 128, 256, 512];
 for (const size of pngSizes) {
   const stagedPath = path.join(stagedPngDirectory, `${size}x${size}.png`);
-  resize(size, stagedPath);
+  resize(platformMasterPng, size, stagedPath);
   assertPng(stagedPath, size);
   filesToInstall.push([
     stagedPath,
@@ -191,13 +204,17 @@ for (const size of pngSizes) {
   ]);
 }
 
-for (const [size, destinationPath] of [
-  [162, path.join(projectDirectory, 'src', 'assets', 'logo.png')],
-  [512, path.join(projectDirectory, 'src', 'assets', 'favicon.png')],
-  [512, path.join(projectDirectory, 'src', 'favicon.png')],
+for (const [sourcePath, size, destinationPath] of [
+  [platformMasterPng, 162, path.join(projectDirectory, 'src', 'assets', 'logo.png')],
+  [sourceVariants.light.png, 162, path.join(projectDirectory, 'src', 'assets', 'logo-light.png')],
+  [sourceVariants.dark.png, 162, path.join(projectDirectory, 'src', 'assets', 'logo-dark.png')],
+  [platformMasterPng, 512, path.join(projectDirectory, 'src', 'assets', 'favicon.png')],
+  [sourceVariants.light.png, 512, path.join(projectDirectory, 'src', 'assets', 'favicon-light.png')],
+  [sourceVariants.dark.png, 512, path.join(projectDirectory, 'src', 'assets', 'favicon-dark.png')],
+  [platformMasterPng, 512, path.join(projectDirectory, 'src', 'favicon.png')],
 ]) {
   const stagedPath = path.join(stagingDirectory, `${filesToInstall.length}-${size}.png`);
-  resize(size, stagedPath);
+  resize(sourcePath, size, stagedPath);
   assertPng(stagedPath, size);
   filesToInstall.push([stagedPath, destinationPath]);
 }
@@ -225,7 +242,7 @@ const iconsetEntries = [
 ];
 for (const [fileName, size] of iconsetEntries) {
   const stagedPath = path.join(iconsetDirectory, fileName);
-  resize(size, stagedPath);
+  resize(platformMasterPng, size, stagedPath);
   assertPng(stagedPath, size);
 }
 
@@ -247,4 +264,4 @@ for (const destinationPath of [
 }
 
 installTogether(filesToInstall);
-console.log('Generated and verified Theatrum Ex Machina application branding assets.');
+console.log('Generated and verified light and dark Theatrum Ex Machina branding assets.');

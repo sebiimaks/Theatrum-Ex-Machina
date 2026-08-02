@@ -327,7 +327,7 @@ export const SettingsButtons: SettingsButtonsType = {
     iconName: 'icon-darken',
     settingsHeading: 'SETTINGS.darkMode',
     title: 'BUTTONS.darkModeHint',
-    toggled: false
+    toggled: true
   },
   'doubleClickMode': {
     description: 'BUTTONS.doubleClickModeDescription',

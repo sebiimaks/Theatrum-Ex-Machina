@@ -76,6 +76,27 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
     });
   };
 
+  const setMacDockIconTheme = (theme: unknown): void => {
+    if (process.platform !== 'darwin' || !app.dock) {
+      return;
+    }
+    if (theme !== 'light' && theme !== 'dark') {
+      console.warn('Ignored invalid app icon theme.');
+      return;
+    }
+
+    const iconFileName = `favicon-${theme}.png`;
+    const iconPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'assets', iconFileName)
+      : path.join(__dirname, '../src/assets', iconFileName);
+    const icon = nativeImage.createFromPath(iconPath);
+    if (icon.isEmpty()) {
+      console.warn('Unable to load app icon theme:', iconPath);
+      return;
+    }
+    app.dock.setIcon(icon);
+  };
+
   const launchDetachedProcess = (launch: ProcessLaunch, event): void => {
     try {
       const child = spawn(launch.command, launch.args, {
@@ -111,6 +132,13 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
     if (BrowserWindow.getFocusedWindow()) {
       BrowserWindow.getFocusedWindow().minimize();
     }
+  });
+
+  /**
+   * Keep the running macOS Dock icon consistent with the app's configured theme.
+   */
+  trustedIpcOn('set-app-icon-theme', (event, theme: unknown): void => {
+    setMacDockIconTheme(theme);
   });
 
   /**

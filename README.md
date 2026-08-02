@@ -5,7 +5,7 @@
 **All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
 
 - Current fork version: `v3.3.0-tem.1`
-- Change summary updated: 01/08/2026
+- Change summary updated: 02/08/2026
 
 # Fork Changelog
 
@@ -22,6 +22,10 @@ Refined the application-wide interface around a compact Frosted Graphite design 
 ### Add Inclusive and Exclusive Catalogue Editor Search
 
 Each Catalogue Editor search row can now be set to Contains or Does Not Contain. Matching is case-insensitive, multiple non-empty rows continue to narrow results together, and exclusion searches include entries whose selected field is missing because those entries do not contain the excluded value. The search controls remain compact and responsive when several criteria are added, and focused tests cover combined inclusion and exclusion filters, missing fields, whitespace-only criteria, and searches across all supported fields.
+
+### Replace the Application Branding with Theme-Aware Blue T Artwork
+
+Replaced the previous green roundel with supplied light and dark Blue T artwork throughout the title bar, hub wizard, Current Hub information, settings, startup splash, browser favicon, application bundle, `.scaena` file association, and generated macOS, Windows, and Linux icon sets. Dark mode is now the default for both the interface and the static application icon. While the application is running on macOS, its Dock icon follows the saved in-app theme immediately rather than relying on the operating-system appearance; the installed Finder and Launchpad icon remains the dark default because traditional application icon bundles cannot switch dynamically. The original SVG and PNG masters are retained with approved hashes, all derivative sizes are generated reproducibly, and packaged-app verification now confirms the static icon, both themed runtime assets, startup, dependencies, and licensing payload.
 
 ## [v3.3.0-tem.1](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.1) — 1 August 2026
 

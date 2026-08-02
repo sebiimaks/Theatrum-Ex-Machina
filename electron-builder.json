@@ -43,6 +43,14 @@
     {
       "from": "src/assets/logo.png",
       "to": "assets/logo.png"
+    },
+    {
+      "from": "src/assets/favicon-light.png",
+      "to": "assets/favicon-light.png"
+    },
+    {
+      "from": "src/assets/favicon-dark.png",
+      "to": "assets/favicon-dark.png"
     }
   ],
   "win": {
