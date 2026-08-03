@@ -9,201 +9,154 @@
 
 # Fork Changelog
 
-This changelog covers fork-specific commits made after the upstream baseline at [`dcb3229`](https://github.com/whyboris/Video-Hub-App/commit/dcb3229) and groups them under the first tagged fork release that contains them.
+This changelog covers material fork-specific changes made after the upstream baseline at [`dcb3229`](https://github.com/whyboris/Video-Hub-App/commit/dcb3229). Documentation-only, CI-only, release-bookkeeping, and temporary workflow commits are intentionally omitted. Select a commit to expand its details.
 
 Changes under Unreleased are present on the production branch but have not yet been assigned to a tagged release.
 
 ## Unreleased
 
-### Make Repeated Rescans Safe and Preserve Temporarily Unavailable Entries
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/3d5b67c"><code>3d5b67c</code></a> — <strong>Make rescans recoverable and restore settings feedback</strong></summary>
+<p>Repeated folder scans now use isolated per-source snapshots, ignore stale or failed results, and retain temporarily unavailable videos so tags, notes, ratings, play history, Date Added, and other user metadata survive network or external-drive interruptions. Recovered or renamed files replace their previous entry instead of accumulating obsolete records. Unavailable entries stay out of the normal gallery and thumbnail work and can be filtered explicitly in the Catalogue Editor. Settings option icons also retain visible selected states and balanced spacing, while inactive tabs use opaque theme-aware hover feedback.</p>
+</details>
 
-Folder rescans now use fresh per-source snapshots and ignore stale, overlapping, failed, or superseded results, preventing repeated scans and source-folder changes from importing duplicates or applying an incomplete file list. Files absent from a completed scan are retained as temporarily unavailable rather than marked for deletion, preserving their tags, notes, ratings, play history, Date Added, default screenshot, playlist, and year across catalogue saves; when a file reappears or is renamed or moved, its existing entry and metadata are recovered instead of accumulating obsolete records. Temporarily unavailable items remain out of the main gallery and thumbnail work, while the Catalogue Editor reports and highlights them and can show All Entries, Available Only, or Temporarily Unavailable Only alongside its existing searches and batch actions. Focused tests cover scan generations, failure isolation, repeated recovery, metadata persistence, availability filtering, and unavailable-item exclusion.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/a18e18d"><code>a18e18d</code></a> — <strong>Replace branding with theme-aware Blue T icons</strong></summary>
+<p>Replaced the previous green roundel throughout the interface, startup screen, file association, Dock integration, and generated macOS, Windows, and Linux icon sets with the supplied Blue T artwork. Dark mode and the dark static application icon are the defaults, while the running macOS Dock icon follows the saved in-app theme. Packaged assets are checked against the reviewed light and dark masters.</p>
+</details>
 
-### Restore Settings Selection and Hover Feedback
-
-Settings rows now use consistently sized option icons, clearer selected states, and aligned icon, visibility, and description columns. Their spacing was balanced after visual testing so descriptions remain easy to scan without clipping or hiding the option icons. Inactive settings tabs now use opaque theme-aware hover colours and accent borders, keeping their labels readable instead of exposing the gallery behind the settings panel.
-
-### Require a Clean Production Release Preflight
-
-Production packaging now starts with a tracked safety check that requires the canonical production worktree, the main branch, an attached commit, the exact fork origin, the worktree-specific release designation, and a clean Git state. Retained local production-test outputs are ignored without being deleted, preventing generated application bundles from entering source commits while still allowing verified builds to remain available locally.
-
-### Modernise the Interface with a Mac-Sleek Frosted Graphite Design
-
-Refined the application-wide interface around a compact Frosted Graphite design while preserving the existing workflows and information density. The update introduces consistent system-style typography, spacing, borders, focus states, controls, and semantic colours across the title bar, ribbon, sidebar, gallery, bottom trays, settings, wizard, Catalogue Editor, video details, dialogs, and contextual menus. Light and dark modes now remain visually coherent throughout the interface, with stronger tag and text contrast, readable inactive tabs, correctly contained settings selections, a more conventionally proportioned macOS title bar, a visible dark-mode wizard close control, and a centred Delete action. The toolbar, gallery, settings, and tray layouts retain their established functionality while presenting clearer hierarchy and more consistent interaction feedback.
-
-### Add Inclusive and Exclusive Catalogue Editor Search
-
-Each Catalogue Editor search row can now be set to Contains or Does Not Contain. Matching is case-insensitive, multiple non-empty rows continue to narrow results together, and exclusion searches include entries whose selected field is missing because those entries do not contain the excluded value. The search controls remain compact and responsive when several criteria are added, and focused tests cover combined inclusion and exclusion filters, missing fields, whitespace-only criteria, and searches across all supported fields.
-
-### Replace the Application Branding with Theme-Aware Blue T Artwork
-
-Replaced the previous green roundel with supplied light and dark Blue T artwork throughout the title bar, hub wizard, Current Hub information, settings, startup splash, browser favicon, application bundle, `.scaena` file association, and generated macOS, Windows, and Linux icon sets. Dark mode is now the default for both the interface and the static application icon. While the application is running on macOS, its Dock icon follows the saved in-app theme immediately rather than relying on the operating-system appearance; the installed Finder and Launchpad icon remains the dark default because traditional application icon bundles cannot switch dynamically. The original SVG and PNG masters are retained with approved hashes, all derivative sizes are generated reproducibly, and packaged-app verification now confirms the static icon, both themed runtime assets, startup, dependencies, and licensing payload.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/d341e1c"><code>d341e1c</code></a> — <strong>Modernise the interface and Catalogue Editor search</strong></summary>
+<p>Applied the Frosted Graphite design across the title bar, toolbar, sidebar, gallery, trays, settings, wizard, Catalogue Editor, video details, dialogs, and context menus. Typography, spacing, semantic colours, controls, focus states, and light and dark mode treatment are now more consistent while preserving existing workflows. Catalogue Editor search rows also gained case-insensitive Contains and Does Not Contain operators that combine cumulatively and handle missing fields correctly.</p>
+</details>
 
 ## [v3.3.0-tem.1](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.1) — 1 August 2026
 
-### Rebrand the Application as Theatrum Ex Machina
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/2f091e6"><code>2f091e6</code></a> — <strong>Rebrand the application as Theatrum Ex Machina</strong></summary>
+<p>Renamed the application and replaced inherited package names, platform identifiers, visible links, settings identity, icons, and logos while retaining upstream attribution and licensing. New hubs use the <code>.scaena</code> extension with Finder and wizard support, while legacy <code>.vha2</code> and JSON catalogues remain compatible. The opening wizard follows the saved theme, packaged applications include their complete runtime dependencies, and thumbnail regeneration gained visible progress, cancellation, and shutdown safeguards.</p>
+</details>
 
-Renamed the application to Theatrum Ex Machina and replaced the inherited application icons, logos, favicons, package names, platform identifiers, and visible branding with the new fork-specific identity. The new assets can be regenerated reproducibly from the retained source artwork and are checked during packaging. Application settings use a separate storage identity so this version does not overwrite Video Hub App SIN preferences, while the original developer's attribution, MIT licence, third-party notices, and unsupported-fork disclaimer remain intact.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/f472075"><code>f472075</code></a> — <strong>Add persistent Date Added metadata and editing</strong></summary>
+<p>Newly discovered videos now receive an absolute Date Added timestamp that is retained through retry, rescan, rename, and move recovery. Legacy entries remain unknown rather than receiving invented dates. The main interface can sort by Date Added, folder rows aggregate the latest known descendant date, and the Catalogue Editor supports validated per-entry and confirmed bulk editing.</p>
+</details>
 
-### Introduce `.scaena` Catalogue Files
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/b5a62bf"><code>b5a62bf</code></a> — <strong>Add safe folder thumbnail regeneration and catalogue editing</strong></summary>
+<p>Current Hub folders gained confirmed, cancellable thumbnail regeneration with sequential processing, validated staging, rollback, and crash recovery. Unsafe thumbnail settings are normalised, filmstrip scrubbing is stabilised, and conflicting save, close, custom-thumbnail, and editor actions are blocked during regeneration. The Catalogue Editor also gained cumulative search rows, title-case fields, simplified numeric controls, and confirmed bulk replacement for safe metadata fields.</p>
+</details>
 
-New hubs now use the `.scaena` extension and macOS associates those files with Theatrum Ex Machina, allowing them to open directly from Finder or through the hub wizard. Existing `.vha2` catalogues remain compatible and are saved in place without forced conversion, while `.json` catalogues remain available where previously supported. File selection, cold-launch handling, name-collision checks, failed-creation cleanup, persistence tests, and packaged-application verification were updated for the new format.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/2caed2a"><code>2caed2a</code></a> — <strong>Show ribbon descriptions beside toolbar icons</strong></summary>
+<p>Replaced native ribbon tooltips with a translated inline description that follows pointer hover and keyboard focus. The reserved label area does not shift surrounding controls, and accessible names and visible keyboard-focus indicators remain available.</p>
+</details>
 
-### Apply the Saved Theme to the Hub Wizard
-
-The hub wizard now uses dark styling by default when no preference has been saved and subsequently follows the user's configured light or dark theme. Text, controls, file-selection areas, hover and focus states, explanatory panels, and responsive layouts have matching light- and dark-mode treatment, preventing the opening screen from briefly or permanently appearing in an inconsistent theme.
-
-### Make Packaged Dependencies Deterministic and Verifiable
-
-Production and test builds now stage the complete runtime dependency closure explicitly before Electron packaging, preventing packaged startup failures caused by transitive modules being omitted. The packaged-app verifier checks the expected dependencies, media tools, licences, corresponding-source archive, branding, and `.scaena` association, then performs an isolated hidden renderer-startup test against the actual application bundle. This makes local release builds more reproducible and detects incomplete packages before they are distributed.
-
-### Prevent Thumbnail Regeneration from Silently Locking the App
-
-Thumbnail regeneration now displays a compact progress banner immediately to the left of the JSON control, identifying the active item or folder, elapsed time, progress, and cancellation state without covering interactive controls. Individual and folder jobs cannot overlap, stalled work can be cancelled safely, late extraction output is prevented from replacing valid previews, and slow staging cleanup no longer leaves regeneration falsely marked as active. Closing during generation now offers a clear choice between continuing work and cancelling generation before quitting, while lifecycle safeguards ensure failed scans and interrupted jobs release their queues.
-
-### Track, Sort, and Edit Date Added
-
-Newly discovered videos now receive a persistent Date Added timestamp recording when they entered the hub. The timestamp is retained when metadata is recovered after a rescan, retry, rename, or move, including moves between configured source folders; duplicate files are matched conservatively so existing notes, tags, play counts, and dates are not attached to the wrong entry. Older catalogue entries remain valid with an unknown date rather than receiving a misleading migration date. The main interface can sort by Date Added in either direction, placing unknown legacy dates last, while folder rows use the latest known date among their videos. The Catalogue Editor displays Date Added as an editable local date and time and supports a confirmed bulk overwrite or deliberate clearing across displayed results. Strict validation, persistence coverage, and focused recovery and sorting tests protect the new metadata throughout imports and catalogue saves.
-
-### Add Safe Folder-Level Thumbnail Regeneration
-
-The Current Hub folder editor now provides a confirmed Regenerate Thumbnails action for each connected source folder, with an eligible-video count, sequential progress, cancellation, and a completion summary. Deleted, placeholder, and `import_error` entries are skipped, duplicate catalogue entries sharing a preview hash are tried until an accessible source succeeds, and only successful jobs update catalogue metadata. New previews are generated and validated in isolated staging folders before transactionally replacing live files; failures, timeouts, cancellation, folder or hub changes, renderer loss, and interrupted application sessions preserve or restore the previous previews. Conflicting save, close, folder-editing, and thumbnail operations are blocked while a batch is active. Related hardening bounds hand-edited fixed screenshot counts, repairs invalid preview metadata, prevents cache-key growth, stabilises filmstrip scrubbing, verifies packaged startup dependencies, and adds focused batching, extraction, transaction-recovery, and lifecycle tests.
-
-### Expand Catalogue Editor Search and Batch Editing
-
-The Catalogue Editor now supports additional search lines through compact add and remove controls, with every completed line narrowing the displayed results through cumulative matching. Field labels use title case, and the Year, Times Played, and Default Screen inputs no longer display number-stepper arrows. A new confirmed bulk action can overwrite the safe editable metadata fields Clean Name, Stars, Year, Times Played, Default Screen, and Notes across the currently displayed results. Strict validation prevents invalid numeric and screenshot selections, optional values can be deliberately cleared, and the target set is rechecked before changes are applied. File paths, hashes, and technical media fields remain excluded from bulk replacement to avoid breaking playback or catalogue identity. Editor mutations now replace stale Saved feedback with Unsaved Changes, and focused tests cover combined filtering, validation, optional clearing, star ratings, screenshot bounds, and batch mutation counts.
-
-### Show Toolbar Descriptions Beside the Ribbon
-
-Replaced the main ribbon icons' native hover tooltips with a translated description displayed in a reserved area immediately to the right of the toolbar. Descriptions appear on pointer hover and keyboard focus without shifting the surrounding layout, while translated accessible names and a visible keyboard-focus outline are retained. The label uses regular-weight text and adapts to both light and dark themes and the standard and flat icon modes.
-
-### Correct thumbnail regeneration counts
-
-Thumbnail regeneration now calculates the required screenshot count from the current hub extraction settings instead of reusing potentially outdated metadata from the selected video. Only the exact queued regeneration job can complete the request, preventing older thumbnail work for the same file from reporting a false success with the wrong count. After successful extraction, the generated count is synchronised to every catalogue entry sharing the preview hash and marked for saving, while an invalid default screenshot selection is cleared; failed or cancelled regeneration leaves catalogue metadata unchanged. Focused tests cover the count calculation, queue identity, and successful metadata update.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/44958e5"><code>44958e5</code></a> — <strong>Correct thumbnail regeneration counts</strong></summary>
+<p>Regenerated previews now use the current hub extraction settings instead of stale per-video metadata. Completion belongs to the exact queued job, successful counts are synchronised across matching catalogue entries, invalid default screenshots are cleared, and failed or cancelled work leaves catalogue metadata unchanged.</p>
+</details>
 
 ## [v3.3.0-sin.8](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.8) — 24 July 2026
 
-### [`bfca319`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/bfca319) — Prepare v3.3.0-sin.8 release
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/0e48891"><code>0e48891</code></a> — <strong>Improve Catalogue Editor entry contrast</strong></summary>
+<p>Added alternating row backgrounds, stronger borders, and a clearer action divider so dense Catalogue Editor results are easier to distinguish. Hovered, focused, deleted, light-mode, and dark-mode rows receive distinct visual states, reducing the chance of editing the wrong entry.</p>
+</details>
 
-Updated the version consistently across the application, package metadata, lockfile, and README. The release documentation now covers resilient media imports, thumbnail regeneration, file-hash copying, Current Hub refinements, CodeQL maintenance, and improved Catalogue Editor contrast. Production macOS packaging also gained the same packaged-application verification used by test builds, including verification of the corresponding media-source archive beside the build being checked.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/55af515"><code>55af515</code></a> — <strong>Add thumbnail regeneration and hash copying</strong></summary>
+<p>Added a context-menu command that recreates the selected video's thumbnail, filmstrip, and enabled preview clip through the existing extraction queue and reports completion or failure. The Catalogue Editor also gained an accessible control for copying a file hash.</p>
+</details>
 
-### [`0e48891`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/0e48891) — Improve JSON editor entry contrast
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/6008b94"><code>6008b94</code></a> — <strong>Refine the Current Hub folder list</strong></summary>
+<p>Reduced excess spacing between source folders and styled the final folder name separately, making hubs with several locations more compact while keeping the actual destination easier to identify in dark mode.</p>
+</details>
 
-Made dense Catalogue Editor results easier to distinguish by adding alternating row backgrounds, stronger borders, and a clearer divider beside the action controls. Hovered, keyboard-focused, deleted, light-mode, and dark-mode rows each receive an appropriate visual state, reducing the chance of editing the wrong entry.
-
-### [`55af515`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/55af515) — Add thumbnail regeneration and hash copying
-
-Added a context-menu command that deletes and recreates the selected video's thumbnail, filmstrip, and enabled preview-clip files through the existing extraction queue. The visible item is refreshed afterward and the app reports whether the operation succeeded or failed. The Catalogue Editor also gained an accessible control for copying a file hash, while the remaining added spacing between Current Hub folder rows was removed.
-
-### [`15f1c14`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/15f1c14) — Fix CodeQL workflow
-
-Modernised the GitHub CodeQL workflow to use current checkout and CodeQL actions and to analyse JavaScript and TypeScript explicitly. It also grants the permissions required to publish code-scanning results and removes obsolete checkout and autobuild steps, restoring a smaller and more reliable security-analysis workflow. This changes repository checks rather than application behaviour.
-
-### [`6008b94`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/6008b94) — Refine Current Hub folder list
-
-Reduced the vertical gap between source folders from 18 pixels to 8 pixels so hubs containing several locations use space more efficiently. The final folder name in every path is now marked separately and rendered white in dark mode, making the actual destination easier to identify without hiding the parent path.
-
-### [`4b0cb25`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/4b0cb25) — Handle media import failures gracefully
-
-Made imports tolerant of damaged, incomplete, slow, or temporarily unavailable media, particularly on mounted and network storage. FFprobe now receives a five-minute local timeout or an eight-minute mounted-volume timeout, and quick failures are retried once after the file has had time to settle. If probing still fails, the app creates a path-only catalogue entry tagged `import_error`, skips thumbnail extraction for that entry, shows a clear placeholder, and continues importing the remaining files instead of stopping the whole operation. Focused tests cover timeout selection, retry behaviour, and fallback-entry creation.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/4b0cb25"><code>4b0cb25</code></a> — <strong>Handle media import failures gracefully</strong></summary>
+<p>Imports now tolerate damaged, incomplete, slow, or temporarily unavailable media, particularly on mounted and network storage. Probing receives longer timeouts and one settling retry; persistent failures create a thumbnail-free entry tagged <code>import_error</code> and continue importing the remaining files instead of stopping the entire operation. Failure placeholders remain usable across the supported views.</p>
+</details>
 
 ## [v3.3.0-sin.7](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.7) — 22 July 2026
 
-### [`822e274`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/822e274) — Prepare v3.3.0-sin.7
-
-Introduced a substantial local-security and packaging upgrade. Privileged application requests are accepted only from the active window; media paths, external links, renames, deletions, and custom-player launches are validated and handled without assembling shell commands; and shutdown waits for catalogue and settings saves to finish. The app now packages locally built FFmpeg 8.1.2 and a pinned x264 revision with network support disabled, corresponding source code, licence notices, checksums, and automated verification of architecture, deployment target, linkage, and extraction behaviour. Public binary-building workflows were removed in favour of source-only GitHub releases and controlled local builds.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/822e274"><code>822e274</code></a> — <strong>Harden local operations and media-tool packaging</strong></summary>
+<p>Privileged requests are accepted only from the active application window, while paths, links, renames, deletions, and custom-player launches are validated without assembling shell commands. Shutdown waits for catalogue and settings saves. The application uses locally built FFmpeg and FFprobe binaries with matching source, licence notices, architecture and linkage checks, and extraction verification included with the package.</p>
+</details>
 
 ## [v3.3.0-sin.6](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.6) — 21 July 2026
 
-### [`baa9229`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/baa9229) — Prepare v3.3.0-sin.6
-
-Synchronised the `v3.3.0-sin.6` version across the runtime, package metadata, lockfile, and README. The release documentation was updated to describe the new atomic-save and backup-recovery protections and to show the matching Debian and macOS package names. This was a release-preparation change and introduced no additional runtime logic.
-
-### [`dfbf7d0`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/dfbf7d0) — Harden catalogue saves and recovery
-
-Replaced direct catalogue and settings writes with validated atomic saves that run one at a time. New data is written to a temporary file, forced to disk, checked by reading it back, and then moved into place; the previous valid catalogue is retained as a `.vha2.bak` backup. Opening a malformed, empty, unreadable, missing, or disconnected catalogue now produces a controlled explanation instead of crashing, offers recovery when a valid backup exists, and preserves a non-empty damaged file for inspection. Save failures are shown to the user and prevent unsafe hub switching, editor closure, or application shutdown, while focused persistence tests exercise the main recovery and overlapping-write cases.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/dfbf7d0"><code>dfbf7d0</code></a> — <strong>Harden catalogue saves and recovery</strong></summary>
+<p>Catalogue and settings writes are validated, atomic, and serialised. New data is written to a temporary file, forced to disk, read back, and then moved into place while the previous valid catalogue remains available as a backup. Opening malformed, empty, unreadable, missing, or disconnected catalogues now produces controlled recovery options instead of crashing, and save failures prevent unsafe hub switching, editor closure, or shutdown.</p>
+</details>
 
 ## [v3.3.0-sin.5](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.5) — 20 July 2026
 
-### [`0a5e92c`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/0a5e92c) — Add JSON editor tag workflows
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/0a5e92c"><code>0a5e92c</code></a> — <strong>Add Catalogue Editor tag workflows</strong></summary>
+<p>Added normalised comma-separated tag editing, case-insensitive duplicate prevention, autocomplete, support for new custom tags, and batch tagging of the currently displayed results. Closing the editor refreshes the main gallery, Details tray, and scrolling results immediately.</p>
+</details>
 
-Expanded the Catalogue Editor with normalised comma-separated tag fields, case-insensitive duplicate prevention, support for new custom tags, and autocomplete that can be accepted with the Tab key. A batch toolbar can add tags to every result currently displayed by the editor's search, and closing the editor now refreshes the main gallery, Details tray, and scrolling results list immediately. This commit also promoted the fork to `v3.3.0-sin.5`, updated package names and installation guidance, and documented that the macOS build is unsigned and unnotarized.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/e4fa163"><code>e4fa163</code></a> — <strong>Improve global tag removal controls</strong></summary>
+<p>Manual tags in the Tags tray can now be removed catalogue-wide after a confirmation dialog identifies the tag and affected-video count. Confirming removes the tag from every video, clears its count and colour metadata, marks the catalogue for saving, and refreshes the open details view.</p>
+</details>
 
-### [`e4fa163`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/e4fa163) — Improve global tag removal controls
-
-Added a catalogue-wide removal control to manual tags in the Tags tray. Before anything changes, the confirmation dialog names the tag and reports how many videos use it. Confirming removes the tag from every affected video, clears its count and colour metadata, marks the catalogue for saving, and refreshes any open details view, allowing obsolete tags to be cleaned up without an easy accidental bulk operation.
-
-### [`1417549`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/1417549) — Improve dark-mode details and sidebar contrast
-
-Moved Video Details notes into a dedicated area on the right so they no longer overlap the file path, and restyled the local zoom controls to match the clearer Main Settings design. Search-sidebar filter chips now choose black or white foreground text according to their background colour, keeping video-name, tag, folder-name, and fuzzy-search values readable in dark mode. This was a user-interface change only.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/1417549"><code>1417549</code></a> — <strong>Improve dark-mode details and sidebar contrast</strong></summary>
+<p>Moved Video Details notes into a dedicated right-side area so they no longer overlap the path and restyled local zoom controls for consistency. Search-sidebar filter chips now choose black or white foreground text from their background colour, keeping video-name, tag, folder-name, and fuzzy-search values readable in dark mode.</p>
+</details>
 
 ## [v3.3.0-sin.4](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.4) — 19 July 2026
 
-### [`8f2da37`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/8f2da37) — Standardise release filenames
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/217b6d9"><code>217b6d9</code></a> — <strong>Apply a fork-specific application identity</strong></summary>
+<p>Renamed the application, package metadata, visible interface, file association, repository links, and platform identifiers to distinguish the fork from upstream. Added native Debian package metadata, included the upstream MIT licence in installed applications, and displayed clear fork support and attribution information.</p>
+</details>
 
-Standardised macOS package names and GitHub Actions artifact names on the lowercase `video-hub-app-sin` convention already used by the Debian package. This makes files easier to identify and reference consistently in documentation and automation. Package contents, application behaviour, and version numbers were unchanged.
-
-### [`217b6d9`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/217b6d9) — Promote fork-specific sin.4 packages
-
-Promoted the fork to `v3.3.0-sin.4` and consistently renamed its application, metadata, visible interface, file association, repository links, and platform identifiers to `Video Hub App SIN`. Added a native Debian package target and an unsigned macOS ARM64 workflow, with checksums and retained build artifacts, and included the upstream MIT licence in packaged applications. Installation, manual-update, attribution, and security-reporting documentation was rewritten so the unsupported fork could not easily be confused with the original supported application.
-
-### [`96e52a8`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/96e52a8) — Use Linux icon set for Debian packaging
-
-Changed Linux packaging to use the project's PNG icon set instead of the macOS `.icns` file. This supplies Electron Builder with the format and sizes expected for Debian packages, avoiding icon-processing failures and improving the installed application's presentation. Runtime behaviour was unchanged.
-
-### [`2b46310`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/2b46310) — Handle legacy peer dependencies in Debian build
-
-Adjusted the Debian workflow to install dependencies using npm's legacy peer-dependency handling. This allows the repository's locked dependency set to install despite an older package declaring an outdated Angular compatibility range. It affects build reliability only and does not alter application behaviour or package identity.
-
-### [`ea91d52`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/ea91d52) — Add Debian AMD64 test build workflow
-
-Added a manually triggered GitHub Actions workflow that checked and built the application on Ubuntu 24.04 with Node.js 22 before creating a Debian AMD64 package and SHA-256 checksum. The result was retained as a temporary CI artifact rather than published automatically, providing an early repeatable way to produce Linux test builds.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/96e52a8"><code>96e52a8</code></a> — <strong>Use the Linux icon set for Debian packaging</strong></summary>
+<p>Changed Linux packaging to use the project's PNG icon set rather than the macOS <code>.icns</code> file, supplying Debian with the expected formats and sizes for a correctly presented installed application.</p>
+</details>
 
 ## [v3.3.0-sin.3](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.3) — 19 July 2026
 
-### [`9900211`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/9900211) — Refine README settings summary
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/22eba40"><code>22eba40</code></a> — <strong>Standardise fork settings and interface wording</strong></summary>
+<p>Removed the incompatible upstream update checker and replaced it with clear fork and supported-upstream links. Settings wording, title case, Current Hub grouping, zoom controls, labels, and several copy errors were corrected for a more consistent interface.</p>
+</details>
 
-Reworded the README's Settings summary to state that both option labels and buttons use title case. This was a documentation-only clarification and did not change the interface or application behaviour.
-
-### [`22eba40`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/22eba40) — Promote fork settings and UI updates
-
-Promoted the fork to `v3.3.0-sin.3` and rewrote the README as a structured account of fork changes, their reasons, the support disclaimer, attribution, and links to the original application. Removed the upstream update checker so the fork would not offer potentially incompatible upstream releases, replacing it with clear links to this repository and the supported original app. Settings wording was standardised, Current Hub sections were spaced and grouped more clearly, zoom controls were made more readable, and several labels and copy errors were corrected.
-
-### [`742ea72`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/742ea72) — Improve high-resolution and dark mode UI
-
-Raised the top toolbar from 32 to 40 pixels and enlarged its controls and icons, with related offsets adjusted so the larger toolbar remains aligned throughout the application. Dark-mode backgrounds, borders, text, form controls, tabs, the Tags tray, sidebar, statistics, and active states received stronger contrast. These changes make controls easier to see and target on high-resolution displays without changing catalogue behaviour; test-release directories were also added to `.gitignore`.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/742ea72"><code>742ea72</code></a> — <strong>Improve high-resolution and dark-mode presentation</strong></summary>
+<p>Raised the top toolbar to 40 pixels and enlarged its controls and icons, with related offsets adjusted to retain alignment. Dark-mode backgrounds, borders, text, forms, tabs, the Tags tray, sidebar, statistics, and active states gained stronger contrast for improved readability and targeting on high-resolution displays.</p>
+</details>
 
 ## [v3.3.0-sin.2](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.2) — 18 July 2026
 
-### [`6deb525`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/6deb525) — Exclude development files from app package
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/6deb525"><code>6deb525</code></a> — <strong>Exclude development files from application packages</strong></summary>
+<p>Replaced the broad Electron package pattern with an explicit runtime allowlist containing compiled application output, main-process JavaScript, shared interfaces, and translations. Development source, caches, and unrelated project files are no longer shipped, reducing package size and making installed contents more predictable.</p>
+</details>
 
-Replaced the broad Electron package pattern and long exclusion list with an explicit allowlist containing only compiled application output, main-process JavaScript, shared interfaces, and translations. This prevents source files, caches, and other development material from being bundled, keeping application packages smaller and making their contents more predictable.
-
-### [`bc8eeaa`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/bc8eeaa) — Repair ESLint checks
-
-Replaced the removed, undeclared TSLint command with Angular's configured ESLint runner and declared ESLint explicitly as a development dependency. Existing legacy patterns were configured as warnings where appropriate, while the affected source files received type improvements and behaviour-preserving cleanup. This restored a usable static-analysis command for maintainers without intentionally changing the user experience.
-
-### [`324fb48`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/324fb48) — Confirm file deletion from context menu
-
-Added a confirmation dialog before either moving a selected video to the trash or deleting it permanently from the context menu. The prompt names the selected file, and permanent deletion receives a stronger warning that the operation cannot be undone. The main process receives the deletion request only after explicit confirmation, reducing accidental file loss while preserving both available deletion modes.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/324fb48"><code>324fb48</code></a> — <strong>Confirm file deletion from the context menu</strong></summary>
+<p>Added a confirmation dialog before moving a selected video to the trash or deleting it permanently. The prompt names the file, and permanent deletion receives a stronger irreversible-action warning before the main process receives the request.</p>
+</details>
 
 ## [v3.3.0-sin.1](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.1) — 18 July 2026
 
-### [`f46b133`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/f46b133) — Update README.md
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/8c50f99"><code>8c50f99</code></a> — <strong>Extend extraction timeouts and reset play counts</strong></summary>
+<p>Increased thumbnail and filmstrip extraction time allowances to reduce failures with high-resolution, slow, or network-hosted media. Added a Reset Times Played action that clears every video's play count, resets the related filter, marks changed catalogues for saving, and treats missing legacy values as zero.</p>
+</details>
 
-Expanded the README with a dated summary of the Catalogue Editor, play-count reset, and longer extraction timeouts. It also clarified that the fork worked for its maintainer but remained unsupported, and restored explicit thanks and attribution to the original developer. This commit changed documentation only.
-
-### [`8c50f99`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/8c50f99) — Add timeout fix and times played reset addition
-
-Increased thumbnail and filmstrip extraction time allowances to four times their upstream values, reducing failures with high-resolution, slow, or network-hosted media. Added a `Reset Times Played` action that clears every video's play count, resets the related filter, marks the catalogue for saving when any play count changes, and confirms completion. Missing play-count values in older catalogues are treated as zero so they do not produce invalid filter ranges.
-
-### [`8b1c714`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/8b1c714) — Update README.md
-
-Replaced the upstream README with a short introduction identifying this repository as a personal fork whose additions were produced with an LLM. It established the initial support disclaimer and did not change application behaviour.
-
-### [`68f2b47`](https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/68f2b47) — Add catalogue JSON editor
-
-Added an in-app Catalogue Editor for searching and directly correcting hub metadata such as names, paths, tags, ratings, year, play count, default screenshot selection, and notes. Entries can be marked as deleted or restored, and the editor displays active and deleted counts while updating filters and tag information as edits are made. Changes can be saved to the currently open catalogue without closing the application, with visible success or failure feedback; the catalogue picker also accepts `.json` files alongside `.vha2` files.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/68f2b47"><code>68f2b47</code></a> — <strong>Add the Catalogue Editor</strong></summary>
+<p>Added an in-app editor for searching and correcting catalogue metadata including names, paths, tags, ratings, year, play count, default screenshot, and notes. Entries can be marked deleted or restored, active and deleted counts remain visible, and edits can be saved to the open catalogue without restarting the application.</p>
+</details>
 
 ## Distribution and Local Builds
 
