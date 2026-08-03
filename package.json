@@ -58,7 +58,7 @@
     "postinstall": "electron-builder install-app-deps",
     "release:preflight": "node ./bin/release-preflight.mjs",
     "runtime:stage": "node ./bin/stage-runtime-dependencies.mjs",
-    "test": "npm-run-all -s test:catalogue-file test:persistence test:folder-rescan test:local-safety test:import-resilience test:thumbnail-count test:thumbnail-batch test:thumbnail-transaction test:date-added test:catalogue-editor test:media-toolchain",
+    "test": "npm-run-all -s test:catalogue-file test:persistence test:folder-rescan test:local-safety test:import-resilience test:thumbnail-count test:thumbnail-batch test:thumbnail-transaction test:date-added test:catalogue-editor test:virtual-scroll-layout test:media-toolchain",
     "test:catalogue-file": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/catalogue-file.test.ts",
     "test:catalogue-editor": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/catalogue-editor.test.ts",
     "test:date-added": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/date-added.test.ts",
@@ -70,6 +70,7 @@
     "test:thumbnail-batch": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/sequential-batch.test.ts",
     "test:thumbnail-count": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/thumbnail-count.test.ts",
     "test:thumbnail-transaction": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/thumbnail-transaction.test.ts",
+    "test:virtual-scroll-layout": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/virtual-scroll-layout.test.ts",
     "verify:mac:release": "node ./bin/verify-packaged-app.mjs './release/mac-arm64/Theatrum Ex Machina.app'",
     "verify:mac:test": "node ./bin/verify-packaged-app.mjs './release-test/mac-arm64/Theatrum Ex Machina.app'"
   },

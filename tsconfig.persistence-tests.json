@@ -28,8 +28,10 @@
     "node/thumbnail-count.test.ts",
     "node/thumbnail-transaction.ts",
     "node/thumbnail-transaction.test.ts",
+    "node/virtual-scroll-layout.test.ts",
     "node/vha-file-persistence.ts",
     "node/vha-file-persistence.test.ts",
+    "src/app/common/virtual-scroll-layout.ts",
     "src/app/components/catalogue-editor/catalogue-editor.logic.ts"
   ]
 }

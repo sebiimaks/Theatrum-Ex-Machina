@@ -4,6 +4,7 @@ import { Component, Input, input, output } from '@angular/core';
 import { FilePathService } from '../file-path.service';
 
 import { metaAppear, textAppear } from '../../../common/animations';
+import { calculateFullViewLayout } from '../../../common/virtual-scroll-layout';
 
 import type { ImageElement } from '../../../../../interfaces/final-object.interface';
 import { isMetadataImportFailure } from '../../../../../interfaces/final-object.interface';
@@ -13,12 +14,18 @@ import type { RightClickEmit, VideoClickEmit } from '../../../../../interfaces/s
 @Component({
   standalone: false,
   selector: 'app-full-item',
+  host: {
+    '[style.display]': "'block'",
+    '[style.height.px]': 'measuredContentHeight',
+    '[style.margin]': "'20px 20px 5px'",
+  },
   templateUrl: './full.component.html',
   styleUrls: [
       '../time-and-rez.scss',
       '../film-and-full.scss',
       '../selected.scss',
-      '../import-error-placeholder.scss'
+      '../import-error-placeholder.scss',
+      './full.component.scss'
     ],
   animations: [ textAppear, metaAppear ]
 })
@@ -51,9 +58,9 @@ export class FullViewComponent implements OnInit {
 
   _imgHeight: number;
   _metaWidth: number;
-  computedWidth: number;
+  computedWidth = 0;
   fullFilePath = '';
-  rowOffsets: number[];
+  rowOffsets: number[] = [];
 
   constructor(
     public filePathService: FilePathService,
@@ -66,14 +73,25 @@ export class FullViewComponent implements OnInit {
   }
 
   render(): void {
-    const imgWidth = this._imgHeight * 16 / 9;
-    const imagesPerRow = Math.floor(this._metaWidth / imgWidth) || 1; // never let this be zero
-    this.computedWidth = imgWidth * imagesPerRow;
-    const numOfRows = Math.ceil((<any>(this.video() || {screens: 0}).screens) / imagesPerRow);
-    this.rowOffsets = [];
-    for (let i = 0; i < numOfRows; i++) {
-      this.rowOffsets.push(i * Math.floor(this._metaWidth / imgWidth));
+    const layout = calculateFullViewLayout(
+      this._metaWidth,
+      this._imgHeight,
+      this.video()?.screens ?? 0,
+    );
+    this.computedWidth = layout.computedWidth;
+    this.rowOffsets = layout.rowOffsets;
+  }
+
+  get measuredContentHeight(): number {
+    if (!Number.isFinite(this._imgHeight) || this._imgHeight <= 0) {
+      return 0;
     }
+
+    const video = this.video();
+    const imageRowsHeight = video && isMetadataImportFailure(video)
+      ? this._imgHeight
+      : this.rowOffsets.length * this._imgHeight;
+    return imageRowsHeight + 30;
   }
 
   isImportFailure(): boolean {

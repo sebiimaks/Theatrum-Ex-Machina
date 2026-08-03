@@ -870,7 +870,7 @@
                                              appState.currentView === 'showClips')
         }"
 
-      [bufferAmount]="0"
+      [bufferAmount]="getVirtualScrollBufferAmount(appState.currentView)"
 
       [items]="imageElementService.imageElements
 
@@ -1201,8 +1201,6 @@
          />
       }
     }
-
-      <div class="bottom-of-scroller-spacer"></div>
 
     </virtual-scroller>
 

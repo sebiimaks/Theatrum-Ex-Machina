@@ -81,6 +81,7 @@ import { GLOBALS } from '../../../node/main-globals';
 import { LanguageLookup } from '../common/languages';
 import type { SettingsButtonKey, SettingsButtonsType } from '../common/settings-buttons';
 import { SettingsButtons, SettingsButtonsGroups } from '../common/settings-buttons';
+import { getVirtualScrollBufferAmount } from '../common/virtual-scroll-layout';
 
 // Animations
 import {
@@ -118,6 +119,8 @@ interface IndividualThumbnailRegenerationStatus {
   fileHash: string;
   fileName: string;
 }
+
+const GALLERY_LAYOUT_TRANSITION_MS = 320;
 
 @Component({
   standalone: false,
@@ -164,6 +167,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
   readonly sortOrderRef = viewChild(SortOrderComponent);
 
   readonly virtualScroller = viewChild(VirtualScrollerComponent);
+  readonly getVirtualScrollBufferAmount = getVirtualScrollBufferAmount;
 
   defaultSettingsButtons = JSON.parse(JSON.stringify(SettingsButtons));
   settingsButtons: SettingsButtonsType = SettingsButtons;
@@ -181,7 +185,9 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
   vhaFileHistory: HistoryItem[] = [];
 
-  windowResizeTimeout = null;
+  private galleryLayoutRefreshTimeout: ReturnType<typeof setTimeout> | undefined;
+  private galleryLayoutRefreshFrame: number | undefined;
+  private pendingGalleryScrollReset = false;
 
   newVideoImportTimeout = null;
   newVideoImportCounter = 0;
@@ -993,10 +999,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       }
       if (this.appState.currentZoomLevel !== 1) {
         this.electronService.webFrame.setZoomFactor(this.appState.currentZoomLevel);
-        setTimeout(() => {
-          this.computePreviewWidth();
-          this.cd.detectChanges();
-        }, 10);
+        this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
       }
       const cataloguePathToOpen = requestedCataloguePath || settingsObject.appState.currentVhaFile;
       if (cataloguePathToOpen) {
@@ -1207,7 +1210,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
   // =======================================================================================================================================
 
   ngAfterViewInit() {
-    this.computePreviewWidth(); // so that fullView knows its size // TODO -- check if still needed!
+    this.scheduleGalleryLayoutRefresh();
 
     // this is required, otherwise when user drops the file, it opens as plaintext
     document.ondragover = document.ondrop = (ev) => {
@@ -1335,16 +1338,43 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
   /**
    * Low-tech debounced window resize
-   * @param msDelay - number of milliseconds to debounce; if absent sets to 250ms
+   * @param msDelay - number of milliseconds to debounce; defaults to the gallery transition time
    */
   public debounceUpdateMax(msDelay?: number): void {
-    // console.log('debouncing');
-    const delay = msDelay !== undefined ? msDelay : 250;
-    clearTimeout(this.windowResizeTimeout);
-    this.windowResizeTimeout = setTimeout(() => {
-      // console.log('Virtual scroll refreshed');
-      this.virtualScroller().refresh();
+    const delay = msDelay !== undefined ? msDelay : GALLERY_LAYOUT_TRANSITION_MS;
+    this.scheduleGalleryLayoutRefresh(delay);
+  }
+
+  /**
+   * Recalculate gallery geometry before clearing cached row measurements.
+   * ngx-virtual-scroller performs its own refresh after invalidation, so a
+   * second `refresh()` would incorrectly report an items-array change.
+   */
+  private scheduleGalleryLayoutRefresh(delay = 0, resetScroll = false): void {
+    this.pendingGalleryScrollReset ||= resetScroll;
+    clearTimeout(this.galleryLayoutRefreshTimeout);
+    if (this.galleryLayoutRefreshFrame !== undefined) {
+      cancelAnimationFrame(this.galleryLayoutRefreshFrame);
+      this.galleryLayoutRefreshFrame = undefined;
+    }
+    this.galleryLayoutRefreshTimeout = setTimeout(() => {
+      const gallery = document.getElementById('scrollDiv');
+      const scroller = this.virtualScroller();
+      if (!gallery || !scroller) {
+        this.pendingGalleryScrollReset = false;
+        return;
+      }
+
       this.computePreviewWidth();
+      this.cd.detectChanges();
+      this.galleryLayoutRefreshFrame = requestAnimationFrame(() => {
+        scroller.invalidateAllCachedMeasurements();
+        if (this.pendingGalleryScrollReset) {
+          gallery.scrollTop = 0;
+        }
+        this.pendingGalleryScrollReset = false;
+        this.galleryLayoutRefreshFrame = undefined;
+      });
     }, delay);
   }
 
@@ -1628,6 +1658,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
     if (this.appState.currentZoomLevel < 2.5) {
       this.appState.currentZoomLevel = this.appState.currentZoomLevel + 0.1;
       this.electronService.webFrame.setZoomFactor(this.appState.currentZoomLevel);
+      this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
     }
   }
 
@@ -1635,6 +1666,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
     if (this.appState.currentZoomLevel > 0.6) {
       this.appState.currentZoomLevel = this.appState.currentZoomLevel - 0.1;
       this.electronService.webFrame.setZoomFactor(this.appState.currentZoomLevel);
+      this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
     }
   }
 
@@ -1642,6 +1674,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
     if (this.appState.currentZoomLevel !== 1) {
       this.appState.currentZoomLevel = 1;
       this.electronService.webFrame.setZoomFactor(this.appState.currentZoomLevel);
+      this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
     }
   }
 
@@ -1892,6 +1925,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.settingsButtons['showRecentlyPlayed'].toggled = false;
     this.settingsButtons['showRelatedVideosTray'].toggled = false;
     this.settingsButtons['showTagTray'].toggled = false;
+    this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
   }
 
   /**
@@ -2021,8 +2055,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.restoreViewSize(uniqueKey);
       this.appState.currentView = <SupportedView>uniqueKey;
       this.computeTextBufferAmount();
-      this.virtualScroller().invalidateAllCachedMeasurements();
-      this.scrollToTop();
+      this.scheduleGalleryLayoutRefresh(0, true);
 
       // ======== Bottom tray views buttons =========================
     } else if (AllSupportedBottomTrayViews.includes(<SupportedTrayView>uniqueKey)) {
@@ -2058,14 +2091,8 @@ export class HomeComponent implements OnInit, AfterViewInit {
       // ======== Other buttons ========================
     } else if (uniqueKey === 'compactView') {
       this.toggleButtonOpposite(uniqueKey);
-      this.virtualScroller().refresh();
-      if (
-        this.settingsButtons['showThumbnails'].toggled
-        || this.settingsButtons['showClips'].toggled
-        || this.settingsButtons['showFilmstrip'].toggled
-      ) {
-        this.computeTextBufferAmount();
-      }
+      this.computeTextBufferAmount();
+      this.scheduleGalleryLayoutRefresh();
     } else if (uniqueKey === 'showFolders') {
       this.toggleButtonOpposite('showFolders');
       if (!this.settingsButtons['showFolders'].toggled) {
@@ -2130,12 +2157,13 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.toggleButtonOpposite(uniqueKey);
       if (uniqueKey === 'showMoreInfo') {
         this.computeTextBufferAmount();
+        this.scheduleGalleryLayoutRefresh();
       }
       if (uniqueKey === 'hideSidebar') {
-        setTimeout(() => {
-          this.virtualScroller().refresh();
-          this.computePreviewWidth();
-        }, 300);
+        this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
+      }
+      if (uniqueKey === 'hideTop') {
+        this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
       }
     }
     if (uniqueKey === 'darkMode') {
@@ -2198,8 +2226,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       return;
     }
     this.currentImgsPerRow++;
-    this.computePreviewWidth();
-    this.virtualScroller().invalidateAllCachedMeasurements();
+    this.scheduleGalleryLayoutRefresh();
   }
 
   /**
@@ -2220,8 +2247,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
     } else if (this.currentImgsPerRow > 1) {
       this.currentImgsPerRow--;
     }
-    this.computePreviewWidth();
-    this.virtualScroller().invalidateAllCachedMeasurements();
+    this.scheduleGalleryLayoutRefresh();
   }
 
   /**
@@ -2366,6 +2392,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
    */
   toggleRibbon(): void {
     this.appState.menuHidden = !this.appState.menuHidden;
+    this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
   }
 
   openCatalogueEditor(): void {

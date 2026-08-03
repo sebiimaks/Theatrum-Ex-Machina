@@ -1,8 +1,6 @@
-import { Component, input, output, viewChild } from '@angular/core';
+import { Component, input, output } from '@angular/core';
 
 import { ManualTagsService } from './manual-tags.service';
-
-import type { OnInit, ElementRef } from '@angular/core';
 
 @Component({
   standalone: false,
@@ -11,13 +9,11 @@ import type { OnInit, ElementRef } from '@angular/core';
   styleUrls: ['../search-input.scss',
               'add-tag.component.scss']
 })
-export class AddTagComponent implements OnInit {
+export class AddTagComponent {
 
   readonly darkMode = input<boolean>();
 
   readonly tag = output<string>();
-
-  readonly tagInputField = viewChild<ElementRef<HTMLInputElement>>('tagInputField');
 
   currentText = '';
   typeAhead = '';
@@ -25,10 +21,6 @@ export class AddTagComponent implements OnInit {
   constructor(
     public manualTagsService: ManualTagsService
   ) { }
-
-  ngOnInit(): void {
-    this.tagInputField()?.nativeElement.focus();
-  }
 
   emitTag(text: string) {
     if (text.trim()) { // if not empty
