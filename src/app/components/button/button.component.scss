@@ -1,0 +1,35 @@
+:host-context(.settings-modal) {
+  .flatSettingsButton {
+    align-items: center;
+    border: 1px solid transparent;
+    border-radius: var(--app-control-radius);
+    box-sizing: border-box;
+    display: inline-flex;
+    height: 21px;
+    justify-content: center;
+    margin: 0;
+    min-width: 21px;
+    padding: 2px;
+    width: 21px;
+
+    .icon {
+      display: inline-flex;
+      flex: 0 0 15px;
+      height: 15px;
+      line-height: 0;
+      width: 15px;
+    }
+
+    &.flatSettingsButtonToggled,
+    &.flatSettingsButtonToggled:hover {
+      background: var(--app-accent-soft);
+      border-color: var(--app-accent);
+      color: var(--app-accent-text);
+      fill: var(--app-accent);
+
+      .icon {
+        fill: var(--app-accent);
+      }
+    }
+  }
+}

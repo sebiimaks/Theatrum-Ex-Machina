@@ -7,6 +7,7 @@ import {
 
 export type CatalogueSearchField = 'all' | 'name' | 'file' | 'path' | 'tags' | 'hash';
 export type CatalogueSearchOperator = 'contains' | 'doesNotContain';
+export type CatalogueAvailabilityFilter = 'all' | 'available' | 'missing';
 export type CatalogueOverwriteField = 'cleanName' | 'dateAdded' | 'stars' | 'year' | 'timesPlayed' | 'defaultScreen' | 'notes';
 export type CatalogueOverwriteValue = number | string | undefined;
 
@@ -78,6 +79,7 @@ export function filterCatalogueEntries(
   images: ImageElement[],
   criteria: CatalogueSearchCriterion[],
   showDeleted: boolean,
+  availabilityFilter: CatalogueAvailabilityFilter = 'all',
 ): ImageElement[] {
   const activeCriteria = criteria
     .map((criterion: CatalogueSearchCriterion) => ({
@@ -91,6 +93,16 @@ export function filterCatalogueEntries(
 
   return images.filter((item: ImageElement) => {
     if (!showDeleted && item.deleted) {
+      return false;
+    }
+
+    if (availabilityFilter === 'available' && item.missing === true) {
+      return false;
+    }
+
+    const temporarilyUnavailable = !item.deleted && item.missing === true;
+
+    if (availabilityFilter === 'missing' && !temporarilyUnavailable) {
       return false;
     }
 

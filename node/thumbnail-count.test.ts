@@ -372,6 +372,9 @@ test('eligible folder counts react to in-place catalogue changes', () => {
   entry.deleted = true;
   assert.equal(countEligibleFolderThumbnailVideos([entry], 4), 0);
   entry.deleted = false;
+  entry.missing = true;
+  assert.equal(countEligibleFolderThumbnailVideos([entry], 4), 0);
+  entry.missing = false;
   entry.metadataImportFailed = true;
   assert.equal(countEligibleFolderThumbnailVideos([entry], 4), 0);
   assert.equal(buildEligibleFolderThumbnailVideoCounts([entry]).get(4) || 0, 0);

@@ -169,3 +169,41 @@ test('does not use source alone to choose between duplicate hashes', () => {
     undefined,
   );
 });
+
+test('does not consume an offline entry for a same-content file in another source', () => {
+  const offline = NewImageElement();
+  offline.birthtime = 100;
+  offline.fileSize = 200;
+  offline.hash = 'same-content';
+  offline.inputSource = 1;
+  offline.missing = true;
+  offline.mtime = 300;
+
+  const incoming = {
+    ...offline,
+    inputSource: 2,
+    missing: undefined,
+  };
+
+  assert.equal(findDeletedMetadataOrigin(incoming, [offline]), undefined);
+});
+
+test('recovers an exact same-source path even when its media identity changed', () => {
+  const missing = NewImageElement();
+  missing.fileName = 'replaced.mp4';
+  missing.hash = 'old-content';
+  missing.inputSource = 1;
+  missing.missing = true;
+  missing.partialPath = '/folder';
+
+  const incoming = {
+    ...missing,
+    birthtime: 400,
+    fileSize: 500,
+    hash: 'new-content',
+    missing: undefined,
+    mtime: 600,
+  };
+
+  assert.equal(findDeletedMetadataOrigin(incoming, [missing]), missing);
+});

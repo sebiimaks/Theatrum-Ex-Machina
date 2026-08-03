@@ -16,7 +16,7 @@ export class DeleteFilePipe implements PipeTransform {
    */
   transform(finalArray: ImageElement[], toggleTrigger: boolean): ImageElement[] {
 
-    return finalArray.filter(element => !element.deleted);
+    return finalArray.filter(element => !element.deleted && !element.missing);
 
   }
 

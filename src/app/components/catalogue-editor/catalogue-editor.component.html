@@ -101,6 +101,20 @@
       class="catalogue-visually-hidden"
     >{{ searchRowsStatus }}</span>
 
+    <label class="catalogue-availability-filter">
+      <span>Availability</span>
+      <select
+        [(ngModel)]="availabilityFilter"
+        (ngModelChange)="refreshFilteredEntries()"
+        aria-label="Filter entries by availability"
+        title="Filter by Availability"
+      >
+        <option value="all">All Entries</option>
+        <option value="available">Available Only</option>
+        <option value="missing">Temporarily Unavailable Only</option>
+      </select>
+    </label>
+
     <label class="catalogue-toggle">
       <input
         [(ngModel)]="showDeleted"
@@ -251,6 +265,7 @@
     <span>{{ filteredEntries.length | number }} shown</span>
     <span>{{ activeCount | number }} active</span>
     <span>{{ totalCount | number }} total</span>
+    <span *ngIf="missingCount" class="temporarily-missing">{{ missingCount | number }} temporarily missing</span>
     <span *ngIf="deletedCount" class="pending-delete">{{ deletedCount | number }} pending delete</span>
     <span
       *ngIf="saveStatus"
@@ -275,7 +290,10 @@
     <div
       *ngFor="let item of catalogueScroll.viewPortItems; trackBy: trackByImageIndex"
       class="catalogue-row"
-      [ngClass]="{ 'catalogue-row-deleted': item.deleted }"
+      [ngClass]="{
+        'catalogue-row-deleted': item.deleted,
+        'catalogue-row-missing': !item.deleted && item.missing
+      }"
     >
       <div class="catalogue-row-fields">
         <label class="wide-field">

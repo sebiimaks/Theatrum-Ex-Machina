@@ -12,6 +12,7 @@ import {
   recoverVhaFileFromBackup,
   writeVhaJsonAtomically,
 } from './vha-file-persistence.ts';
+import { writeVhaFileToDisk } from './main-support';
 
 const temporaryDirectories: string[] = [];
 
@@ -44,6 +45,18 @@ function createCatalogue(hubName: string): FinalObject {
     },
     version: 3,
   };
+}
+
+function writeCatalogue(catalogue: FinalObject, cataloguePath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    writeVhaFileToDisk(catalogue, cataloguePath, (error?: Error) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    });
+  });
 }
 
 afterEach(() => {
@@ -87,6 +100,60 @@ test('preserves Date Added while legacy entries remain valid without it', () => 
 
   assert.equal(parsed.images[0].dateAdded, 1_700_000_000_123);
   assert.equal(parsed.images[1].dateAdded, undefined);
+});
+
+test('preserves temporarily missing entries and their user metadata', () => {
+  const catalogue = createCatalogue('Temporarily Offline');
+  const missingEntry = NewImageElement();
+  missingEntry.dateAdded = 1_700_000_000_123;
+  missingEntry.missing = true;
+  missingEntry.notes = 'Do not discard this note';
+  missingEntry.tags = ['important'];
+  catalogue.images = [missingEntry];
+
+  const parsed = parseVhaJson(JSON.stringify(catalogue));
+
+  assert.equal(parsed.images[0].missing, true);
+  assert.equal(parsed.images[0].notes, 'Do not discard this note');
+  assert.deepEqual(parsed.images[0].tags, ['important']);
+  assert.equal(parsed.images[0].dateAdded, 1_700_000_000_123);
+});
+
+test('actual catalogue save and reload retains temporarily missing metadata', async () => {
+  const directory = createTemporaryDirectory();
+  const cataloguePath = path.join(directory, 'temporarily-offline.scaena');
+  const catalogue = createCatalogue('Temporarily Offline Round Trip');
+  const missingEntry = NewImageElement();
+  missingEntry.dateAdded = 1_700_000_000_123;
+  missingEntry.fileName = 'offline.mp4';
+  missingEntry.inputSource = 0;
+  missingEntry.missing = true;
+  missingEntry.notes = 'Preserve through the real save path';
+  missingEntry.partialPath = '/folder';
+  missingEntry.tags = ['important'];
+  catalogue.images = [missingEntry];
+
+  await writeCatalogue(catalogue, cataloguePath);
+  const reloaded = await readVhaFileWithBackup(cataloguePath);
+
+  assert.equal(reloaded.source, 'primary');
+  assert.equal(reloaded.finalObject?.images.length, 1);
+  assert.equal(reloaded.finalObject?.images[0].missing, true);
+  assert.equal(reloaded.finalObject?.images[0].notes, 'Preserve through the real save path');
+  assert.deepEqual(reloaded.finalObject?.images[0].tags, ['important']);
+  assert.equal(reloaded.finalObject?.images[0].dateAdded, 1_700_000_000_123);
+});
+
+test('rejects malformed missing-file state instead of treating it inconsistently', () => {
+  const catalogue = createCatalogue('Malformed Missing State');
+  const malformedEntry = NewImageElement() as unknown as Record<string, unknown>;
+  malformedEntry.missing = 'yes';
+  catalogue.images = [malformedEntry as unknown as ReturnType<typeof NewImageElement>];
+
+  assert.throws(
+    () => parseVhaJson(JSON.stringify(catalogue)),
+    /invalid missing-file state/,
+  );
 });
 
 test('offers a valid backup for an empty primary catalogue', async () => {

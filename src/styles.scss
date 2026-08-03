@@ -10,6 +10,7 @@
   --app-tray-background: #{variables.$frosted-tray-light};
   --app-elevated-background: #{variables.$frosted-elevated-light};
   --app-tab-background: #{variables.$frosted-tab-light};
+  --app-tab-hover-background: #{variables.$frosted-tab-hover-light};
   --app-control-background: #{variables.$frosted-control-light};
   --app-control-hover: #{variables.$frosted-control-hover-light};
   --app-text-primary: #{variables.$frosted-text-primary-light};
@@ -46,6 +47,7 @@ body:has(.window-dark-mode),
   --app-tray-background: #{variables.$frosted-tray-dark};
   --app-elevated-background: #{variables.$frosted-elevated-dark};
   --app-tab-background: #{variables.$frosted-tab-dark};
+  --app-tab-hover-background: #{variables.$frosted-tab-hover-dark};
   --app-control-background: #{variables.$frosted-control-dark};
   --app-control-hover: #{variables.$frosted-control-hover-dark};
   --app-text-primary: #{variables.$frosted-text-primary-dark};

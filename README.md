@@ -5,7 +5,7 @@
 **All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
 
 - Current fork version: `v3.3.0-tem.1`
-- Change summary updated: 02/08/2026
+- Change summary updated: 03/08/2026
 
 # Fork Changelog
 
@@ -14,6 +14,18 @@ This changelog covers fork-specific commits made after the upstream baseline at 
 Changes under Unreleased are present on the production branch but have not yet been assigned to a tagged release.
 
 ## Unreleased
+
+### Make Repeated Rescans Safe and Preserve Temporarily Unavailable Entries
+
+Folder rescans now use fresh per-source snapshots and ignore stale, overlapping, failed, or superseded results, preventing repeated scans and source-folder changes from importing duplicates or applying an incomplete file list. Files absent from a completed scan are retained as temporarily unavailable rather than marked for deletion, preserving their tags, notes, ratings, play history, Date Added, default screenshot, playlist, and year across catalogue saves; when a file reappears or is renamed or moved, its existing entry and metadata are recovered instead of accumulating obsolete records. Temporarily unavailable items remain out of the main gallery and thumbnail work, while the Catalogue Editor reports and highlights them and can show All Entries, Available Only, or Temporarily Unavailable Only alongside its existing searches and batch actions. Focused tests cover scan generations, failure isolation, repeated recovery, metadata persistence, availability filtering, and unavailable-item exclusion.
+
+### Restore Settings Selection and Hover Feedback
+
+Settings rows now use consistently sized option icons, clearer selected states, and aligned icon, visibility, and description columns. Their spacing was balanced after visual testing so descriptions remain easy to scan without clipping or hiding the option icons. Inactive settings tabs now use opaque theme-aware hover colours and accent borders, keeping their labels readable instead of exposing the gallery behind the settings panel.
+
+### Require a Clean Production Release Preflight
+
+Production packaging now starts with a tracked safety check that requires the canonical production worktree, the main branch, an attached commit, the exact fork origin, the worktree-specific release designation, and a clean Git state. Retained local production-test outputs are ignored without being deleted, preventing generated application bundles from entering source commits while still allowing verified builds to remain available locally.
 
 ### Modernise the Interface with a Mac-Sleek Frosted Graphite Design
 

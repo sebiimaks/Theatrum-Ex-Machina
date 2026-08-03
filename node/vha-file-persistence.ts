@@ -51,6 +51,11 @@ export function parseVhaJson(raw: string | Buffer): FinalObject {
   if (!Array.isArray(parsed.images)) {
     throw new Error('The catalogue does not contain a valid images list.');
   }
+  parsed.images.forEach((image: unknown) => {
+    if (isObject(image) && image.missing !== undefined && typeof image.missing !== 'boolean') {
+      throw new Error('The catalogue contains an invalid missing-file state.');
+    }
+  });
   if (!isObject(parsed.screenshotSettings)) {
     throw new Error('The catalogue does not contain valid screenshot settings.');
   }

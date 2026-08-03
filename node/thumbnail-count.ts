@@ -278,6 +278,7 @@ export function applyThumbnailRegenerationFailure(
 
 function isEligibleFolderThumbnailVideo(element: ImageElement): boolean {
   return !element.deleted
+    && !element.missing
     && element.cleanName !== '*FOLDER*'
     && !isMetadataImportFailure(element)
     && typeof element.hash === 'string'
@@ -323,6 +324,7 @@ export function planFolderThumbnailRegeneration(
   const matchingVideos = elements.filter((element: ImageElement) => {
     return Number(element.inputSource) === sourceIndex
       && !element.deleted
+      && !element.missing
       && element.cleanName !== '*FOLDER*';
   });
   const eligibleVideos = matchingVideos.filter((element: ImageElement) => {

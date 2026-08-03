@@ -37,6 +37,14 @@ import {
   beginPreviewTransaction,
   markPreviewTransactionCommitted,
 } from './thumbnail-transaction';
+import {
+  FolderScanCoordinator,
+  forgetMissingKnownPaths,
+} from '../interfaces/folder-rescan';
+import type {
+  FolderFileSnapshot,
+  FolderScanSession,
+} from '../interfaces/folder-rescan';
 
 export interface TempMetadataQueueObject {
   dateAdded: number;
@@ -44,6 +52,7 @@ export interface TempMetadataQueueObject {
   inputSource: number;
   name: string;
   partialPath: string;
+  scanSession?: FolderScanSession;
 }
 
 // ONLY FOR LOGGING
@@ -173,16 +182,28 @@ let numberOfThumbsDeleted = 0;
 
 // =====================================================================================================================
 
-// Create maps where the value = 1 always.
-// It is faster to check if key exists than searching through an array.
-let alreadyInAngular: Map<string, 1> = new Map(); // full paths to videos we have metadata for in Angular
+// Track known catalogue paths per source so nested or duplicate source folders
+// cannot suppress one another during a rescan.
+let knownPathsBySource: Map<number, Set<string>> = new Map();
 let failedMetadataPaths: Set<string> = new Set();
 let pendingMetadataPaths: Set<string> = new Set();
 
-// These two are together:
-const watcherMap:       Map<number, FSWatcher> = new Map();
-let allFoundFilesMap: Map<number, Map<string, 1>> = new Map();
-// both these numbers     ^^^^^^ match up - they refer to the same `inputSource`
+const watcherMap: Map<number, FSWatcher> = new Map();
+const folderScanCoordinator = new FolderScanCoordinator();
+
+function knownPathsForSource(inputSource: number): Set<string> {
+  let sourcePaths = knownPathsBySource.get(inputSource);
+  if (!sourcePaths) {
+    sourcePaths = new Set();
+    knownPathsBySource.set(inputSource, sourcePaths);
+  }
+  return sourcePaths;
+}
+
+function knownPathCount(): number {
+  return Array.from(knownPathsBySource.values())
+    .reduce((count: number, sourcePaths: Set<string>) => count + sourcePaths.size, 0);
+}
 
 // =====================================================================================================================
 
@@ -323,6 +344,30 @@ function pauseQueuesForInitialScan(description: string): () => void {
   pauseLimit.unref?.();
 
   return release;
+}
+
+function finishInitialFolderScan(releaseScanQueues: () => void): void {
+  releaseScanQueues();
+  if (
+    activeInitialScanQueueTokens.size === 0
+    && metadataQueue.idle()
+    && thumbQueue.idle()
+  ) {
+    finishImport();
+  }
+}
+
+function reportFolderScanFailure(
+  session: FolderScanSession,
+  inputDir: string,
+  error: unknown,
+): void {
+  if (!folderScanCoordinator.fail(session)) {
+    return;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  console.error('Folder scan failed:', inputDir, error);
+  GLOBALS.angularApp.sender.send('folder-scan-failed', session.inputSource, message);
 }
 
 /**
@@ -615,9 +660,9 @@ async function commitRegeneratedPreviewFiles(
  * Send element back to Angular; if any screenshots missing, queue it for extraction
  * @param imageElement
  */
-function sendNewVideoMetadata(imageElement: ImageElementPlus): void {
+function sendNewVideoMetadata(imageElement: ImageElementPlus, scannedSourcePath?: string): void {
 
-  alreadyInAngular.set(imageElement.fullPath, 1);
+  knownPathsForSource(Number(imageElement.inputSource)).add(imageElement.fullPath);
 
   if (shouldExtractThumbnails(imageElement)) {
     failedMetadataPaths.delete(imageElement.fullPath);
@@ -628,7 +673,7 @@ function sendNewVideoMetadata(imageElement: ImageElementPlus): void {
   delete imageElement.fullPath; // downgrade to `ImageElement` from `ImageElementPlus`
 
   const elementForAngular = insertTemporaryFieldsSingle(imageElement);
-  GLOBALS.angularApp.sender.send('new-video-meta', elementForAngular);
+  GLOBALS.angularApp.sender.send('new-video-meta', elementForAngular, scannedSourcePath);
 
   if (shouldExtractThumbnails(imageElement)) {
     if (thumbExtractionStartTime === 0) {
@@ -645,11 +690,21 @@ function sendNewVideoMetadata(imageElement: ImageElementPlus): void {
  */
 export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
 
+  const scanStillCurrent = (): boolean => (
+    !file.scanSession || folderScanCoordinator.isCurrent(file.scanSession)
+  );
+
+  if (!scanStillCurrent()) {
+    pendingMetadataPaths.delete(file.fullPath);
+    done();
+    return;
+  }
+
   if (metaExtractionStartTime === 0) {
     metaExtractionStartTime = performance.now();
   }
 
-  if (GLOBALS.demo && alreadyInAngular.size >= 50) {
+  if (GLOBALS.demo && knownPathCount() >= 50) {
     console.log(' - DEMO LIMIT REACHED - CANCELING SCAN !!!');
     sendCurrentProgress(50, 50, 'done');
     metadataQueue.kill();
@@ -669,13 +724,16 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
       return createImportErrorElement(file.fullPath);
     })
     .then((imageElement: ImageElementPlus) => {
+      if (!scanStillCurrent()) {
+        return;
+      }
       imageElement.cleanName = cleanUpFileName(file.name);
       imageElement.dateAdded = file.dateAdded;
       imageElement.fileName = file.name;
       imageElement.fullPath = file.fullPath; // insert this converting `ImageElement` to `ImageElementPlus`
       imageElement.inputSource = file.inputSource;
       imageElement.partialPath = file.partialPath;
-      sendNewVideoMetadata(imageElement);
+      sendNewVideoMetadata(imageElement, file.scanSession?.sourcePath);
     })
     .catch((error) => {
       // If the file vanished or the share disconnected completely, skip this
@@ -696,6 +754,7 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
  */
 function superFastSystemScan(inputDir: string, inputSource: number): void {
 
+  const scanSession = folderScanCoordinator.begin(inputSource, inputDir);
   GLOBALS.angularApp.sender.send('started-watching-this-dir', inputSource);
   const releaseScanQueues = pauseQueuesForInitialScan(inputDir);
 
@@ -707,7 +766,8 @@ function superFastSystemScan(inputDir: string, inputSource: number): void {
       .crawl(inputDir);
   } catch (error) {
     console.error('Unable to begin folder scan:', inputDir, error);
-    releaseScanQueues();
+    reportFolderScanFailure(scanSession, inputDir, error);
+    finishInitialFolderScan(releaseScanQueues);
     return;
   }
 
@@ -715,12 +775,17 @@ function superFastSystemScan(inputDir: string, inputSource: number): void {
 
   crawler.withPromise().then((files: string[]) => {
 
+    if (!folderScanCoordinator.isCurrent(scanSession)) {
+      return;
+    }
+
     // LOGGING =====================================================================================
     logPerformance('scan took ', t0);
     console.log('Found ', files.length, ' files in given directory');
     // =============================================================================================
 
     const allAcceptableFiles: string[] = [...acceptableFiles, ...GLOBALS.additionalExtensions];
+    const acceptablePaths: string[] = [];
 
     files.forEach((fullPath: string) => {
 
@@ -730,14 +795,29 @@ function superFastSystemScan(inputDir: string, inputSource: number): void {
         return;
       }
 
-      if (!allFoundFilesMap.has(inputSource)) {
-        allFoundFilesMap.set(inputSource, new Map());
-      }
-      allFoundFilesMap.get(inputSource).set(fullPath, 1);
+      acceptablePaths.push(fullPath);
+      folderScanCoordinator.record(scanSession, fullPath);
+    });
 
-      if (alreadyInAngular.has(fullPath) && !failedMetadataPaths.has(fullPath)) {
+    const scanSnapshot: FolderFileSnapshot | undefined = folderScanCoordinator.complete(scanSession);
+    if (!scanSnapshot) {
+      return;
+    }
+
+    const knownPaths = knownPathsForSource(inputSource);
+    forgetMissingKnownPaths(
+      knownPaths,
+      scanSnapshot,
+      failedMetadataPaths,
+      pendingMetadataPaths,
+    );
+
+    acceptablePaths.forEach((fullPath: string) => {
+      if (knownPaths.has(fullPath) && !failedMetadataPaths.has(fullPath)) {
         return;
       }
+
+      const parsed = path.parse(fullPath);
 
       const partial: string = path.relative(inputDir, parsed.dir).replace(/\\/g, '/');
 
@@ -747,17 +827,17 @@ function superFastSystemScan(inputDir: string, inputSource: number): void {
         inputSource: inputSource,
         name: parsed.base,
         partialPath: '/' + partial,
+        scanSession,
       };
 
       enqueueMetadata(newItem);
 
     });
 
-    GLOBALS.angularApp.sender.send('all-files-found-in-dir', inputSource, allFoundFilesMap.get(inputSource));
+    GLOBALS.angularApp.sender.send('all-files-found-in-dir', inputSource, scanSnapshot, inputDir);
   }).catch((error: Error) => {
-    console.error('Folder scan failed:', inputDir, error);
-    GLOBALS.angularApp.sender.send('all-files-found-in-dir', inputSource, allFoundFilesMap.get(inputSource));
-  }).finally(releaseScanQueues);
+    reportFolderScanFailure(scanSession, inputDir, error);
+  }).finally(() => finishInitialFolderScan(releaseScanQueues));
 
 }
 
@@ -782,6 +862,7 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
 
   console.log('starting watcher ', inputSource, typeof(inputSource), inputDir);
 
+  const scanSession = folderScanCoordinator.begin(inputSource, inputDir);
   GLOBALS.angularApp.sender.send('started-watching-this-dir', inputSource);
 
   // WARNING - there are other ways to have a network address that are not accounted here !!!
@@ -805,9 +886,14 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
   const allAcceptableFiles: string[] = [...acceptableFiles, ...GLOBALS.additionalExtensions];
 
   const releaseScanQueues = pauseQueuesForInitialScan(inputDir);
+  let initialScanReady = false;
 
   watcher
     .on('add', (filePath: string) => {
+
+      if (!folderScanCoordinator.isCurrent(scanSession)) {
+        return;
+      }
 
       const ext = filePath.substring(filePath.lastIndexOf('.') + 1).toLowerCase();
 
@@ -820,12 +906,9 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
       const fileName = subPath.substring(subPath.lastIndexOf('/') + 1);
       const fullPath = path.join(inputDir, partialPath, fileName);
 
-      if (!allFoundFilesMap.has(inputSource)) {
-        allFoundFilesMap.set(inputSource, new Map());
-      }
-      allFoundFilesMap.get(inputSource).set(fullPath, 1);
+      folderScanCoordinator.record(scanSession, fullPath);
 
-      if (alreadyInAngular.has(fullPath) && !failedMetadataPaths.has(fullPath)) {
+      if (knownPathsForSource(inputSource).has(fullPath) && !failedMetadataPaths.has(fullPath)) {
         return;
       }
 
@@ -835,11 +918,15 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
         inputSource: inputSource,
         name: fileName,
         partialPath: partialPath,
+        scanSession,
       };
 
       enqueueMetadata(newItem);
     })
     .on('change', (filePath: string) => {
+      if (!folderScanCoordinator.isCurrent(scanSession)) {
+        return;
+      }
       const subPath = ('/' + filePath.replace(/\\/g, '/')).replace('//', '/');
       const partialPath = subPath.substring(0, subPath.lastIndexOf('/'));
       const fileName = subPath.substring(subPath.lastIndexOf('/') + 1);
@@ -855,24 +942,37 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
         inputSource,
         name: fileName,
         partialPath,
+        scanSession,
       });
     })
     .on('unlink', (partialFilePath: string) => {    // note: this happens even when file is renamed!
+      if (!folderScanCoordinator.isCurrent(scanSession)) {
+        return;
+      }
       console.log(' !!! FILE DELETED, updating Angular:', partialFilePath);
       GLOBALS.angularApp.sender.send('single-file-deleted', inputSource, partialFilePath);
-      // remove element from `alreadyInAngular`
       const basePath: string = GLOBALS.selectedSourceFolders[inputSource].path;
       const fullPath = path.join(basePath, partialFilePath);
-      alreadyInAngular.delete(fullPath);
+      folderScanCoordinator.remove(scanSession, fullPath);
+      knownPathsForSource(inputSource).delete(fullPath);
       failedMetadataPaths.delete(fullPath);
       pendingMetadataPaths.delete(fullPath);
       // note: there is no need to watch for `unlinkDir` since `unlink` fires for every file anyway!
     })
     .on('ready', () => {
+      initialScanReady = true;
       console.log('Finished scanning', inputSource);
-      releaseScanQueues();
-
-      GLOBALS.angularApp.sender.send('all-files-found-in-dir', inputSource, allFoundFilesMap.get(inputSource));
+      const scanSnapshot = folderScanCoordinator.complete(scanSession);
+      if (scanSnapshot) {
+        forgetMissingKnownPaths(
+          knownPathsForSource(inputSource),
+          scanSnapshot,
+          failedMetadataPaths,
+          pendingMetadataPaths,
+        );
+        GLOBALS.angularApp.sender.send('all-files-found-in-dir', inputSource, scanSnapshot, inputDir);
+      }
+      finishInitialFolderScan(releaseScanQueues);
 
       if (persistent) {
         console.log('^^^^^^^^ - CONTINUING to watch this directory!');
@@ -884,8 +984,18 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
       logPerformance('Chokidar took ', t0);
     })
     .on('error', (error: Error) => {
-      console.error('Folder watcher failed:', inputDir, error);
-      releaseScanQueues();
+      if (!initialScanReady) {
+        reportFolderScanFailure(scanSession, inputDir, error);
+        finishInitialFolderScan(releaseScanQueues);
+        return;
+      }
+
+      console.error('Active folder watcher reported an error:', inputDir, error);
+      GLOBALS.angularApp.sender.send(
+        'folder-watch-error',
+        inputSource,
+        error instanceof Error ? error.message : String(error),
+      );
     });
 
   watcherMap.set(inputSource, watcher);
@@ -893,7 +1003,7 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
 
 /**
  * Close out all the wathers
- * reset the alreadyInAngular
+ * reset the known per-source catalogue paths
  * @param finalArray
  */
 export function resetWatchers(finalArray: ImageElement[]): void {
@@ -903,11 +1013,10 @@ export function resetWatchers(finalArray: ImageElement[]): void {
     closeWatcher(key);
   });
 
-  alreadyInAngular = new Map();
+  knownPathsBySource = new Map();
   failedMetadataPaths = new Set();
   pendingMetadataPaths = new Set();
-
-  allFoundFilesMap = new Map();
+  folderScanCoordinator.reset();
 
   finalArray.forEach((element: ImageElement) => {
     const fullPath: string = path.join(
@@ -916,7 +1025,9 @@ export function resetWatchers(finalArray: ImageElement[]): void {
       element.fileName
     );
 
-    alreadyInAngular.set(fullPath, 1);
+    if (element.missing !== true) {
+      knownPathsForSource(Number(element.inputSource)).add(fullPath);
+    }
     if (!shouldExtractThumbnails(element)) {
       failedMetadataPaths.add(fullPath);
     }
@@ -930,12 +1041,14 @@ export function resetWatchers(finalArray: ImageElement[]): void {
  */
 export function closeWatcher(inputSource: number): void {
   console.log('stop watching', inputSource);
-  if (watcherMap.has(inputSource)) {
+  folderScanCoordinator.invalidate(inputSource);
+  const watcher = watcherMap.get(inputSource);
+  watcherMap.delete(inputSource);
+  if (watcher) {
     console.log('closing ', inputSource);
-    watcherMap.get(inputSource).close().then(() => {
-      console.log(inputSource, ' closed!');
-      // do nothing
-    });
+    watcher.close()
+      .then(() => console.log(inputSource, ' closed!'))
+      .catch((error: Error) => console.warn('Unable to close folder watcher:', inputSource, error));
   }
 }
 
@@ -948,11 +1061,16 @@ export function closeWatcher(inputSource: number): void {
 export function startWatcher(inputSource: number, folderPath: string, persistent: boolean): void {
   console.log('start watching !!!!', inputSource, typeof(inputSource), folderPath, persistent);
 
+  if (watcherMap.has(inputSource)) {
+    closeWatcher(inputSource);
+  }
+
   GLOBALS.selectedSourceFolders[inputSource] = {
     path: folderPath,
     watch: persistent,
   };
 
+  importCompletionSent = false;
   preventSleep();
   startFileSystemWatching(folderPath, inputSource, persistent);
 }
@@ -1024,7 +1142,7 @@ async function hasAllThumbs(
 export function extractAnyMissingThumbs(fullArray: ImageElement[]): void {
   preventSleep();
   fullArray.forEach((element: ImageElement) => {
-    if (shouldExtractThumbnails(element)) {
+    if (!element.missing && shouldExtractThumbnails(element)) {
       importCompletionSent = false;
       thumbQueue.push(element);
     }

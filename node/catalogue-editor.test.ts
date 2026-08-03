@@ -82,6 +82,34 @@ test('keeps deleted entries hidden unless explicitly requested', () => {
   assert.deepEqual(filterCatalogueEntries([active, deleted], criteria, true), [active, deleted]);
 });
 
+test('filters temporarily unavailable entries without mutating their metadata', () => {
+  const available = image({ cleanName: 'Available', notes: 'Keep available metadata' });
+  const missing = image({
+    cleanName: 'Temporarily unavailable',
+    index: 2,
+    missing: true,
+    notes: 'Keep missing metadata',
+    tags: ['important'],
+  });
+  const anotherMissing = image({ cleanName: 'Other unavailable', index: 3, missing: true });
+  const deletedMissing = image({ cleanName: 'Deleted unavailable', deleted: true, index: 4, missing: true });
+  const criteria = [{ field: 'all' as const, id: 0, operator: 'contains' as const, query: '' }];
+
+  const entries = [available, missing, anotherMissing, deletedMissing];
+
+  assert.deepEqual(filterCatalogueEntries(entries, criteria, false, 'all'), [available, missing, anotherMissing]);
+  assert.deepEqual(filterCatalogueEntries(entries, criteria, false, 'available'), [available]);
+  assert.deepEqual(filterCatalogueEntries(entries, criteria, true, 'missing'), [missing, anotherMissing]);
+  assert.deepEqual(filterCatalogueEntries(entries, [{
+    field: 'tags',
+    id: 0,
+    operator: 'contains',
+    query: 'IMPORTANT',
+  }], false, 'missing'), [missing]);
+  assert.deepEqual(missing.tags, ['important']);
+  assert.equal(missing.notes, 'Keep missing metadata');
+});
+
 test('validates strict non-negative integers and optional field clearing', () => {
   const entries = [image()];
 

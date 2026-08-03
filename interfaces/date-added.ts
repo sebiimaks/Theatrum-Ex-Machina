@@ -71,6 +71,12 @@ function isImportErrorEntry(element: ImageElement): boolean {
   return element.metadataImportFailed === true || element.tags?.includes('import_error') === true;
 }
 
+function cataloguePathsMatch(left: ImageElement, right: ImageElement): boolean {
+  return sourceIndicesMatch(left.inputSource, right.inputSource)
+    && left.partialPath === right.partialPath
+    && left.fileName === right.fileName;
+}
+
 /**
  * Find one prior deleted entry whose metadata can be inherited safely after an
  * external rename or move. A unique hash wins; duplicate hashes require one
@@ -81,7 +87,20 @@ export function findDeletedMetadataOrigin(
   incoming: ImageElement,
   catalogue: ImageElement[],
 ): ImageElement | undefined {
-  const candidates = catalogue.filter((candidate: ImageElement) => candidate.deleted === true);
+  const deletedCandidates = catalogue.filter((candidate: ImageElement) => candidate.deleted === true);
+  const missingCandidates = catalogue.filter((candidate: ImageElement) => (
+    candidate.deleted !== true
+    && candidate.missing === true
+    && sourceIndicesMatch(candidate.inputSource, incoming.inputSource)
+  ));
+  const exactMissingMatches = missingCandidates.filter((candidate: ImageElement) => (
+    cataloguePathsMatch(candidate, incoming)
+  ));
+  if (exactMissingMatches.length === 1) {
+    return exactMissingMatches[0];
+  }
+
+  const candidates = [...deletedCandidates, ...missingCandidates];
   const hashMatches = incoming.hash
     ? candidates.filter((candidate: ImageElement) => candidate.hash === incoming.hash)
     : [];

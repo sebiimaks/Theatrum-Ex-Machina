@@ -13,6 +13,7 @@ import {
   validateCatalogueOverwrite,
 } from './catalogue-editor.logic';
 import type {
+  CatalogueAvailabilityFilter,
   CatalogueOverwriteField,
   CatalogueSearchCriterion,
 } from './catalogue-editor.logic';
@@ -49,6 +50,7 @@ export class CatalogueEditorComponent implements OnChanges {
   @Output() saveRequested = new EventEmitter<void>();
 
   filteredEntries: ImageElement[] = [];
+  availabilityFilter: CatalogueAvailabilityFilter = 'all';
   batchOverwriteDraft = '';
   batchOverwriteField: CatalogueOverwriteField | '' = '';
   batchOverwriteStatus = '';
@@ -100,7 +102,7 @@ export class CatalogueEditorComponent implements OnChanges {
   }
 
   get activeCount(): number {
-    return this.images.filter((element: ImageElement) => !element.deleted).length;
+    return this.images.filter((element: ImageElement) => !element.deleted && !element.missing).length;
   }
 
   get batchAutocompleteDraft(): string {
@@ -143,6 +145,10 @@ export class CatalogueEditorComponent implements OnChanges {
 
   get deletedCount(): number {
     return this.images.filter((element: ImageElement) => element.deleted).length;
+  }
+
+  get missingCount(): number {
+    return this.images.filter((element: ImageElement) => !element.deleted && element.missing).length;
   }
 
   get totalCount(): number {
@@ -386,6 +392,7 @@ export class CatalogueEditorComponent implements OnChanges {
       this.images,
       this.searchCriteria,
       this.showDeleted,
+      this.availabilityFilter,
     );
   }
 

@@ -32,8 +32,12 @@ import { IMPORT_ERROR_TAG, isMetadataImportFailure } from '../../../interfaces/f
 import {
   ensureDateAddedForNewEntry,
   findDeletedMetadataOrigin,
-  inheritDateAdded,
 } from '../../../interfaces/date-added';
+import {
+  copyRecoveredEntryMetadata,
+  markMissingFolderEntries,
+  replaceRecoveredFolderEntry,
+} from '../../../interfaces/folder-rescan';
 import type { ImportStage } from '../../../node/main-support';
 import type {
   FolderThumbnailRegenerationProgress,
@@ -769,45 +773,62 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.sourceFolderService.addCurrentScanning(sourceIndex);
     });
 
-    // WIP -- delete any videos no longer found on the hard drive!
-    this.electronService.ipcRenderer.on('all-files-found-in-dir', (event, sourceIndex: number, allFilesMap: Map<string, 1>) => {
-      // console.log('all files returning:');
-      // console.log(sourceIndex, typeof(sourceIndex));
-      // console.log(allFilesMap);
+    // Only a complete successful scan can mark catalogue paths as missing.
+    // Missing entries remain saved so temporary storage outages are reversible.
+    this.electronService.ipcRenderer.on('all-files-found-in-dir', (
+      event,
+      sourceIndex: number,
+      allFilesMap: Map<string, 1>,
+      scannedSourcePath?: string,
+    ) => {
+      this.finishFolderScan(sourceIndex);
 
-      this.sourceFolderService.removeCurrentScanning(sourceIndex);
-
-      this.allFinishedScanning = this.sourceFolderService.areAllFinishedScanning();
-      if (this.allFinishedScanning) {
-        console.log('DONE SCANNING !!!!!!!');
-        this.cd.detectChanges();
+      const sourceFolder = this.sourceFolderService.selectedSourceFolder[sourceIndex];
+      if (
+        !(allFilesMap instanceof Map)
+        || !sourceFolder
+        || !this.folderScanPathMatches(sourceIndex, scannedSourcePath)
+      ) {
+        console.error('Ignoring an invalid folder scan result:', sourceIndex);
+        return;
       }
 
-      const rootFolder: string = this.sourceFolderService.selectedSourceFolder[sourceIndex].path;
+      const newlyMissing = markMissingFolderEntries(
+        this.imageElementService.imageElements,
+        sourceIndex,
+        sourceFolder.path,
+        allFilesMap,
+      );
 
-      let somethingDeleted = false;
-
-      this.imageElementService.imageElements
-        // tslint:disable-next-line:triple-equals
-        .filter((element: ImageElement) => { return element.inputSource == sourceIndex; })
-        // notice the loosey-goosey comparison! this is because number  ^^  string comparison happening here!
-        .forEach((element: ImageElement) => {
-          // console.log(element.fileName);
-          if (!allFilesMap.has(path.join(rootFolder, element.partialPath, element.fileName))) {
-            console.log('deleting: ', element.fileName);
-            element.deleted = true;
-            somethingDeleted = true;
-          }
-        });
-
-      if (somethingDeleted) {
+      if (newlyMissing > 0) {
+        this.imageElementService.finalArrayNeedsSaving = true;
         this.deletePipeTrigger = !this.deletePipeTrigger;
       }
+    });
 
+    this.electronService.ipcRenderer.on('folder-scan-failed', (
+      event,
+      sourceIndex: number,
+      message: string,
+    ) => {
+      console.warn('Folder scan did not complete; catalogue entries were left unchanged:', message);
+      this.finishFolderScan(sourceIndex);
+    });
+
+    this.electronService.ipcRenderer.on('folder-watch-error', (
+      event,
+      sourceIndex: number,
+      message: string,
+    ) => {
+      console.warn(
+        'The active folder watcher reported a transient error; catalogue metadata was left unchanged:',
+        sourceIndex,
+        message,
+      );
     });
 
     // When `watch` folder and `chokidar` detects a file was deleted (can happen when renamed too!)
-    // mark the element in `imageElements[]` as `deleted`
+    // mark the element as missing without discarding its saved metadata.
     this.electronService.ipcRenderer.on('single-file-deleted', (event, sourceIndex: number, partialPath: string) => {
       this.imageElementService.imageElements
         // tslint:disable-next-line:triple-equals
@@ -818,9 +839,12 @@ export class HomeComponent implements OnInit, AfterViewInit {
             '\\' + partialPath === path.join(element.partialPath, element.fileName)
             ||     partialPath === path.join(element.partialPath, element.fileName)
           ) {
-            console.log('FILE DELETED !!!', partialPath);
-            element.deleted = true;
-            this.deletePipeTrigger = !this.deletePipeTrigger;
+            if (element.missing !== true && element.deleted !== true) {
+              console.log('FILE MISSING:', partialPath);
+              element.missing = true;
+              this.imageElementService.finalArrayNeedsSaving = true;
+              this.deletePipeTrigger = !this.deletePipeTrigger;
+            }
           }
         });
     });
@@ -1051,7 +1075,16 @@ export class HomeComponent implements OnInit, AfterViewInit {
     });
 
     // gets called for every element that node extracted metadata for (screenshots not yet extracted)
-    this.electronService.ipcRenderer.on('new-video-meta', (event, element: ImageElement) => {
+    this.electronService.ipcRenderer.on('new-video-meta', (
+      event,
+      element: ImageElement,
+      scannedSourcePath?: string,
+    ) => {
+
+      if (!this.folderScanPathMatches(Number(element.inputSource), scannedSourcePath)) {
+        console.warn('Ignoring metadata returned for a source folder that has since changed.');
+        return;
+      }
 
       // if this video was just renamed from within the app do not add the element, skip it
       if (   this.lastRenamedFileHack // undefined unless file recently renamed
@@ -1075,10 +1108,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       if (existingFailureIndex !== -1) {
         const existingFailure = this.imageElementService.imageElements[existingFailureIndex];
         const probeStillFailed = isMetadataImportFailure(element);
-        this.copyMetaProperties(element, existingFailure);
-        element.defaultScreen = existingFailure.defaultScreen;
-        element.lastPlayed = existingFailure.lastPlayed;
-        element.playlist = existingFailure.playlist;
+        copyRecoveredEntryMetadata(element, existingFailure);
         element.tags = (existingFailure.tags || []).filter((tag) => {
           return probeStillFailed || tag !== IMPORT_ERROR_TAG;
         });
@@ -1107,21 +1137,43 @@ export class HomeComponent implements OnInit, AfterViewInit {
         this.imageElementService.imageElements,
       );
       const inheritedExistingMetadata = deletedOrigin !== undefined;
+      const probeStillFailed = isMetadataImportFailure(element);
       if (deletedOrigin) {
-        this.copyMetaProperties(element, deletedOrigin);
+        copyRecoveredEntryMetadata(element, deletedOrigin);
       }
 
       if (!this.demo || this.imageElementService.imageElements.length <= 50) {
         if (!inheritedExistingMetadata) {
           ensureDateAddedForNewEntry(element);
         }
-        if (isMetadataImportFailure(element)) {
+        if (probeStillFailed) {
+          element.metadataImportFailed = true;
           element.tags = element.tags || [];
           if (!element.tags.includes(IMPORT_ERROR_TAG)) {
             element.tags.push(IMPORT_ERROR_TAG);
           }
           this.manualTagsService.addTag(IMPORT_ERROR_TAG);
+        } else if (element.tags?.includes(IMPORT_ERROR_TAG)) {
+          delete element.metadataImportFailed;
+          element.tags = element.tags.filter((tag: string) => tag !== IMPORT_ERROR_TAG);
+          if (this.manualTagsService.tagsFrequencyMap.has(IMPORT_ERROR_TAG)) {
+            this.manualTagsService.removeTag(IMPORT_ERROR_TAG);
+          }
         }
+
+        if (
+          deletedOrigin
+          && replaceRecoveredFolderEntry(
+            this.imageElementService.imageElements,
+            element,
+            deletedOrigin,
+          ) !== undefined
+        ) {
+          this.imageElementService.finalArrayNeedsSaving = true;
+          this.resetFinalArrayRef();
+          return;
+        }
+
         element.index = this.imageElementService.imageElements.length;
         this.imageElementService.imageElements.push(element); // not enough for view to update; we need `.slice()`
         this.imageElementService.finalArrayNeedsSaving = true;
@@ -1130,6 +1182,24 @@ export class HomeComponent implements OnInit, AfterViewInit {
     });
 
     this.justStarted();
+  }
+
+  private finishFolderScan(sourceIndex: number): void {
+    this.sourceFolderService.removeCurrentScanning(sourceIndex);
+    this.allFinishedScanning = this.sourceFolderService.areAllFinishedScanning();
+    if (this.allFinishedScanning) {
+      console.log('Folder scanning complete.');
+    }
+    this.cd.detectChanges();
+  }
+
+  private folderScanPathMatches(sourceIndex: number, scannedSourcePath?: string): boolean {
+    if (!scannedSourcePath) {
+      return true;
+    }
+    const currentSourcePath = this.sourceFolderService.selectedSourceFolder[sourceIndex]?.path;
+    return Boolean(currentSourcePath)
+      && path.normalize(currentSourcePath) === path.normalize(scannedSourcePath);
   }
 
   // =======================================================================================================================================
@@ -1154,21 +1224,6 @@ export class HomeComponent implements OnInit, AfterViewInit {
         }
       }
     };
-  }
-
-  /**
-   * Migrate VHA meta properties from one ImageElement to another
-   * @param destination
-   * @param origin
-   */
-  copyMetaProperties(destination: ImageElement, origin: ImageElement): void {
-    // WARNING - some day in MacOS we'll add OS tags, so this will need to be a merge, not replace
-    inheritDateAdded(destination, origin);
-    destination.notes       = origin.notes;
-    destination.stars       = origin.stars;
-    destination.tags        = origin.tags;
-    destination.timesPlayed = origin.timesPlayed;
-    destination.year        = origin.year;
   }
 
   /**
@@ -2345,7 +2400,9 @@ export class HomeComponent implements OnInit, AfterViewInit {
   }
 
   handleCatalogueEntriesChanged(): void {
-    const activeImages = this.imageElementService.imageElements.filter((element: ImageElement) => !element.deleted);
+    const activeImages = this.imageElementService.imageElements.filter((element: ImageElement) => (
+      !element.deleted && !element.missing
+    ));
 
     if (!this.catalogueEditorSaving) {
       this.catalogueEditorSaveStatus = 'Unsaved Changes';

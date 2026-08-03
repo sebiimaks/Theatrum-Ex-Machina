@@ -46,6 +46,7 @@ export interface ImageElement {
   stars: StarRating;             // star rating 0 = n/a, otherwise 1, 2, 3
   timesPlayed: number;           // number of times the file has been launched by VHA
   lastPlayed: number;            // timestamp of last time video was played; for last-played sorting order
+  missing?: boolean;             // source scan could not currently find the file; metadata remains recoverable
   width: number;                 // width of the video (px)
   // ========================================================================
   // OPTIONAL
