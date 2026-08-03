@@ -16,6 +16,11 @@ Changes under Unreleased are present on the production branch but have not yet b
 ## Unreleased
 
 <details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/8755aea"><code>8755aea</code></a> — <strong>Stabilise scrolling across gallery detail views</strong></summary>
+<p>Full View now uses deterministic row geometry and a small rendering buffer, while gallery measurements are refreshed in a coordinated order after view, size, zoom, ribbon, sidebar, and tray changes. Details View and Details View 2 no longer focus every newly recycled Add tag field, which previously made Chromium race through the catalogue as virtual rows were created. Measurement-distorting height transitions and the decorative virtual-scroller spacer were also removed, with regression coverage added for layout calculations and focus behaviour.</p>
+</details>
+
+<details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/3d5b67c"><code>3d5b67c</code></a> — <strong>Make rescans recoverable and restore settings feedback</strong></summary>
 <p>Repeated folder scans now use isolated per-source snapshots, ignore stale or failed results, and retain temporarily unavailable videos so tags, notes, ratings, play history, Date Added, and other user metadata survive network or external-drive interruptions. Recovered or renamed files replace their previous entry instead of accumulating obsolete records. Unavailable entries stay out of the normal gallery and thumbnail work and can be filtered explicitly in the Catalogue Editor. Settings option icons also retain visible selected states and balanced spacing, while inactive tabs use opaque theme-aware hover feedback.</p>
 </details>
