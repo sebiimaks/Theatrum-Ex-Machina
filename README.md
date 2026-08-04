@@ -5,7 +5,7 @@
 **All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
 
 - Current fork version: `v3.3.0-tem.1`
-- Change summary updated: 03/08/2026
+- Change summary updated: 04/08/2026
 
 # Fork Changelog
 
@@ -14,6 +14,11 @@ This changelog covers material fork-specific changes made after the upstream bas
 Changes under Unreleased are present on the production branch but have not yet been assigned to a tagged release.
 
 ## Unreleased
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/d3a5f73"><code>d3a5f73</code></a> — <strong>Put Catalogue Editor match controls first</strong></summary>
+<p>Reordered each Catalogue Editor search line so its Contains or Does Not Contain condition appears before the search text and field selector. The visual order and keyboard tab order now follow the same condition–query–field sequence, with responsive layouts preserving that relationship on narrower windows. Regression coverage guards the intended control order.</p>
+</details>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/8755aea"><code>8755aea</code></a> — <strong>Stabilise scrolling across gallery detail views</strong></summary>
