@@ -4,7 +4,7 @@
 
 **All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
 
-- Current fork version: `v3.3.0-tem.1`
+- Current fork version: `v3.3.0-tem.2`
 - Change summary updated: 04/08/2026
 
 # Fork Changelog
@@ -14,6 +14,10 @@ This changelog covers material fork-specific changes made after the upstream bas
 Changes under Unreleased are present on the production branch but have not yet been assigned to a tagged release.
 
 ## Unreleased
+
+No unreleased changes.
+
+## [v3.3.0-tem.2](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.2) — 4 August 2026
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/4053cbc"><code>4053cbc</code></a> — <strong>Add safe Catalogue Editor metadata transfer</strong></summary>
