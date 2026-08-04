@@ -16,6 +16,11 @@ Changes under Unreleased are present on the production branch but have not yet b
 ## Unreleased
 
 <details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/4053cbc"><code>4053cbc</code></a> — <strong>Add safe Catalogue Editor metadata transfer</strong></summary>
+<p>Added human-readable metadata export and category-selectable import matched solely by globally unique file hashes. Imports are limited to the Catalogue Editor results displayed when import begins, enter a read-only preview showing only affected entries, highlight every proposed field change, require confirmation, and revalidate before mutation. Save notices now follow the actual catalogue save result. The search selector also covers every editable field, visible file detail, and entry state using human-readable values.</p>
+</details>
+
+<details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/d3a5f73"><code>d3a5f73</code></a> — <strong>Put Catalogue Editor match controls first</strong></summary>
 <p>Reordered each Catalogue Editor search line so its Contains or Does Not Contain condition appears before the search text and field selector. The visual order and keyboard tab order now follow the same condition–query–field sequence, with responsive layouts preserving that relationship on narrower windows. Regression coverage guards the intended control order.</p>
 </details>
