@@ -1,8 +1,22 @@
-import type { OnChanges, SimpleChanges } from '@angular/core';
+import type { OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
 import { Component, ElementRef, EventEmitter, Input, Output, QueryList, ViewChildren } from '@angular/core';
 
 import type { ImageElement, StarRating } from '../../../../interfaces/final-object.interface';
 import { formatDateAddedForInput, parseDateAddedInput } from '../../../../interfaces/date-added';
+import {
+  applyCatalogueMetadataImportPlan,
+  buildCatalogueMetadataImportPlan,
+  catalogueMetadataCategories,
+  catalogueMetadataCategoryLabels,
+  createCatalogueMetadataExport,
+  isCatalogueMetadataImportTarget,
+} from '../../../../interfaces/catalogue-metadata-transfer';
+import type {
+  CatalogueMetadataCategory,
+  CatalogueMetadataImportPlan,
+  CatalogueMetadataUpdate,
+} from '../../../../interfaces/catalogue-metadata-transfer';
+import { ElectronService } from '../../providers/electron.service';
 import { ImageElementService } from '../../services/image-element.service';
 import { ModalService } from '../modal/modal.service';
 import { ManualTagsService } from '../tags-manual/manual-tags.service';
@@ -10,6 +24,7 @@ import {
   applyCatalogueOverwrite,
   catalogueOverwriteFieldLabels,
   filterCatalogueEntries,
+  resolveMetadataImportSaveNotice,
   validateCatalogueOverwrite,
 } from './catalogue-editor.logic';
 import type {
@@ -28,13 +43,27 @@ interface OverwriteFieldOption {
   value: CatalogueOverwriteField;
 }
 
+interface MetadataFileResult {
+  contents?: string;
+  error?: string;
+  fileName?: string;
+  status: 'cancelled' | 'error' | 'success';
+}
+
+interface MetadataChangePreview {
+  category: CatalogueMetadataCategory;
+  fullValue: string;
+  label: string;
+  value: string;
+}
+
 @Component({
   standalone: false,
   selector: 'app-catalogue-editor',
   templateUrl: './catalogue-editor.component.html',
   styleUrls: ['./catalogue-editor.component.scss']
 })
-export class CatalogueEditorComponent implements OnChanges {
+export class CatalogueEditorComponent implements OnChanges, OnDestroy {
 
   @ViewChildren('searchCriterionInput')
   private searchCriterionInputs: QueryList<ElementRef<HTMLInputElement>>;
@@ -59,6 +88,19 @@ export class CatalogueEditorComponent implements OnChanges {
   batchTagTypeahead = '';
   hashCopyFailedIndex: number | undefined;
   hashCopiedIndex: number | undefined;
+  metadataImportFileName = '';
+  metadataImportPlan: CatalogueMetadataImportPlan | undefined;
+  metadataImportSelection: Record<CatalogueMetadataCategory, boolean> = {
+    dateAdded: true,
+    notes: true,
+    stars: true,
+    tags: true,
+    timesPlayed: true,
+    year: true,
+  };
+  metadataTransferBusy = false;
+  metadataTransferError = false;
+  metadataTransferStatus = '';
   searchRowsStatus = '';
   searchCriteria: CatalogueSearchCriterion[] = [
     { field: 'all', id: 0, operator: 'contains', query: '' },
@@ -75,6 +117,11 @@ export class CatalogueEditorComponent implements OnChanges {
     { label: 'Notes', value: 'notes' },
   ];
 
+  readonly metadataCategoryOptions = catalogueMetadataCategories.map((value: CatalogueMetadataCategory) => ({
+    label: catalogueMetadataCategoryLabels[value],
+    value,
+  }));
+
   readonly starOptions: StarOption[] = [
     { label: 'N/A', value: 0.5 },
     { label: '1', value: 1.5 },
@@ -87,9 +134,17 @@ export class CatalogueEditorComponent implements OnChanges {
   private tagDrafts: { [index: number]: string } = {};
   private tagTypeaheads: { [index: number]: string } = {};
   private dateAddedErrors = new WeakMap<ImageElement, string>();
+  private destroyed = false;
+  private metadataImportJson = '';
+  private metadataImportPreviews = new WeakMap<ImageElement, MetadataChangePreview[]>();
+  private metadataImportResultSummary = '';
+  private metadataImportSaveNoticeActive = false;
+  private metadataImportScope: ImageElement[] = [];
+  private metadataImportUpdates = new WeakMap<ImageElement, CatalogueMetadataUpdate>();
   private nextSearchCriterionId = 1;
 
   constructor(
+    private electronService: ElectronService,
     public imageElementService: ImageElementService,
     public manualTagsService: ManualTagsService,
     private modalService: ModalService,
@@ -97,8 +152,26 @@ export class CatalogueEditorComponent implements OnChanges {
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes.images) {
-      this.refreshFilteredEntries();
+      const importScopeIsCurrent = this.metadataImportScope.every(
+        (item: ImageElement) => this.images.includes(item)
+      );
+      if (this.metadataImportFileName && !importScopeIsCurrent) {
+        this.clearPendingMetadataImport();
+        this.setMetadataTransferStatus(
+          'The catalogue entries changed while metadata import was pending. Select the metadata file again to create a current filtered scope.',
+          true,
+        );
+      } else {
+        this.refreshFilteredEntries();
+      }
     }
+    if (changes.saveStatus) {
+      this.handleMetadataImportSaveStatus(changes.saveStatus.currentValue);
+    }
+  }
+
+  ngOnDestroy(): void {
+    this.destroyed = true;
   }
 
   get activeCount(): number {
@@ -151,6 +224,20 @@ export class CatalogueEditorComponent implements OnChanges {
     return this.images.filter((element: ImageElement) => !element.deleted && element.missing).length;
   }
 
+  get selectedMetadataCategories(): CatalogueMetadataCategory[] {
+    return catalogueMetadataCategories.filter((category: CatalogueMetadataCategory) => (
+      this.metadataImportSelection[category]
+    ));
+  }
+
+  get metadataImportPreviewActive(): boolean {
+    return Boolean(this.metadataImportPlan);
+  }
+
+  get metadataImportScopeCount(): number {
+    return this.metadataImportScope.length;
+  }
+
   get totalCount(): number {
     return this.images.length;
   }
@@ -170,12 +257,303 @@ export class CatalogueEditorComponent implements OnChanges {
   }
 
   close(): void {
-    if (this.isSaving) {
+    if (this.isSaving || this.metadataTransferBusy) {
       return;
     }
 
     this.commitAllTagDrafts();
     this.closeEditor.emit();
+  }
+
+  async exportMetadata(): Promise<void> {
+    if (this.metadataTransferBusy || this.isSaving) {
+      return;
+    }
+
+    this.commitAllTagDrafts();
+    let exportResult: ReturnType<typeof createCatalogueMetadataExport>;
+    try {
+      exportResult = createCatalogueMetadataExport(this.images);
+    } catch (error) {
+      this.setMetadataTransferStatus(this.transferErrorMessage(error, 'Metadata export failed.'), true);
+      return;
+    }
+    if (exportResult.document.entries.length === 0) {
+      this.setMetadataTransferStatus(
+        'No active video has a unique hash, so there is no metadata that can be exported safely.',
+        true,
+      );
+      return;
+    }
+    this.metadataTransferBusy = true;
+    this.setMetadataTransferStatus('Choose where to save the metadata export.');
+
+    try {
+      const result = await this.electronService.ipcRenderer.invoke(
+        'export-catalogue-metadata',
+        exportResult.document,
+      ) as MetadataFileResult;
+
+      if (this.destroyed) {
+        return;
+      }
+
+      if (result.status === 'cancelled') {
+        this.setMetadataTransferStatus('Metadata export cancelled.');
+        return;
+      }
+      if (result.status !== 'success') {
+        this.setMetadataTransferStatus(result.error || 'Metadata export failed.', true);
+        return;
+      }
+
+      const skipped: string[] = [];
+      if (exportResult.missingHashEntryCount) {
+        skipped.push(`${exportResult.missingHashEntryCount} without a hash`);
+      }
+      if (exportResult.ambiguousHashEntryCount) {
+        skipped.push(`${exportResult.ambiguousHashEntryCount} with a duplicated hash`);
+      }
+      if (exportResult.deletedEntryCount) {
+        skipped.push(`${exportResult.deletedEntryCount} pending deletion`);
+      }
+      const skippedSummary = skipped.length ? ` Skipped ${skipped.join(' and ')}.` : '';
+      this.setMetadataTransferStatus(
+        `Exported ${exportResult.document.entries.length} metadata ${exportResult.document.entries.length === 1 ? 'entry' : 'entries'} to '${result.fileName}'.${skippedSummary}`,
+      );
+    } catch (error) {
+      if (!this.destroyed) {
+        this.setMetadataTransferStatus(this.transferErrorMessage(error, 'Metadata export failed.'), true);
+      }
+    } finally {
+      if (!this.destroyed) {
+        this.metadataTransferBusy = false;
+      }
+    }
+  }
+
+  async chooseMetadataImport(): Promise<void> {
+    if (this.metadataTransferBusy || this.isSaving) {
+      return;
+    }
+
+    this.commitAllTagDrafts();
+    this.clearPendingMetadataImport();
+    const cataloguePath = this.currentVhaFile;
+    const filteredImportScope = this.filteredEntries.filter(isCatalogueMetadataImportTarget);
+    if (filteredImportScope.length === 0) {
+      this.setMetadataTransferStatus(
+        'No active video entries with a usable hash are displayed by the current filters. Adjust or clear the filters before importing metadata.',
+        true,
+      );
+      return;
+    }
+
+    this.metadataTransferBusy = true;
+    this.setMetadataTransferStatus('Choose a metadata JSON file to import.');
+
+    try {
+      const result = await this.electronService.ipcRenderer.invoke('import-catalogue-metadata') as MetadataFileResult;
+
+      if (this.destroyed) {
+        return;
+      }
+
+      if (result.status === 'cancelled') {
+        this.setMetadataTransferStatus('Metadata import cancelled.');
+        return;
+      }
+      if (result.status !== 'success' || typeof result.contents !== 'string') {
+        this.setMetadataTransferStatus(result.error || 'Metadata import failed.', true);
+        return;
+      }
+      if (this.currentVhaFile !== cataloguePath) {
+        this.setMetadataTransferStatus(
+          'The open catalogue changed while the metadata file was being selected. Select the file again in the intended catalogue.',
+          true,
+        );
+        return;
+      }
+
+      this.metadataImportFileName = result.fileName || 'Selected metadata file';
+      this.metadataImportJson = result.contents;
+      this.metadataImportScope = filteredImportScope;
+      this.selectAllMetadataCategories();
+      this.refreshMetadataImportPlan();
+    } catch (error) {
+      if (!this.destroyed) {
+        this.setMetadataTransferStatus(this.transferErrorMessage(error, 'Metadata import failed.'), true);
+      }
+    } finally {
+      if (!this.destroyed) {
+        this.metadataTransferBusy = false;
+      }
+    }
+  }
+
+  cancelMetadataImport(): void {
+    this.clearPendingMetadataImport();
+    this.setMetadataTransferStatus('Metadata import cancelled.');
+  }
+
+  clearMetadataCategories(): void {
+    catalogueMetadataCategories.forEach((category: CatalogueMetadataCategory) => {
+      this.metadataImportSelection[category] = false;
+    });
+    this.invalidateMetadataImportPlan();
+  }
+
+  selectAllMetadataCategories(): void {
+    catalogueMetadataCategories.forEach((category: CatalogueMetadataCategory) => {
+      this.metadataImportSelection[category] = true;
+    });
+    this.invalidateMetadataImportPlan();
+  }
+
+  toggleMetadataCategory(category: CatalogueMetadataCategory, checked: boolean): void {
+    this.metadataImportSelection[category] = checked;
+    this.invalidateMetadataImportPlan();
+  }
+
+  previewMetadataImport(): void {
+    if (this.metadataTransferBusy || !this.metadataImportJson) {
+      return;
+    }
+
+    this.commitAllTagDrafts();
+    this.refreshMetadataImportPlan();
+  }
+
+  requestMetadataImport(): void {
+    if (this.metadataTransferBusy || !this.metadataImportJson) {
+      return;
+    }
+
+    const categories = this.selectedMetadataCategories;
+    const cataloguePath = this.currentVhaFile;
+    const reviewedPlan = this.metadataImportPlan;
+    let plan: CatalogueMetadataImportPlan;
+    try {
+      this.commitAllTagDrafts();
+      plan = buildCatalogueMetadataImportPlan(
+        this.images,
+        this.metadataImportJson,
+        categories,
+        this.metadataImportScope,
+      );
+      this.setMetadataImportPlan(plan);
+    } catch (error) {
+      this.clearMetadataImportPreview();
+      this.setMetadataTransferStatus(this.transferErrorMessage(error, 'The metadata file cannot be imported.'), true);
+      return;
+    }
+
+    if (!reviewedPlan || !this.metadataImportPlansMatch(reviewedPlan, plan)) {
+      this.setMetadataTransferStatus(
+        'The catalogue changed after the metadata preview was prepared. The preview has been refreshed; review the highlighted changes and apply again.',
+      );
+      return;
+    }
+
+    if (plan.changedEntryCount === 0) {
+      const message = plan.matchedRecordCount
+        ? `No selected metadata values would change. ${plan.matchedRecordCount} ${plan.matchedRecordCount === 1 ? 'record matches' : 'records match'} this catalogue.`
+        : 'No metadata records match a unique, active catalogue hash.';
+      this.setMetadataTransferStatus(message);
+      return;
+    }
+
+    const categoryNames = categories.map((category: CatalogueMetadataCategory) => (
+      catalogueMetadataCategoryLabels[category]
+    ));
+    const categorySummary = categoryNames.join(', ');
+    const entryLabel = plan.changedEntryCount === 1 ? 'entry' : 'entries';
+    const fieldLabel = plan.changedFieldCount === 1 ? 'value' : 'values';
+    const skippedCount = plan.unmatchedRecordCount
+      + plan.missingHashRecordCount
+      + plan.duplicateHashRecordCount
+      + plan.ambiguousCatalogueRecordCount;
+    const skippedSummary = skippedCount
+      ? ` ${skippedCount} imported ${skippedCount === 1 ? 'record cannot' : 'records cannot'} be matched safely and will be skipped.`
+      : '';
+    const outsideScopeSummary = plan.outsideScopeRecordCount
+      ? ` ${plan.outsideScopeRecordCount} ${plan.outsideScopeRecordCount === 1 ? 'record matches an entry' : 'records match entries'} outside the displayed results and will not be changed.`
+      : '';
+
+    this.metadataTransferBusy = true;
+    this.modalService.openConfirmationDialog(
+      'Import Selected Metadata?',
+      `Replace ${plan.changedFieldCount} selected metadata ${fieldLabel} across ${plan.changedEntryCount} displayed ${entryLabel}? Categories: ${categorySummary}.${skippedSummary}${outsideScopeSummary} Filename is reference-only; files are matched solely by hash.`,
+      `Import into ${plan.changedEntryCount} ${entryLabel}`,
+      'Cancel',
+    ).subscribe((confirmed: boolean) => {
+      if (this.destroyed) {
+        return;
+      }
+      if (this.currentVhaFile !== cataloguePath) {
+        this.metadataTransferBusy = false;
+        this.setMetadataTransferStatus(
+          'The open catalogue changed before the metadata import was confirmed. No metadata was imported.',
+          true,
+        );
+        return;
+      }
+      if (!confirmed) {
+        this.metadataTransferBusy = false;
+        this.setMetadataTransferStatus('Metadata import cancelled.');
+        return;
+      }
+
+      try {
+        this.commitAllTagDrafts();
+        if (this.currentVhaFile !== cataloguePath) {
+          this.setMetadataTransferStatus(
+            'The open catalogue changed before the metadata import was applied. No metadata was imported.',
+            true,
+          );
+          return;
+        }
+        const confirmedPlan = buildCatalogueMetadataImportPlan(
+          this.images,
+          this.metadataImportJson,
+          categories,
+          this.metadataImportScope,
+        );
+        if (!this.metadataImportPlansMatch(plan, confirmedPlan)) {
+          this.setMetadataImportPlan(confirmedPlan);
+          this.setMetadataTransferStatus(
+            'The catalogue changed while confirmation was open. Nothing was imported. Review the refreshed preview and apply again.',
+          );
+          return;
+        }
+        const result = applyCatalogueMetadataImportPlan(confirmedPlan);
+
+        this.tagDrafts = {};
+        this.tagTypeaheads = {};
+        if (result.starsChanged) {
+          this.imageElementService.forceStarFilterUpdate = !this.imageElementService.forceStarFilterUpdate;
+        }
+        if (result.updatedEntryCount > 0) {
+          this.markDirty(result.tagsChanged);
+          this.refreshFilteredEntries();
+        }
+
+        const importedFileName = this.metadataImportFileName;
+        this.clearPendingMetadataImport();
+        this.metadataImportResultSummary = `Imported ${result.updatedFieldCount} metadata ${result.updatedFieldCount === 1 ? 'value' : 'values'} into ${result.updatedEntryCount} ${result.updatedEntryCount === 1 ? 'entry' : 'entries'} from '${importedFileName}'`;
+        this.setMetadataTransferStatus(
+          `${this.metadataImportResultSummary}. Changes are not saved yet.`,
+          false,
+          true,
+        );
+      } catch (error) {
+        this.setMetadataTransferStatus(this.transferErrorMessage(error, 'Metadata import failed.'), true);
+      } finally {
+        if (!this.destroyed) {
+          this.metadataTransferBusy = false;
+        }
+      }
+    });
   }
 
   async copyHash(item: ImageElement): Promise<void> {
@@ -388,6 +766,15 @@ export class CatalogueEditorComponent implements OnChanges {
   }
 
   refreshFilteredEntries(): void {
+    if (this.metadataImportPlan) {
+      this.filteredEntries = this.metadataImportPlan.changes.map(change => change.target);
+      return;
+    }
+    if (this.metadataImportFileName) {
+      this.filteredEntries = [];
+      return;
+    }
+
     this.filteredEntries = filterCatalogueEntries(
       this.images,
       this.searchCriteria,
@@ -422,6 +809,15 @@ export class CatalogueEditorComponent implements OnChanges {
   requestSave(): void {
     this.commitAllTagDrafts();
     this.saveRequested.emit();
+  }
+
+  metadataChangesFor(item: ImageElement): MetadataChangePreview[] {
+    return this.metadataImportPreviews.get(item) || [];
+  }
+
+  metadataFieldWillChange(item: ImageElement, category: CatalogueMetadataCategory): boolean {
+    const updates = this.metadataImportUpdates.get(item);
+    return Boolean(updates && Object.prototype.hasOwnProperty.call(updates, category));
   }
 
   tagDraftFor(item: ImageElement): string {
@@ -664,6 +1060,149 @@ export class CatalogueEditorComponent implements OnChanges {
     }
 
     this.entriesChanged.emit();
+  }
+
+  private clearPendingMetadataImport(): void {
+    this.metadataImportFileName = '';
+    this.metadataImportJson = '';
+    this.metadataImportScope = [];
+    this.clearMetadataImportPreview();
+  }
+
+  private clearMetadataImportPreview(): void {
+    this.metadataImportPlan = undefined;
+    this.metadataImportPreviews = new WeakMap<ImageElement, MetadataChangePreview[]>();
+    this.metadataImportUpdates = new WeakMap<ImageElement, CatalogueMetadataUpdate>();
+    this.refreshFilteredEntries();
+  }
+
+  private invalidateMetadataImportPlan(): void {
+    this.clearMetadataImportPreview();
+    if (this.metadataImportJson) {
+      this.setMetadataTransferStatus(
+        `Category selection changed for '${this.metadataImportFileName}'. Select Preview Selected Metadata to recalculate the changes.`,
+      );
+    }
+  }
+
+  private refreshMetadataImportPlan(): void {
+    if (!this.metadataImportJson) {
+      this.metadataImportPlan = undefined;
+      return;
+    }
+
+    try {
+      const plan = buildCatalogueMetadataImportPlan(
+        this.images,
+        this.metadataImportJson,
+        this.selectedMetadataCategories,
+        this.metadataImportScope,
+      );
+      this.setMetadataImportPlan(plan);
+      const previewSummary = plan.changedEntryCount
+        ? `Previewing ${plan.changedFieldCount} metadata ${plan.changedFieldCount === 1 ? 'change' : 'changes'} across ${plan.changedEntryCount} of ${this.metadataImportScope.length} filtered ${this.metadataImportScope.length === 1 ? 'entry' : 'entries'} from '${this.metadataImportFileName}'. Review the highlighted fields before applying.`
+        : `No selected metadata values from '${this.metadataImportFileName}' would change the ${this.metadataImportScope.length} filtered ${this.metadataImportScope.length === 1 ? 'entry' : 'entries'}.`;
+      this.setMetadataTransferStatus(previewSummary);
+    } catch (error) {
+      this.clearMetadataImportPreview();
+      this.setMetadataTransferStatus(this.transferErrorMessage(error, 'The metadata file cannot be imported.'), true);
+    }
+  }
+
+  private setMetadataImportPlan(plan: CatalogueMetadataImportPlan): void {
+    this.metadataImportPlan = plan;
+    this.metadataImportPreviews = new WeakMap<ImageElement, MetadataChangePreview[]>();
+    this.metadataImportUpdates = new WeakMap<ImageElement, CatalogueMetadataUpdate>();
+
+    plan.changes.forEach(change => {
+      this.metadataImportUpdates.set(change.target, change.updates);
+      const previews = plan.categories
+        .filter(category => Object.prototype.hasOwnProperty.call(change.updates, category))
+        .map(category => this.createMetadataChangePreview(category, change.updates));
+      this.metadataImportPreviews.set(change.target, previews);
+    });
+
+    this.refreshFilteredEntries();
+  }
+
+  private createMetadataChangePreview(
+    category: CatalogueMetadataCategory,
+    updates: CatalogueMetadataUpdate,
+  ): MetadataChangePreview {
+    const incoming = (updates as Record<string, unknown>)[category];
+    let fullValue: string;
+
+    if (incoming === null) {
+      fullValue = category === 'tags' ? 'Clear all tags' : 'Clear current value';
+    } else if (category === 'stars') {
+      fullValue = Number(incoming) === 0.5 ? 'N/A' : String(Number(incoming) - 0.5);
+    } else if (category === 'dateAdded') {
+      fullValue = new Date(Number(incoming)).toLocaleString();
+    } else if (category === 'tags') {
+      const tags = incoming as string[];
+      fullValue = tags.length ? tags.join(', ') : 'Clear all tags';
+    } else {
+      fullValue = String(incoming);
+    }
+
+    const singleLineValue = fullValue.replace(/\s+/g, ' ').trim();
+    const value = singleLineValue.length > 160
+      ? `${singleLineValue.slice(0, 159)}…`
+      : singleLineValue;
+
+    return {
+      category,
+      fullValue,
+      label: catalogueMetadataCategoryLabels[category],
+      value,
+    };
+  }
+
+  private metadataImportPlansMatch(
+    left: CatalogueMetadataImportPlan,
+    right: CatalogueMetadataImportPlan,
+  ): boolean {
+    if (
+      left.ambiguousCatalogueRecordCount !== right.ambiguousCatalogueRecordCount
+      || left.changedEntryCount !== right.changedEntryCount
+      || left.changedFieldCount !== right.changedFieldCount
+      || left.duplicateHashRecordCount !== right.duplicateHashRecordCount
+      || left.entriesRead !== right.entriesRead
+      || left.matchedRecordCount !== right.matchedRecordCount
+      || left.missingHashRecordCount !== right.missingHashRecordCount
+      || left.outsideScopeRecordCount !== right.outsideScopeRecordCount
+      || left.unmatchedRecordCount !== right.unmatchedRecordCount
+      || left.categories.join('|') !== right.categories.join('|')
+      || left.changes.length !== right.changes.length
+    ) {
+      return false;
+    }
+
+    return left.changes.every((change, index) => (
+      change.target === right.changes[index].target
+      && JSON.stringify(change.updates) === JSON.stringify(right.changes[index].updates)
+    ));
+  }
+
+  private handleMetadataImportSaveStatus(saveStatus: unknown): void {
+    if (!this.metadataImportSaveNoticeActive) {
+      return;
+    }
+
+    const notice = resolveMetadataImportSaveNotice(saveStatus, this.metadataImportResultSummary);
+    if (notice) {
+      this.setMetadataTransferStatus(notice.message, notice.error, !notice.complete);
+    }
+  }
+
+  private setMetadataTransferStatus(message: string, error = false, tracksUnsavedImport = false): void {
+    this.metadataTransferError = error;
+    this.metadataTransferStatus = message;
+    this.metadataImportSaveNoticeActive = tracksUnsavedImport;
+  }
+
+  private transferErrorMessage(error: unknown, fallback: string): string {
+    return error instanceof Error && error.message ? error.message : fallback;
   }
 
   private parseTags(tagText: string): string[] {

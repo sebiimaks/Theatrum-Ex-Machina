@@ -8,11 +8,13 @@
   },
   "include": [
     "interfaces/catalogue-file.ts",
+    "interfaces/catalogue-metadata-transfer.ts",
     "interfaces/date-added.ts",
     "interfaces/final-object.interface.ts",
     "interfaces/folder-rescan.ts",
     "node/catalogue-file.test.ts",
     "node/catalogue-editor.test.ts",
+    "node/catalogue-metadata-transfer.test.ts",
     "node/date-added.test.ts",
     "node/folder-rescan.test.ts",
     "node/main-extract.ts",

@@ -6,8 +6,8 @@
 <section
   class="catalogue-editor"
   [ngClass]="{ 'catalogue-editor-dark': darkMode }"
-  [attr.aria-busy]="isSaving"
-  [attr.inert]="isSaving ? '' : null"
+  [attr.aria-busy]="isSaving || metadataTransferBusy"
+  [attr.inert]="isSaving || metadataTransferBusy ? '' : null"
 >
   <header class="catalogue-editor-header">
     <div class="catalogue-editor-title">
@@ -18,7 +18,7 @@
     <button
       class="catalogue-icon-button"
       (click)="close()"
-      [disabled]="isSaving"
+      [disabled]="isSaving || metadataTransferBusy"
       title="Close"
     >
       <app-icon class="close-modal-icon" [icon]="'icon-close'"></app-icon>
@@ -39,6 +39,7 @@
           class="catalogue-search-operator"
           [(ngModel)]="criterion.operator"
           (ngModelChange)="refreshFilteredEntries()"
+          [disabled]="metadataImportFileName !== ''"
           [attr.aria-label]="'Search match type for line ' + (criterionIndex + 1)"
           title="Search Condition"
         >
@@ -51,6 +52,7 @@
           class="catalogue-search"
           [(ngModel)]="criterion.query"
           (ngModelChange)="refreshFilteredEntries()"
+          [disabled]="metadataImportFileName !== ''"
           [attr.aria-label]="'Search entries line ' + (criterionIndex + 1) + '. All completed search lines must match.'"
           [attr.data-search-criterion-id]="criterion.id"
           placeholder="Search entries"
@@ -61,21 +63,42 @@
           class="catalogue-search-field"
           [(ngModel)]="criterion.field"
           (ngModelChange)="refreshFilteredEntries()"
+          [disabled]="metadataImportFileName !== ''"
           [attr.aria-label]="'Search field for line ' + (criterionIndex + 1)"
           title="Search Field"
         >
           <option value="all">All Fields</option>
-          <option value="name">Clean Name</option>
-          <option value="file">File Name</option>
-          <option value="path">Folder</option>
-          <option value="tags">Tags</option>
-          <option value="hash">Hash</option>
+          <optgroup label="Editable Fields">
+            <option value="name">Clean Name</option>
+            <option value="file">File Name</option>
+            <option value="path">Folder</option>
+            <option value="tags">Tags</option>
+            <option value="stars">Stars</option>
+            <option value="year">Year</option>
+            <option value="dateAdded">Date Added</option>
+            <option value="timesPlayed">Times Played</option>
+            <option value="defaultScreen">Default Screen</option>
+            <option value="notes">Notes</option>
+          </optgroup>
+          <optgroup label="File Details">
+            <option value="entryNumber">Entry Number</option>
+            <option value="source">Source</option>
+            <option value="duration">Duration</option>
+            <option value="resolution">Resolution</option>
+            <option value="fileSize">File Size</option>
+            <option value="fps">FPS</option>
+            <option value="hash">Hash</option>
+          </optgroup>
+          <optgroup label="Entry State">
+            <option value="status">Status</option>
+          </optgroup>
         </select>
 
         <button
           *ngIf="criterionIndex === searchCriteria.length - 1"
           class="catalogue-search-action catalogue-search-add"
           (click)="addSearchCriterion()"
+          [disabled]="metadataImportFileName !== ''"
           aria-label="Add search line"
           title="Add Search Line"
           type="button"
@@ -87,6 +110,7 @@
           *ngIf="searchCriteria.length > 1"
           class="catalogue-search-action catalogue-search-remove"
           (click)="removeSearchCriterion(criterion.id)"
+          [disabled]="metadataImportFileName !== ''"
           [attr.aria-label]="'Remove search line ' + (criterionIndex + 1)"
           title="Remove Search Line"
           type="button"
@@ -106,6 +130,7 @@
       <select
         [(ngModel)]="availabilityFilter"
         (ngModelChange)="refreshFilteredEntries()"
+        [disabled]="metadataImportFileName !== ''"
         aria-label="Filter entries by availability"
         title="Filter by Availability"
       >
@@ -119,10 +144,31 @@
       <input
         [(ngModel)]="showDeleted"
         (change)="refreshFilteredEntries()"
+        [disabled]="metadataImportFileName !== ''"
         type="checkbox"
       >
       <span>Show deleted</span>
     </label>
+
+    <div class="catalogue-metadata-actions">
+      <button
+        class="catalogue-secondary-action"
+        (click)="exportMetadata()"
+        [disabled]="metadataTransferBusy || isSaving"
+        type="button"
+      >
+        Export Metadata
+      </button>
+
+      <button
+        class="catalogue-secondary-action"
+        (click)="chooseMetadataImport()"
+        [disabled]="metadataTransferBusy || isSaving"
+        type="button"
+      >
+        Import Metadata
+      </button>
+    </div>
 
     <button
       class="catalogue-save"
@@ -133,7 +179,102 @@
     </button>
   </div>
 
-  <div class="catalogue-batch-toolbar">
+  <div
+    *ngIf="metadataTransferStatus"
+    aria-live="polite"
+    class="catalogue-metadata-status"
+    [class.catalogue-metadata-status-error]="metadataTransferError"
+  >
+    {{ metadataTransferStatus }}
+  </div>
+
+  <section
+    *ngIf="metadataImportFileName"
+    aria-label="Metadata import options"
+    class="catalogue-metadata-import"
+  >
+    <div class="catalogue-metadata-import-heading">
+      <strong>Import Metadata</strong>
+      <span [title]="metadataImportFileName">{{ metadataImportFileName }}</span>
+    </div>
+
+    <fieldset class="catalogue-metadata-categories">
+      <legend>Categories to Import</legend>
+
+      <label *ngFor="let option of metadataCategoryOptions">
+        <input
+          #categoryCheckbox
+          (change)="toggleMetadataCategory(option.value, categoryCheckbox.checked)"
+          [checked]="metadataImportSelection[option.value]"
+          type="checkbox"
+        >
+        <span>{{ option.label }}</span>
+      </label>
+
+      <button
+        class="catalogue-metadata-text-action"
+        (click)="selectAllMetadataCategories()"
+        type="button"
+      >Select All</button>
+
+      <button
+        class="catalogue-metadata-text-action"
+        (click)="clearMetadataCategories()"
+        type="button"
+      >Clear All</button>
+    </fieldset>
+
+    <div
+      *ngIf="metadataImportPlan"
+      class="catalogue-metadata-preview"
+    >
+      <span>{{ metadataImportScopeCount | number }} eligible filtered {{ metadataImportScopeCount === 1 ? 'entry' : 'entries' }} in scope</span>
+      <span>{{ metadataImportPlan.entriesRead | number }} read</span>
+      <span>{{ metadataImportPlan.matchedRecordCount | number }} uniquely matched</span>
+      <span>{{ metadataImportPlan.changedEntryCount | number }} would change</span>
+      <span *ngIf="metadataImportPlan.unmatchedRecordCount">
+        {{ metadataImportPlan.unmatchedRecordCount | number }} unmatched
+      </span>
+      <span *ngIf="metadataImportPlan.missingHashRecordCount">
+        {{ metadataImportPlan.missingHashRecordCount | number }} without a hash
+      </span>
+      <span *ngIf="metadataImportPlan.duplicateHashRecordCount">
+        {{ metadataImportPlan.duplicateHashRecordCount | number }} duplicate import records
+      </span>
+      <span *ngIf="metadataImportPlan.ambiguousCatalogueRecordCount">
+        {{ metadataImportPlan.ambiguousCatalogueRecordCount | number }} ambiguous catalogue matches
+      </span>
+      <span *ngIf="metadataImportPlan.outsideScopeRecordCount">
+        {{ metadataImportPlan.outsideScopeRecordCount | number }} outside displayed results
+      </span>
+    </div>
+
+    <p class="catalogue-metadata-import-note">
+      Only entries displayed when Import Metadata was selected are eligible for import. Clear the filters first to search the whole catalogue. Files are matched only by hash; unselected categories remain unchanged.
+    </p>
+
+    <div class="catalogue-metadata-import-actions">
+      <button
+        class="catalogue-batch-apply"
+        (click)="metadataImportPlan ? requestMetadataImport() : previewMetadataImport()"
+        [disabled]="metadataTransferBusy || selectedMetadataCategories.length === 0 || (metadataImportPlan && metadataImportPlan.changedEntryCount === 0)"
+        type="button"
+      >
+        {{ metadataImportPlan ? 'Apply Reviewed Metadata' : 'Preview Selected Metadata' }}
+      </button>
+
+      <button
+        class="catalogue-secondary-action"
+        (click)="cancelMetadataImport()"
+        [disabled]="metadataTransferBusy"
+        type="button"
+      >
+        Cancel
+      </button>
+    </div>
+  </section>
+
+  <div *ngIf="!metadataImportFileName" class="catalogue-batch-toolbar">
     <span class="catalogue-batch-label">Tag Displayed Results</span>
 
     <div class="catalogue-tag-input catalogue-batch-tag-input">
@@ -171,7 +312,7 @@
     </span>
   </div>
 
-  <div class="catalogue-batch-toolbar catalogue-overwrite-toolbar">
+  <div *ngIf="!metadataImportFileName" class="catalogue-batch-toolbar catalogue-overwrite-toolbar">
     <span class="catalogue-batch-label">Overwrite Displayed Results</span>
 
     <select
@@ -263,6 +404,7 @@
 
   <div class="catalogue-editor-status">
     <span>{{ filteredEntries.length | number }} shown</span>
+    <span *ngIf="metadataImportPreviewActive" class="catalogue-import-preview-status">Metadata import preview</span>
     <span>{{ activeCount | number }} active</span>
     <span>{{ totalCount | number }} total</span>
     <span *ngIf="missingCount" class="temporarily-missing">{{ missingCount | number }} temporarily missing</span>
@@ -278,7 +420,7 @@
 
   <div class="catalogue-column-header">
     <span>Editable Fields</span>
-    <span>Entry Action</span>
+    <span>{{ metadataImportPreviewActive ? 'Import Preview' : 'Entry Action' }}</span>
   </div>
 
   <virtual-scroller
@@ -292,7 +434,8 @@
       class="catalogue-row"
       [ngClass]="{
         'catalogue-row-deleted': item.deleted,
-        'catalogue-row-missing': !item.deleted && item.missing
+        'catalogue-row-missing': !item.deleted && item.missing,
+        'catalogue-row-import-preview': metadataImportPreviewActive
       }"
     >
       <div class="catalogue-row-fields">
@@ -301,6 +444,7 @@
           <input
             [ngModel]="item.cleanName"
             (ngModelChange)="updateStringField(item, 'cleanName', $event)"
+            [disabled]="metadataImportPreviewActive"
             type="text"
           >
         </label>
@@ -310,6 +454,7 @@
           <input
             [ngModel]="item.fileName"
             (ngModelChange)="updateStringField(item, 'fileName', $event)"
+            [disabled]="metadataImportPreviewActive"
             type="text"
           >
         </label>
@@ -319,11 +464,12 @@
           <input
             [ngModel]="item.partialPath"
             (ngModelChange)="updateStringField(item, 'partialPath', $event)"
+            [disabled]="metadataImportPreviewActive"
             type="text"
           >
         </label>
 
-        <label>
+        <label [class.catalogue-field-pending-change]="metadataFieldWillChange(item, 'tags')">
           <span>Tags</span>
           <div class="catalogue-tag-input">
             <span
@@ -338,17 +484,19 @@
               (blur)="commitTags(item)"
               (keydown.Tab)="acceptTagTypeahead(item, $event)"
               (keydown.enter)="commitTags(item)"
+              [disabled]="metadataImportPreviewActive"
               placeholder="Separate tags with commas"
               type="text"
             >
           </div>
         </label>
 
-        <label>
+        <label [class.catalogue-field-pending-change]="metadataFieldWillChange(item, 'stars')">
           <span>Stars</span>
           <select
             [ngModel]="item.stars"
             (ngModelChange)="updateStar(item, $event)"
+            [disabled]="metadataImportPreviewActive"
           >
             <option
               *ngFor="let option of starOptions"
@@ -359,11 +507,12 @@
           </select>
         </label>
 
-        <label>
+        <label [class.catalogue-field-pending-change]="metadataFieldWillChange(item, 'year')">
           <span>Year</span>
           <input
             [ngModel]="item.year"
             (ngModelChange)="updateYear(item, $event)"
+            [disabled]="metadataImportPreviewActive"
             class="catalogue-number-input"
             inputmode="numeric"
             min="0"
@@ -371,12 +520,16 @@
           >
         </label>
 
-        <label class="date-added-field">
+        <label
+          class="date-added-field"
+          [class.catalogue-field-pending-change]="metadataFieldWillChange(item, 'dateAdded')"
+        >
           <span>Date Added</span>
           <input
             #dateAddedInput
             [ngModel]="dateAddedInputValue(item)"
             (ngModelChange)="updateDateAdded(item, $event, dateAddedInput)"
+            [disabled]="metadataImportPreviewActive"
             step="60"
             type="datetime-local"
           >
@@ -387,11 +540,12 @@
           >{{ dateAddedErrorFor(item) }}</span>
         </label>
 
-        <label>
+        <label [class.catalogue-field-pending-change]="metadataFieldWillChange(item, 'timesPlayed')">
           <span>Times Played</span>
           <input
             [ngModel]="item.timesPlayed"
             (ngModelChange)="updateNumberField(item, 'timesPlayed', $event)"
+            [disabled]="metadataImportPreviewActive"
             class="catalogue-number-input"
             inputmode="numeric"
             min="0"
@@ -404,6 +558,7 @@
           <input
             [ngModel]="item.defaultScreen"
             (ngModelChange)="updateDefaultScreen(item, $event)"
+            [disabled]="metadataImportPreviewActive"
             class="catalogue-number-input"
             inputmode="numeric"
             min="0"
@@ -411,13 +566,31 @@
           >
         </label>
 
-        <label class="notes-field">
+        <label
+          class="notes-field"
+          [class.catalogue-field-pending-change]="metadataFieldWillChange(item, 'notes')"
+        >
           <span>Notes</span>
           <textarea
             [ngModel]="item.notes"
             (ngModelChange)="updateNotes(item, $event)"
+            [disabled]="metadataImportPreviewActive"
           ></textarea>
         </label>
+
+        <div
+          *ngIf="metadataChangesFor(item).length"
+          class="catalogue-metadata-change-summary"
+        >
+          <strong>Proposed Changes</strong>
+          <span
+            *ngFor="let change of metadataChangesFor(item)"
+            class="catalogue-metadata-change-value"
+            [title]="change.fullValue"
+          >
+            <b>{{ change.label }}:</b> {{ change.value }}
+          </span>
+        </div>
 
         <div class="catalogue-readonly">
           <span>#{{ item.index + 1 }}</span>
@@ -448,8 +621,13 @@
       </div>
 
       <div class="catalogue-row-actions">
+        <span
+          *ngIf="metadataImportPreviewActive"
+          class="catalogue-preview-only"
+        >Review only</span>
+
         <button
-          *ngIf="!item.deleted"
+          *ngIf="!metadataImportPreviewActive && !item.deleted"
           class="catalogue-delete"
           (click)="deleteEntry(item)"
         >
@@ -457,7 +635,7 @@
         </button>
 
         <button
-          *ngIf="item.deleted"
+          *ngIf="!metadataImportPreviewActive && item.deleted"
           class="catalogue-restore"
           (click)="restoreEntry(item)"
         >
@@ -471,6 +649,8 @@
     *ngIf="filteredEntries.length === 0"
     class="catalogue-no-results"
   >
-    No matching entries
+    {{ metadataImportFileName
+      ? (metadataImportPlan ? 'No selected metadata values would change.' : 'Select categories and preview the metadata changes.')
+      : 'No matching entries' }}
   </div>
 </section>

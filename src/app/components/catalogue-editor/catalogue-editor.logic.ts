@@ -1,11 +1,32 @@
 import type { ImageElement, StarRating } from '../../../../interfaces/final-object.interface';
+import { isMetadataImportFailure } from '../../../../interfaces/final-object.interface';
 import {
   formatDateAddedForDisplay,
   formatDateAddedForInput,
+  normalizeDateAdded,
   parseDateAddedInput,
 } from '../../../../interfaces/date-added';
 
-export type CatalogueSearchField = 'all' | 'name' | 'file' | 'path' | 'tags' | 'hash';
+export type CatalogueSearchField =
+  | 'all'
+  | 'name'
+  | 'file'
+  | 'path'
+  | 'tags'
+  | 'stars'
+  | 'year'
+  | 'dateAdded'
+  | 'timesPlayed'
+  | 'defaultScreen'
+  | 'notes'
+  | 'entryNumber'
+  | 'source'
+  | 'duration'
+  | 'resolution'
+  | 'fileSize'
+  | 'fps'
+  | 'status'
+  | 'hash';
 export type CatalogueSearchOperator = 'contains' | 'doesNotContain';
 export type CatalogueAvailabilityFilter = 'all' | 'available' | 'missing';
 export type CatalogueOverwriteField = 'cleanName' | 'dateAdded' | 'stars' | 'year' | 'timesPlayed' | 'defaultScreen' | 'notes';
@@ -26,6 +47,12 @@ export interface CatalogueOverwriteValidation {
   value?: CatalogueOverwriteValue;
 }
 
+export interface MetadataImportSaveNotice {
+  complete: boolean;
+  error: boolean;
+  message: string;
+}
+
 const starValues: StarRating[] = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5];
 
 export const catalogueOverwriteFieldLabels: Record<CatalogueOverwriteField, string> = {
@@ -37,6 +64,27 @@ export const catalogueOverwriteFieldLabels: Record<CatalogueOverwriteField, stri
   timesPlayed: 'Times Played',
   year: 'Year',
 };
+
+export function resolveMetadataImportSaveNotice(
+  saveStatus: unknown,
+  importSummary: string,
+): MetadataImportSaveNotice | undefined {
+  if (typeof saveStatus !== 'string') {
+    return undefined;
+  }
+  if (saveStatus === 'Saved') {
+    return { complete: true, error: false, message: '' };
+  }
+  if (saveStatus.toLowerCase().startsWith('save failed')) {
+    return {
+      complete: false,
+      error: true,
+      message: `${importSummary}. Changes remain unsaved. ${saveStatus}.`,
+    };
+  }
+
+  return undefined;
+}
 
 export function applyCatalogueOverwrite(
   entries: ImageElement[],
@@ -111,7 +159,9 @@ export function filterCatalogueEntries(
       needle: string;
       operator: CatalogueSearchOperator;
     }) => {
-      const fieldContainsQuery = getCatalogueSearchText(item, criterion.field).includes(criterion.needle);
+      const fieldContainsQuery = getCatalogueSearchAliases(item, criterion.field).some(
+        (alias: string) => alias.includes(criterion.needle)
+      );
 
       return criterion.operator === 'doesNotContain'
         ? !fieldContainsQuery
@@ -197,32 +247,121 @@ export function validateCatalogueOverwrite(
   return validOverwrite(parsedNumber);
 }
 
-function getCatalogueSearchText(item: ImageElement, field: CatalogueSearchField): string {
-  const tags = (item.tags || []).join(' ');
+function formatDurationSearchAliases(value: unknown): string[] {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return [];
+  }
 
-  if (field === 'name') {
-    return (item.cleanName || '').toLowerCase();
-  } else if (field === 'file') {
-    return (item.fileName || '').toLowerCase();
-  } else if (field === 'path') {
-    return (item.partialPath || '').toLowerCase();
-  } else if (field === 'tags') {
-    return tags.toLowerCase();
-  } else if (field === 'hash') {
-    return (item.hash || '').toLowerCase();
+  const wholeSeconds = Math.floor(seconds);
+  const hours = Math.floor(wholeSeconds / 3600);
+  const minutes = Math.floor(wholeSeconds / 60) % 60;
+  const remainingSeconds = wholeSeconds % 60;
+  const displayed = hours
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
+    : `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
+
+  return [displayed, String(seconds), `${seconds} seconds`];
+}
+
+function formatFileSizeSearchAliases(value: unknown): string[] {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return [];
+  }
+
+  const formatSize = (megabytes: number, gigabyteDivisor: number): string => {
+    if (megabytes > 999000) {
+      return `${(megabytes / gigabyteDivisor / gigabyteDivisor).toFixed(1)} TB`;
+    }
+    if (megabytes > 999) {
+      return `${(megabytes / gigabyteDivisor).toFixed(1)} GB`;
+    }
+    return `${megabytes} MB`;
+  };
+  const decimalMegabytes = Math.round(bytes / 1000000);
+  const binaryMegabytes = Math.round(bytes / 1048576);
+
+  return [
+    `${bytes} bytes`,
+    formatSize(decimalMegabytes, 1000),
+    formatSize(binaryMegabytes, 1024),
+  ];
+}
+
+function formatDateAddedSearchAliases(value: unknown): string[] {
+  const timestamp = normalizeDateAdded(value);
+  if (timestamp === undefined) {
+    return ['unknown', 'not set'];
   }
 
   return [
-    item.cleanName,
-    item.fileName,
-    item.partialPath,
-    tags,
-    item.hash,
-    item.inputSource,
-    formatDateAddedForInput(item.dateAdded).replace('T', ' '),
-    item.notes,
-    item.year,
-  ].join(' ').toLowerCase();
+    formatDateAddedForInput(timestamp).replace('T', ' '),
+    formatDateAddedForDisplay(timestamp),
+  ];
+}
+
+function formatStarsSearchAliases(value: unknown): string[] {
+  const stars = Number(value);
+  if (stars === 0.5) {
+    return ['n/a', 'not rated'];
+  }
+  if (!starValues.includes(stars as StarRating)) {
+    return [];
+  }
+
+  const displayedStars = stars - 0.5;
+  return [String(displayedStars), `${displayedStars} ${displayedStars === 1 ? 'star' : 'stars'}`];
+}
+
+function formatStatusSearchAliases(item: ImageElement): string[] {
+  const statuses: string[] = [];
+  if (item.deleted) {
+    statuses.push('pending deletion', 'deleted');
+  } else if (item.missing) {
+    statuses.push('temporarily unavailable', 'missing');
+  } else {
+    statuses.push('available');
+  }
+  if (isMetadataImportFailure(item)) {
+    statuses.push('import error');
+  }
+
+  return statuses;
+}
+
+function getCatalogueSearchAliases(item: ImageElement, field: CatalogueSearchField): string[] {
+  const tags = (item.tags || []).join(' ');
+  const entryNumber = item.index + 1;
+  const values: Record<Exclude<CatalogueSearchField, 'all'>, string[]> = {
+    dateAdded: formatDateAddedSearchAliases(item.dateAdded),
+    defaultScreen: item.defaultScreen === undefined
+      ? ['unknown', 'not set']
+      : [String(item.defaultScreen)],
+    duration: formatDurationSearchAliases(item.duration),
+    entryNumber: [String(entryNumber), `#${entryNumber}`, `entry ${entryNumber}`],
+    file: [String(item.fileName || '')],
+    fileSize: formatFileSizeSearchAliases(item.fileSize),
+    fps: [String(item.fps || 0), `${item.fps || 0} fps`],
+    hash: item.hash ? [String(item.hash)] : ['no hash available'],
+    name: [String(item.cleanName || '')],
+    notes: [String(item.notes || '')],
+    path: item.partialPath ? [String(item.partialPath)] : ['root'],
+    resolution: [
+      `${item.width} x ${item.height}`,
+      `${item.width}x${item.height}`,
+      String(item.resolution || ''),
+    ],
+    source: [String(item.inputSource), `source ${item.inputSource}`],
+    stars: formatStarsSearchAliases(item.stars),
+    status: formatStatusSearchAliases(item),
+    tags: [tags],
+    timesPlayed: [String(item.timesPlayed), `${item.timesPlayed} times played`],
+    year: item.year === undefined ? ['unknown', 'not set'] : [String(item.year)],
+  };
+
+  const aliases = field === 'all' ? Object.values(values).flat() : values[field];
+  return aliases.map((alias: string) => alias.toLowerCase());
 }
 
 function invalidOverwrite(error: string): CatalogueOverwriteValidation {

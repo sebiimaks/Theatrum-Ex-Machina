@@ -8,6 +8,10 @@ const spawn = require('child_process').spawn;
 import { GLOBALS } from './main-globals';
 import { ImageElement, FinalObject, InputSources } from '../interfaces/final-object.interface';
 import { SettingsObject } from '../interfaces/settings-object.interface';
+import {
+  CATALOGUE_METADATA_MAX_BYTES,
+  serializeCatalogueMetadataExport,
+} from '../interfaces/catalogue-metadata-transfer';
 import { createDotPlsFile, writeVhaFileToDisk } from './main-support';
 import { replaceThumbnailWithNewImage } from './main-extract';
 import {
@@ -58,6 +62,11 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
     return owner ? dialog.showOpenDialog(owner, options) : dialog.showOpenDialog(options);
   };
 
+  const showSaveDialog = (options: any): Promise<any> => {
+    const owner = activeWindow();
+    return owner ? dialog.showSaveDialog(owner, options) : dialog.showSaveDialog(options);
+  };
+
   const configuredSourcePaths = (): string[] => Object.values(GLOBALS.selectedSourceFolders || {})
     .map((source: any) => source && source.path)
     .filter((sourcePath: unknown): sourcePath is string => typeof sourcePath === 'string');
@@ -74,6 +83,36 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
       }
       listener(event, ...args);
     });
+  };
+
+  const trustedIpcHandle = (
+    channel: string,
+    listener: (event: any, ...args: any[]) => unknown | Promise<unknown>,
+  ): void => {
+    ipc.handle(channel, (event, ...args): unknown | Promise<unknown> => {
+      const trustedWindow = GLOBALS.winRef;
+      const trustedWebContents = trustedWindow && !trustedWindow.isDestroyed()
+        ? trustedWindow.webContents
+        : null;
+      if (!trustedWebContents || event.sender.id !== trustedWebContents.id) {
+        console.warn('Ignored IPC request from an untrusted renderer:', channel);
+        throw new Error('The request did not come from the active application window.');
+      }
+
+      return listener(event, ...args);
+    });
+  };
+
+  const metadataDialogDefaultPath = (suffix = ''): string => {
+    const currentCatalogue = typeof GLOBALS.currentlyOpenVhaFile === 'string'
+      ? GLOBALS.currentlyOpenVhaFile
+      : '';
+    if (!currentCatalogue) {
+      return path.join(app.getPath('documents'), `catalogue${suffix}`);
+    }
+
+    const parsedCatalogue = path.parse(currentCatalogue);
+    return path.join(parsedCatalogue.dir, `${parsedCatalogue.name}${suffix}`);
   };
 
   const setMacDockIconTheme = (theme: unknown): void => {
@@ -594,6 +633,96 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
       });
     } else {
       event.sender.send('current-vha-file-saved');
+    }
+  });
+
+  /**
+   * Export a validated, human-readable metadata document through a native Save dialog.
+   * The renderer supplies data, never a destination path; all writing remains in the
+   * trusted main process and uses the existing atomic JSON writer.
+   */
+  trustedIpcHandle('export-catalogue-metadata', async (event, document: unknown): Promise<unknown> => {
+    try {
+      const json = serializeCatalogueMetadataExport(document);
+      if (Buffer.byteLength(json, 'utf8') > CATALOGUE_METADATA_MAX_BYTES) {
+        return {
+          error: 'The metadata export would be larger than 50 MB. Reduce large notes or export a smaller catalogue.',
+          status: 'error',
+        };
+      }
+      const result = await showSaveDialog({
+        defaultPath: metadataDialogDefaultPath('.metadata.json'),
+        filters: [{ name: 'Theatrum Ex Machina metadata', extensions: ['json'] }],
+        properties: ['createDirectory', 'showOverwriteConfirmation'],
+        title: 'Export Catalogue Metadata',
+      });
+
+      if (result.canceled || !result.filePath) {
+        return { status: 'cancelled' };
+      }
+
+      const destination = path.extname(result.filePath).toLowerCase() === '.json'
+        ? result.filePath
+        : `${result.filePath}.json`;
+      await writeJsonAtomically(destination, json);
+
+      return {
+        fileName: path.basename(destination),
+        status: 'success',
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The metadata file could not be exported.';
+      console.error('Unable to export catalogue metadata:', error);
+      return { error: message, status: 'error' };
+    }
+  });
+
+  /**
+   * Read only a user-selected JSON file, enforce a conservative size limit, and
+   * return its text for category-aware validation in the Catalogue Editor.
+   */
+  trustedIpcHandle('import-catalogue-metadata', async (): Promise<unknown> => {
+    try {
+      const result = await showOpenDialog({
+        defaultPath: path.dirname(metadataDialogDefaultPath()),
+        filters: [{ name: 'Theatrum Ex Machina metadata', extensions: ['json'] }],
+        properties: ['openFile'],
+        title: 'Import Catalogue Metadata',
+      });
+
+      if (result.canceled || !result.filePaths[0]) {
+        return { status: 'cancelled' };
+      }
+
+      const sourcePath = result.filePaths[0];
+      if (path.extname(sourcePath).toLowerCase() !== '.json') {
+        return { error: 'Choose a JSON metadata file.', status: 'error' };
+      }
+
+      const stats = await fs.promises.stat(sourcePath);
+      if (!stats.isFile()) {
+        return { error: 'The selected metadata path is not a file.', status: 'error' };
+      }
+      if (stats.size > CATALOGUE_METADATA_MAX_BYTES) {
+        return { error: 'The selected metadata file is larger than 50 MB.', status: 'error' };
+      }
+
+      const contents = await fs.promises.readFile(sourcePath, 'utf8');
+      JSON.parse(contents.replace(/^\uFEFF/, ''));
+
+      return {
+        contents,
+        fileName: path.basename(sourcePath),
+        status: 'success',
+      };
+    } catch (error) {
+      const message = error instanceof SyntaxError
+        ? 'The selected metadata file is not valid JSON.'
+        : error instanceof Error
+          ? error.message
+          : 'The metadata file could not be imported.';
+      console.error('Unable to read catalogue metadata:', error);
+      return { error: message, status: 'error' };
     }
   });
 

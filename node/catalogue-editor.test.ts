@@ -9,8 +9,10 @@ import { parseDateAddedInput } from '../interfaces/date-added';
 import {
   applyCatalogueOverwrite,
   filterCatalogueEntries,
+  resolveMetadataImportSaveNotice,
   validateCatalogueOverwrite,
 } from '../src/app/components/catalogue-editor/catalogue-editor.logic';
+import type { CatalogueSearchField } from '../src/app/components/catalogue-editor/catalogue-editor.logic';
 
 test('places the search operator before the query and field controls', () => {
   const template = readFileSync(
@@ -26,6 +28,91 @@ test('places the search operator before the query and field controls', () => {
   assert.ok(fieldPosition > queryPosition);
 });
 
+test('search dropdown exposes every editable and displayed entry field', () => {
+  const template = readFileSync(
+    join(__dirname, '../src/app/components/catalogue-editor/catalogue-editor.component.html'),
+    'utf8',
+  );
+  const options: [CatalogueSearchField, string][] = [
+    ['all', 'All Fields'],
+    ['name', 'Clean Name'],
+    ['file', 'File Name'],
+    ['path', 'Folder'],
+    ['tags', 'Tags'],
+    ['stars', 'Stars'],
+    ['year', 'Year'],
+    ['dateAdded', 'Date Added'],
+    ['timesPlayed', 'Times Played'],
+    ['defaultScreen', 'Default Screen'],
+    ['notes', 'Notes'],
+    ['entryNumber', 'Entry Number'],
+    ['source', 'Source'],
+    ['duration', 'Duration'],
+    ['resolution', 'Resolution'],
+    ['fileSize', 'File Size'],
+    ['fps', 'FPS'],
+    ['hash', 'Hash'],
+    ['status', 'Status'],
+  ];
+
+  options.forEach(([value, label]) => {
+    assert.ok(
+      template.includes(`<option value="${value}">${label}</option>`),
+      `${label} is missing from the search dropdown`,
+    );
+  });
+});
+
+test('metadata import save notices clear only after a confirmed save and retain failures', () => {
+  const summary = "Imported 2 metadata values into 1 entry from 'metadata.json'";
+
+  assert.equal(resolveMetadataImportSaveNotice('', summary), undefined);
+  assert.equal(resolveMetadataImportSaveNotice('Unsaved Changes', summary), undefined);
+  assert.deepEqual(resolveMetadataImportSaveNotice('Saved', summary), {
+    complete: true,
+    error: false,
+    message: '',
+  });
+  assert.deepEqual(resolveMetadataImportSaveNotice('Save failed: disk full', summary), {
+    complete: false,
+    error: true,
+    message: `${summary}. Changes remain unsaved. Save failed: disk full.`,
+  });
+});
+
+test('metadata import template exposes a preview-only diff workflow', () => {
+  const template = readFileSync(
+    join(__dirname, '../src/app/components/catalogue-editor/catalogue-editor.component.html'),
+    'utf8',
+  );
+
+  assert.match(template, /Apply Reviewed Metadata/);
+  assert.match(template, /Preview Selected Metadata/);
+  assert.match(template, /catalogue-field-pending-change/);
+  assert.match(template, /Proposed Changes/);
+  assert.match(template, /metadataChangesFor\(item\)/);
+});
+
+test('metadata import is scoped to the entries displayed by the active filters', () => {
+  const component = readFileSync(
+    join(__dirname, '../src/app/components/catalogue-editor/catalogue-editor.component.ts'),
+    'utf8',
+  );
+  const template = readFileSync(
+    join(__dirname, '../src/app/components/catalogue-editor/catalogue-editor.component.html'),
+    'utf8',
+  );
+  const scopedPlanCalls = component.match(
+    /buildCatalogueMetadataImportPlan\(\s*this\.images,\s*this\.metadataImportJson,\s*(?:categories|this\.selectedMetadataCategories),\s*this\.metadataImportScope,/g,
+  ) || [];
+
+  assert.match(component, /const filteredImportScope = this\.filteredEntries\.filter\(isCatalogueMetadataImportTarget\);/);
+  assert.match(component, /this\.metadataImportScope = filteredImportScope;/);
+  assert.equal(scopedPlanCalls.length, 3);
+  assert.match(template, /Only entries displayed when Import Metadata was selected are eligible for import\./);
+  assert.match(template, /metadataImportScopeCount/);
+});
+
 function image(overrides: Partial<ImageElement> = {}): ImageElement {
   return {
     ...NewImageElement(),
@@ -37,6 +124,106 @@ function image(overrides: Partial<ImageElement> = {}): ImageElement {
     ...overrides,
   };
 }
+
+test('searches every editable and displayed entry field using human-readable values', () => {
+  const target = image({
+    cleanName: 'Reference Master',
+    dateAdded: new Date(2026, 7, 4, 12, 34).getTime(),
+    defaultScreen: 3,
+    duration: 176,
+    fileName: 'reference-master.mov',
+    fileSize: 3900000000,
+    fps: 24,
+    hash: 'target-hash-abc',
+    height: 2160,
+    index: 6,
+    inputSource: 2,
+    metadataImportFailed: true,
+    notes: 'Restored lens reference',
+    partialPath: '/Archive/Masters',
+    resolution: '4K',
+    stars: 4.5,
+    tags: ['Camera Archive'],
+    timesPlayed: 12,
+    width: 3840,
+    year: 2026,
+  });
+  const other = image({
+    cleanName: 'Unrelated Video',
+    duration: 61,
+    fileName: 'unrelated.mp4',
+    fileSize: 1000000,
+    fps: 30,
+    hash: 'other-hash',
+    height: 720,
+    index: 40,
+    inputSource: 9,
+    notes: 'Different notes',
+    partialPath: '/Other',
+    resolution: '720',
+    tags: ['Other Tag'],
+    width: 1280,
+  });
+  const cases: [CatalogueSearchField, string][] = [
+    ['name', 'reference master'],
+    ['file', '.mov'],
+    ['path', 'archive/masters'],
+    ['tags', 'camera archive'],
+    ['stars', '4 stars'],
+    ['year', '2026'],
+    ['dateAdded', '2026-08-04 12:34'],
+    ['timesPlayed', '12 times played'],
+    ['defaultScreen', '3'],
+    ['notes', 'restored lens'],
+    ['entryNumber', '#7'],
+    ['source', 'source 2'],
+    ['duration', '02:56'],
+    ['resolution', '3840 x 2160'],
+    ['resolution', '4k'],
+    ['fileSize', '3.9 gb'],
+    ['fps', '24 fps'],
+    ['hash', 'target-hash'],
+    ['status', 'import error'],
+    ['all', '3.9 gb'],
+  ];
+
+  cases.forEach(([field, query], id) => {
+    assert.deepEqual(filterCatalogueEntries([target, other], [{
+      field,
+      id,
+      operator: 'contains',
+      query,
+    }], false), [target], `${field} did not match '${query}' correctly`);
+  });
+
+  assert.deepEqual(filterCatalogueEntries([target], [{
+    field: 'stars',
+    id: 99,
+    operator: 'contains',
+    query: '4.5',
+  }], false), [], 'search exposed the internal half-star representation');
+
+  assert.deepEqual(filterCatalogueEntries([target, other], [{
+    field: 'dateAdded',
+    id: 100,
+    operator: 'contains',
+    query: 'not set',
+  }], false), [other], 'missing Date Added did not use the shared not-set alias');
+});
+
+test('All Fields does not create matches across separate field boundaries', () => {
+  const target = image({
+    cleanName: 'Boundary Alpha',
+    fileName: 'Beta.mp4',
+  });
+
+  assert.deepEqual(filterCatalogueEntries([target], [{
+    field: 'all',
+    id: 0,
+    operator: 'contains',
+    query: 'alpha beta',
+  }], false), []);
+});
 
 test('combines non-empty search lines as narrowing criteria', () => {
   const first = image({ cleanName: 'Alpine Walk', tags: ['travel', 'blue'] });
