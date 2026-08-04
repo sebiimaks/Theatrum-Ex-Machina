@@ -35,6 +35,17 @@
         *ngFor="let criterion of searchCriteria; let criterionIndex = index; trackBy: trackBySearchCriterionId"
         class="catalogue-search-row"
       >
+        <select
+          class="catalogue-search-operator"
+          [(ngModel)]="criterion.operator"
+          (ngModelChange)="refreshFilteredEntries()"
+          [attr.aria-label]="'Search match type for line ' + (criterionIndex + 1)"
+          title="Search Condition"
+        >
+          <option value="contains">Contains</option>
+          <option value="doesNotContain">Does not contain</option>
+        </select>
+
         <input
           #searchCriterionInput
           class="catalogue-search"
@@ -59,17 +70,6 @@
           <option value="path">Folder</option>
           <option value="tags">Tags</option>
           <option value="hash">Hash</option>
-        </select>
-
-        <select
-          class="catalogue-search-operator"
-          [(ngModel)]="criterion.operator"
-          (ngModelChange)="refreshFilteredEntries()"
-          [attr.aria-label]="'Search match type for line ' + (criterionIndex + 1)"
-          title="Search Condition"
-        >
-          <option value="contains">Contains</option>
-          <option value="doesNotContain">Does not contain</option>
         </select>
 
         <button

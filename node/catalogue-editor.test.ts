@@ -1,4 +1,6 @@
 import { strict as assert } from 'assert';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { test } from 'node:test';
 
 import type { ImageElement } from '../interfaces/final-object.interface';
@@ -9,6 +11,20 @@ import {
   filterCatalogueEntries,
   validateCatalogueOverwrite,
 } from '../src/app/components/catalogue-editor/catalogue-editor.logic';
+
+test('places the search operator before the query and field controls', () => {
+  const template = readFileSync(
+    join(__dirname, '../src/app/components/catalogue-editor/catalogue-editor.component.html'),
+    'utf8',
+  );
+  const operatorPosition = template.indexOf('class="catalogue-search-operator"');
+  const queryPosition = template.indexOf('class="catalogue-search"');
+  const fieldPosition = template.indexOf('class="catalogue-search-field"');
+
+  assert.ok(operatorPosition >= 0);
+  assert.ok(queryPosition > operatorPosition);
+  assert.ok(fieldPosition > queryPosition);
+});
 
 function image(overrides: Partial<ImageElement> = {}): ImageElement {
   return {
