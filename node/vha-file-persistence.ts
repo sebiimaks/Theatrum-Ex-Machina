@@ -51,6 +51,17 @@ export function parseVhaJson(raw: string | Buffer): FinalObject {
   if (!Array.isArray(parsed.images)) {
     throw new Error('The catalogue does not contain a valid images list.');
   }
+  if (
+    parsed.tagDefinitions !== undefined
+    && (
+      !Array.isArray(parsed.tagDefinitions)
+      || parsed.tagDefinitions.some((definition: unknown) => (
+        typeof definition !== 'string' || !definition
+      ))
+    )
+  ) {
+    throw new Error('The catalogue contains invalid tag definitions.');
+  }
   parsed.images.forEach((image: unknown) => {
     if (isObject(image) && image.missing !== undefined && typeof image.missing !== 'boolean') {
       throw new Error('The catalogue contains an invalid missing-file state.');

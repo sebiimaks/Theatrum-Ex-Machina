@@ -154,12 +154,13 @@
     [tags]="(video | tagDisplayPipe : showManualTags()
                                   : showAutoFileTags()
                                   : showAutoFolderTags()
-                                  : tagViewUpdateTrigger)
+                                  : tagViewUpdateTrigger
+                                  : individualTagSegments())
                     | autoTagSortPipe : sortAutoTags"
     [darkMode]="darkMode()"
     [enableColorPicker]="true"
 
-    (removeTagEmit)="removeThisTag($event)"
+    (removeTagEmit)="removeDisplayedTag($event)"
     (tagClicked)="filterThisTag($event)"
     (tagRightClick)="onTagRightClick($event)"
    />

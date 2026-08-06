@@ -16,14 +16,15 @@
       (keydown.backspace)="onBackspace.emit({ word: filter.string, index: j })"
       (keydown.escape)="filter.string = ''"
       [(ngModel)]="filter.string"
-      (keydown.Tab)="handleTabPress($event, filter.uniqueKey === 'tagIntersection', j, filter.string)"
-      (ngModelChange)="handleInputChange($event, filter.uniqueKey === 'tagIntersection')"
+      (keydown.Tab)="handleTabPress($event, isManualTagSearch(filter.uniqueKey), j, filter.string)"
+      (ngModelChange)="handleInputChange($event, isManualTagSearch(filter.uniqueKey))"
+      (focus)="handleInputChange(filter.string, isManualTagSearch(filter.uniqueKey))"
       class="filter-general input-filter"
       placeholder="{{ filter.placeholder | translate }}"
       type="text"
     >
 
-    @if (filter.uniqueKey === 'tagIntersection' && filter.string !== '') {
+    @if (isManualTagSearch(filter.uniqueKey) && filter.string !== '') {
       <span
         class="tag-type-ahead-on-home"
       >{{ tagTypeAhead() }}</span>

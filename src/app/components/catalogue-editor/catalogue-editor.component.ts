@@ -3,6 +3,7 @@ import { Component, ElementRef, EventEmitter, Input, Output, QueryList, ViewChil
 
 import type { ImageElement, StarRating } from '../../../../interfaces/final-object.interface';
 import { formatDateAddedForInput, parseDateAddedInput } from '../../../../interfaces/date-added';
+import { tagIdentityKey } from '../../../../interfaces/tag-hierarchy';
 import {
   applyCatalogueMetadataImportPlan,
   buildCatalogueMetadataImportPlan,
@@ -55,6 +56,11 @@ interface MetadataChangePreview {
   fullValue: string;
   label: string;
   value: string;
+}
+
+interface TagDraftParseResult {
+  error?: string;
+  tags: string[];
 }
 
 @Component({
@@ -132,6 +138,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   ];
 
   private tagDrafts: { [index: number]: string } = {};
+  private tagValidationErrors: { [index: number]: string } = {};
   private tagTypeaheads: { [index: number]: string } = {};
   private dateAddedErrors = new WeakMap<ImageElement, string>();
   private destroyed = false;
@@ -183,7 +190,8 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   get canApplyBatchTags(): boolean {
-    return this.filteredEntries.length > 0 && this.parseTags(this.batchTagDraft).length > 0;
+    const parsed = this.parseTagDraft(this.batchTagDraft);
+    return this.filteredEntries.length > 0 && !parsed.error && parsed.tags.length > 0;
   }
 
   get canRequestBatchOverwrite(): boolean {
@@ -261,7 +269,13 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       return;
     }
 
-    this.commitAllTagDrafts();
+    if (!this.commitAllTagDrafts()) {
+      this.setMetadataTransferStatus(
+        'The editor remains open because one or more tag fields contain an invalid path. Clear the search filters to reveal and correct the highlighted field.',
+        true,
+      );
+      return;
+    }
     this.closeEditor.emit();
   }
 
@@ -270,7 +284,10 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       return;
     }
 
-    this.commitAllTagDrafts();
+    if (!this.commitAllTagDrafts()) {
+      this.setMetadataTransferStatus('Correct invalid tag paths before exporting metadata.', true);
+      return;
+    }
     let exportResult: ReturnType<typeof createCatalogueMetadataExport>;
     try {
       exportResult = createCatalogueMetadataExport(this.images);
@@ -337,7 +354,10 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       return;
     }
 
-    this.commitAllTagDrafts();
+    if (!this.commitAllTagDrafts()) {
+      this.setMetadataTransferStatus('Correct invalid tag paths before importing metadata.', true);
+      return;
+    }
     this.clearPendingMetadataImport();
     const cataloguePath = this.currentVhaFile;
     const filteredImportScope = this.filteredEntries.filter(isCatalogueMetadataImportTarget);
@@ -420,7 +440,10 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       return;
     }
 
-    this.commitAllTagDrafts();
+    if (!this.commitAllTagDrafts()) {
+      this.setMetadataTransferStatus('Correct invalid tag paths before previewing metadata.', true);
+      return;
+    }
     this.refreshMetadataImportPlan();
   }
 
@@ -434,7 +457,10 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     const reviewedPlan = this.metadataImportPlan;
     let plan: CatalogueMetadataImportPlan;
     try {
-      this.commitAllTagDrafts();
+      if (!this.commitAllTagDrafts()) {
+        this.setMetadataTransferStatus('Correct invalid tag paths before importing metadata.', true);
+        return;
+      }
       plan = buildCatalogueMetadataImportPlan(
         this.images,
         this.metadataImportJson,
@@ -505,7 +531,10 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       }
 
       try {
-        this.commitAllTagDrafts();
+        if (!this.commitAllTagDrafts()) {
+          this.setMetadataTransferStatus('Correct invalid tag paths before importing metadata.', true);
+          return;
+        }
         if (this.currentVhaFile !== cataloguePath) {
           this.setMetadataTransferStatus(
             'The open catalogue changed before the metadata import was applied. No metadata was imported.',
@@ -621,9 +650,17 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     }
 
     // Commit open row edits first so a later blur or save cannot overwrite batch additions.
-    this.commitAllTagDrafts();
+    if (!this.commitAllTagDrafts()) {
+      this.batchTagStatus = 'Correct invalid tag paths in the displayed entries before applying batch tags.';
+      return;
+    }
 
-    const tagsToAdd = this.parseTags(this.batchTagDraft);
+    const parsedBatchTags = this.parseTagDraft(this.batchTagDraft);
+    if (parsedBatchTags.error) {
+      this.batchTagStatus = parsedBatchTags.error;
+      return;
+    }
+    const tagsToAdd = parsedBatchTags.tags;
     if (!tagsToAdd.length) {
       return;
     }
@@ -728,7 +765,10 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       }
 
       // Commit open tag edits so a later blur or save cannot restore stale row data.
-      this.commitAllTagDrafts();
+      if (!this.commitAllTagDrafts()) {
+        this.batchOverwriteStatus = 'Correct invalid tag paths before overwriting displayed results.';
+        return;
+      }
 
       const updatedEntryCount = applyCatalogueOverwrite(targetEntries, field, confirmedValidation.value);
 
@@ -753,7 +793,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   deleteEntry(item: ImageElement): void {
-    this.commitTags(item);
+    if (!this.commitTags(item)) {
+      return;
+    }
     item.deleted = true;
     this.markDirty(true);
     this.refreshFilteredEntries();
@@ -807,7 +849,13 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   requestSave(): void {
-    this.commitAllTagDrafts();
+    if (!this.commitAllTagDrafts()) {
+      this.setMetadataTransferStatus(
+        'The catalogue was not saved because one or more tag fields contain an invalid path. Clear the search filters to reveal and correct the highlighted field.',
+        true,
+      );
+      return;
+    }
     this.saveRequested.emit();
   }
 
@@ -837,6 +885,10 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
 
   tagTypeaheadFor(item: ImageElement): string {
     return this.tagTypeaheads[item.index] || '';
+  }
+
+  tagValidationErrorFor(item: ImageElement): string {
+    return this.tagValidationErrors[item.index] || '';
   }
 
   trackByImageIndex(index: number, item: ImageElement): number {
@@ -951,6 +1003,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
 
   updateTagDraft(item: ImageElement, value: string): void {
     this.tagDrafts[item.index] = value;
+    delete this.tagValidationErrors[item.index];
     this.tagTypeaheads[item.index] = this.getTagTypeahead(value);
   }
 
@@ -977,26 +1030,35 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     }
   }
 
-  private commitAllTagDrafts(): void {
+  private commitAllTagDrafts(): boolean {
+    let valid = true;
     Object.keys(this.tagDrafts).forEach((indexString: string) => {
       const itemIndex = parseInt(indexString, 10);
       const item = this.images.find((element: ImageElement) => element.index === itemIndex);
 
-      if (item) {
-        this.commitTags(item);
+      if (item && !this.commitTags(item)) {
+        valid = false;
       }
     });
+    return valid;
   }
 
-  commitTags(item: ImageElement): void {
+  commitTags(item: ImageElement): boolean {
     const currentTags = item.tags || [];
-    const nextTags = this.parseTags(this.tagDrafts[item.index] || '');
+    const parsed = this.parseTagDraft(this.tagDrafts[item.index] || '');
+    if (parsed.error) {
+      this.tagValidationErrors[item.index] = parsed.error;
+      this.tagTypeaheads[item.index] = '';
+      return false;
+    }
+    const nextTags = parsed.tags;
 
     this.tagDrafts[item.index] = nextTags.join(', ');
+    delete this.tagValidationErrors[item.index];
     this.tagTypeaheads[item.index] = '';
 
     if (this.tagsMatch(currentTags, nextTags)) {
-      return;
+      return true;
     }
 
     if (nextTags.length) {
@@ -1007,6 +1069,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
 
     this.markDirty(true);
     this.refreshFilteredEntries();
+    return true;
   }
 
   private completeTagDraft(tagText: string, typeahead: string): string {
@@ -1015,7 +1078,8 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       ? typeahead
       : `${tagText.slice(0, lastCommaIndex)}, ${typeahead}`;
 
-    return this.parseTags(completedDraft).join(', ');
+    const parsed = this.parseTagDraft(completedDraft);
+    return parsed.error ? tagText : parsed.tags.join(', ');
   }
 
   private getActiveTagFragment(tagText: string): string {
@@ -1205,28 +1269,34 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     return error instanceof Error && error.message ? error.message : fallback;
   }
 
-  private parseTags(tagText: string): string[] {
+  private parseTagDraft(tagText: string): TagDraftParseResult {
     const seen = new Set<string>();
-    const knownTags = new Map<string, string>();
+    const tags: string[] = [];
 
-    this.manualTagsService.tagsList.forEach((tag: string) => {
-      knownTags.set(tag.toLowerCase(), tag);
-    });
+    for (const draftTag of tagText.split(',')) {
+      const trimmed = draftTag.trim();
+      if (!trimmed) {
+        continue;
+      }
 
-    return tagText
-      .split(',')
-      .map((tag: string) => tag.trim())
-      .map((tag: string) => knownTags.get(tag.toLowerCase()) || tag)
-      .filter((tag: string) => {
-        const key = tag.toLowerCase();
+      let normalized: string;
+      try {
+        normalized = this.manualTagsService.normalizeTagInput(trimmed);
+      } catch (error) {
+        return {
+          error: error instanceof Error ? error.message : 'Tag is invalid.',
+          tags: [],
+        };
+      }
 
-        if (!tag || seen.has(key)) {
-          return false;
-        }
-
+      const key = tagIdentityKey(normalized);
+      if (!seen.has(key)) {
         seen.add(key);
-        return true;
-      });
+        tags.push(normalized);
+      }
+    }
+
+    return { tags };
   }
 
   private getTagTypeahead(tagText: string): string {

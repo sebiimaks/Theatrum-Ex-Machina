@@ -2,6 +2,7 @@ import type { PipeTransform } from '@angular/core';
 import { Pipe } from '@angular/core';
 
 import { ManualTagsService } from '../components/tags-manual/manual-tags.service';
+import { tagIdentityKey } from '../../../interfaces/tag-hierarchy';
 
 @Pipe({
   standalone: false,
@@ -21,24 +22,27 @@ export class ManualTagSortPipe implements PipeTransform {
    * @param forceUpdateHack - boolean that is toggled manually to force updating the list
    */
   transform(allTags: string[], filterString: string, sortByFrequency: boolean, forceUpdateHack: boolean): string[] {
+    const normalizedFilter = filterString.trim().normalize('NFC').toLowerCase();
+    const filteredTags = normalizedFilter
+      ? allTags.filter((tag: string) => tagIdentityKey(tag).includes(normalizedFilter))
+      : allTags.slice();
 
-    if (filterString !== '') {
-      allTags = allTags.filter(tag => (tag.toLowerCase()).includes(filterString.toLowerCase()));
-    }
+    return filteredTags.sort((left: string, right: string) => {
+      if (sortByFrequency) {
+        const frequencyDifference = (this.manualTagService.tagsFrequencyMap.get(right) || 0)
+          - (this.manualTagService.tagsFrequencyMap.get(left) || 0);
+        if (frequencyDifference !== 0) {
+          return frequencyDifference;
+        }
+      }
 
-    let sortedTags: string[];
-
-    if (sortByFrequency) {
-      sortedTags = allTags.sort((a, b) => {
-        return this.manualTagService.tagsFrequencyMap.get(a) < this.manualTagService.tagsFrequencyMap.get(b) ? 1 : -1;
-      });
-    } else {
-      sortedTags = allTags.sort((a, b) => {
-        return a.localeCompare(b);
-      });
-    }
-
-    return sortedTags.slice(); // return shallow copy else the view does not update when adding new tags in details view
+      const identityComparison = tagIdentityKey(left).localeCompare(
+        tagIdentityKey(right),
+        'en',
+        { numeric: true, sensitivity: 'base' },
+      );
+      return identityComparison || left.localeCompare(right, 'en', { numeric: true });
+    });
   }
 
 }

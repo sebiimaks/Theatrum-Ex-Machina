@@ -1,23 +1,29 @@
 <div
   class="manual-tag-tray"
   [ngClass]="{ 'manual-tag-tray-dark': darkMode() }"
+  (dragend)="tagDragEnd()"
 >
 
   <div class="tag-tray-menu-left">
-
-  <input
-    class="filter-general manual-tag-tray-filter"
-    [ngClass]="{ 'manual-tag-tray-filter-dark': darkMode() }"
-    (keyup.esc)="manualTagFilterString = ''"
-    [(ngModel)]="manualTagFilterString"
-    placeholder="{{ 'TAGS.filterTags' | translate }}"
-  >
+    <label class="visually-hidden" for="tag-tray-filter">
+      {{ 'TAGS.filterTags' | translate }}
+    </label>
+    <input
+      id="tag-tray-filter"
+      class="filter-general manual-tag-tray-filter"
+      [ngClass]="{ 'manual-tag-tray-filter-dark': darkMode() }"
+      (keyup.esc)="manualTagFilterString = ''"
+      [(ngModel)]="manualTagFilterString"
+      placeholder="{{ 'TAGS.filterTags' | translate }}"
+      type="search"
+    >
 
   @if (!batchTaggingMode()) {
 
     <button
       class="tag-sort-by-toggle"
       (click)="appState().sortTagsByFrequency = !appState().sortTagsByFrequency"
+      type="button"
     >
       {{ (appState().sortTagsByFrequency ? 'TAGS.sortByFrequency'
                                          : 'TAGS.sortAlphabetical') | translate }}
@@ -26,40 +32,117 @@
     <button
       class="show-frequency"
       (click)="manualTagShowFrequency = !manualTagShowFrequency"
+      type="button"
     >
       {{ (manualTagShowFrequency ? 'TAGS.showingFrequency'
                                  : 'TAGS.hidingFrequency') | translate }}
     </button>
 
+    <div class="tree-expand-controls" role="group" [attr.aria-label]="'TAGS.hierarchyControls' | translate">
+      <button
+        (click)="toggleAddTagForm()"
+        [attr.aria-expanded]="showAddTagForm"
+        title="{{ 'TAGS.createTagDefinition' | translate }}"
+        type="button"
+      >
+        {{ 'TAGS.createTagDefinition' | translate }}
+      </button>
+      <span aria-hidden="true">·</span>
+      <button
+        (click)="expandAll()"
+        [disabled]="tagFilterActive"
+        title="{{ 'TAGS.expandAll' | translate }}"
+        type="button"
+      >
+        {{ 'TAGS.expandAll' | translate }}
+      </button>
+      <span aria-hidden="true">·</span>
+      <button
+        (click)="collapseAll()"
+        [disabled]="tagFilterActive"
+        title="{{ 'TAGS.collapseAll' | translate }}"
+        type="button"
+      >
+        {{ 'TAGS.collapseAll' | translate }}
+      </button>
+    </div>
+
+    @if (showAddTagForm) {
+      <form class="tag-definition-popover" (ngSubmit)="createTagDefinition()">
+        <h3>{{ 'TAGS.createTagDefinitionTitle' | translate }}</h3>
+
+        <label for="tag-definition-name">{{ 'TAGS.tagName' | translate }}</label>
+        <input
+          id="tag-definition-name"
+          name="tagDefinitionName"
+          [(ngModel)]="newTagName"
+          maxlength="120"
+          autocomplete="off"
+          autofocus
+          type="text"
+        >
+
+        <label for="tag-definition-parent">{{ 'TAGS.parentTag' | translate }}</label>
+        <select
+          id="tag-definition-parent"
+          name="tagDefinitionParent"
+          [(ngModel)]="newTagParentPath"
+        >
+          <option value="">{{ 'TAGS.topLevel' | translate }}</option>
+          @for (option of tagParentOptions; track option.path) {
+            <option [value]="option.path">{{ option.label }}</option>
+          }
+        </select>
+
+        @if (newTagError) {
+          <p class="tag-definition-error" role="alert">{{ newTagError }}</p>
+        }
+
+        <div class="tag-definition-actions">
+          <button (click)="cancelAddTagForm()" type="button">
+            {{ 'SYSTEM.cancel' | translate }}
+          </button>
+          <button class="tag-definition-submit" type="submit">
+            {{ 'TAGS.createTagDefinition' | translate }}
+          </button>
+        </div>
+      </form>
+    }
+
   } @else {
 
     <div class="batch-mode-instructions">
-
       <span class="manual-tag-tray-label">
         {{ 'TAGS.clickVideoToSelect' | translate }}
       </span>
 
-      <span class="more-info">i</span>
+      <button
+        class="more-info"
+        [attr.aria-label]="'TAGS.batchModeInstructions' | translate"
+        type="button"
+      >i</button>
 
       <div
         class="manual-tag-tray-label-info"
         [ngClass]="{ 'manual-tag-tray-label-info-dark-mode': darkMode() }"
-        style="line-height: 20px"
+        role="tooltip"
       >
         {{ 'TAGS.clickTagToAdd' | translate }}
       </div>
-
     </div>
 
-    <span class="total-selected" (click)="deselectAllPressed()">Selected:
+    <button class="total-selected" (click)="deselectAllPressed()" type="button">
+      {{ 'TAGS.selectedCount' | translate }}
       <em [ngClass]="{ 'em-dark-mode': darkMode() }">
         {{ (imageElementService.imageElements | totalSelectedPipe : recomputeTrigger) | number }}
       </em>
-    </span>
+      <span class="visually-hidden">{{ 'TAGS.deselectAll' | translate }}</span>
+    </button>
 
     <button
       class="button-select-all"
       (click)="selectAllPressed()"
+      type="button"
     >
       {{ 'TAGS.selectAllButton' | translate }}
     </button>
@@ -69,28 +152,177 @@
     <div class="batch-mode-button-container">
       <button
         class="button-toggle-batch-mode"
+        [attr.aria-pressed]="batchTaggingMode()"
         [ngClass]="{ 'batch-edit-mode-active': batchTaggingMode() }"
         (click)="toggleBatchTaggingMode.emit()"
+        type="button"
       >
         {{ 'TAGS.batchModeButton' | translate }}
       </button>
     </div>
 
-  </div> <!-- end of `.manual-tag-tray` -->
+    <div
+      class="tag-root-drop-zone"
+      [class.tag-root-drop-zone-active]="rootIsDropTarget()"
+      [class.tag-root-drop-zone-visible]="draggedTagPath"
+      [attr.aria-hidden]="!draggedTagPath"
+      (dragover)="allowTagRootDrop($event)"
+      (drop)="dropTagAtRoot($event)"
+    >
+      <span class="tag-root-drop-zone-title">
+        {{ 'TAGS.moveToTopLevel' | translate }}
+      </span>
+      <span class="tag-root-drop-zone-hint">
+        {{ 'TAGS.moveToTopLevelHint' | translate }}
+      </span>
+    </div>
+  </div>
 
-  <app-view-tags-component
-    class="all-the-tags"
-    [darkMode]="darkMode()"
-    [displayFrequency]="manualTagShowFrequency"
-    [draggable]="true"
-    [enableColorPicker]="true"
-    [allowTagRemoval]="true"
-    [tagsOnToggleBatch]="batchTaggingMode()"
-    [tags]="manualTagsService.tagsList | manualTagSortPipe : manualTagFilterString
-                                                           : appState().sortTagsByFrequency
-                                                           : manualTagsService.pipeToggleTrigger"
-    (tagClicked)="handleTagWordClicked.emit($event)"
-    (removeTagEmit)="removeThisTag($event)"
-    (tagRightClick)="onTagRightClick($event)"
-   />
+  <div
+    class="tag-tree-scroll-region"
+    (dragover)="allowTagRootDrop($event)"
+    (drop)="dropTagAtRoot($event)"
+  >
+    @let displayedTags = displayedTagHierarchy;
+    @if (displayedTags.length) {
+      <ul
+        class="tag-tree tag-tree-root"
+        role="tree"
+        [attr.aria-label]="'TAGS.hierarchyTreeLabel' | translate"
+      >
+      @for (node of displayedTags; track node.fullPath) {
+        <ng-container
+          *ngTemplateOutlet="tagTreeNode; context: { $implicit: node, level: 1 }"
+        />
+      }
+      </ul>
+    } @else {
+      <p class="tag-tree-empty" role="status">
+        {{ (tagFilterActive ? 'TAGS.noMatchingTags' : 'TAGS.noTags') | translate }}
+      </p>
+    }
+  </div>
+
+  @if (pointerDragActive) {
+    <div
+      class="tag-pointer-drag-preview"
+      [style.left.px]="pointerDragX + 14"
+      [style.top.px]="pointerDragY + 14"
+      aria-hidden="true"
+    >
+      {{ pointerDragCandidatePath }}
+    </div>
+  }
 </div>
+
+<ng-template #tagTreeNode let-node let-level="level">
+  <li
+    class="tag-tree-item"
+    [class.tag-tree-item-implicit]="!node.explicit"
+    [attr.aria-expanded]="node.children.length ? branchIsExpanded(node) : null"
+    [attr.aria-level]="level"
+    role="treeitem"
+  >
+    <div
+      class="tag-tree-row"
+      [attr.data-tag-path]="node.fullPath"
+      [class.tag-tree-row-dragging]="tagRowIsDragging(node)"
+      [class.tag-tree-row-drop-invalid]="tagRowIsInvalidDropTarget(node)"
+      [class.tag-tree-row-drop-target]="tagRowIsDropTarget(node)"
+      (dragover)="allowTagHierarchyDrop($event, node)"
+      (drop)="dropTagOnNode($event, node)"
+    >
+      @if (node.children.length) {
+        <button
+          class="tag-disclosure"
+          [attr.aria-label]="(
+            branchIsExpanded(node) ? 'TAGS.collapseBranch' : 'TAGS.expandBranch'
+          ) | translate : { tagName: node.fullPath }"
+          [disabled]="tagFilterActive"
+          (click)="toggleBranch(node)"
+          type="button"
+        >
+          <span aria-hidden="true">{{ branchIsExpanded(node) ? '▾' : '▸' }}</span>
+        </button>
+      } @else {
+        <span class="tag-disclosure-placeholder" aria-hidden="true"></span>
+      }
+
+      <span
+        class="tag-drag-handle"
+        [attr.title]="'TAGS.dragTagBranch' | translate : { tagName: node.fullPath }"
+        [attr.aria-label]="'TAGS.dragTagBranch' | translate : { tagName: node.fullPath }"
+        (pointerdown)="beginTagPointerDrag($event, node)"
+        role="button"
+      ></span>
+
+      @let tagColor = getTagColor(node);
+      <button
+        class="tag-node-label"
+        [class.tag-node-label-branch]="node.children.length"
+        [class.tag-node-label-implicit]="!node.explicit"
+        [draggable]="!batchTaggingMode()"
+        [ngStyle]="tagColor ? {
+          background: tagColor,
+          color: getContrastColor(tagColor)
+        } : null"
+        [attr.aria-label]="tagActionLabel(node)"
+        [attr.title]="node.fullPath"
+        (click)="tagClicked(node, $event)"
+        (contextmenu)="onTagRightClick($event, node)"
+        (dragend)="tagDragEnd()"
+        (dragstart)="tagDragStart($event, node)"
+        type="button"
+      >
+        {{ node.label }}
+      </button>
+
+      @if (manualTagShowFrequency) {
+        <span
+          class="tag-node-frequency"
+          [attr.aria-label]="frequencyLabel(node)"
+          [attr.title]="frequencyLabel(node)"
+        >
+          {{ node.branchFrequency }}
+        </span>
+      }
+
+      <span class="tag-node-actions">
+        @if (node.explicit) {
+          <button
+            class="tag-node-action tag-node-remove-exact"
+            [attr.aria-label]="'TAGS.removeExactTag' | translate : { tagName: node.fullPath }"
+            [attr.title]="'TAGS.removeExactTag' | translate : { tagName: node.fullPath }"
+            (click)="removeExactTag(node)"
+            type="button"
+          >
+            <span class="tag-node-remove-glyph" aria-hidden="true">×</span>
+          </button>
+        }
+
+        @if (node.children.length) {
+          <button
+            class="tag-node-action tag-node-remove-branch"
+            [attr.aria-label]="'TAGS.removeBranch' | translate : { tagName: node.fullPath }"
+            [attr.title]="'TAGS.removeBranch' | translate : { tagName: node.fullPath }"
+            (click)="removeBranch(node)"
+            type="button"
+          >
+            <span class="tag-node-branch-glyph" aria-hidden="true"></span>
+            <span class="tag-node-remove-glyph" aria-hidden="true">×</span>
+          </button>
+        }
+      </span>
+    </div>
+
+    @if (node.children.length && branchIsExpanded(node)) {
+      <ul class="tag-tree-group" role="group">
+      @for (child of node.children; track child.fullPath) {
+        <ng-container
+          *ngTemplateOutlet="tagTreeNode; context: { $implicit: child, level: level + 1 }"
+        />
+      }
+      </ul>
+    }
+  </li>
+</ng-template>

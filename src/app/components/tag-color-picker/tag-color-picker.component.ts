@@ -11,10 +11,10 @@ import { ContextMenuCoordinate } from '../../../../interfaces/shared-interfaces'
 export class TagColorPickerComponent implements OnInit {
 
   readonly position = input<ContextMenuCoordinate>();
-  readonly currentColor = input<string>();
+  readonly currentColor = input<string>('');
   readonly darkMode = input<boolean>();
 
-  readonly colorSelected = output<string>();
+  readonly colorSelected = output<string | null>();
   readonly close = output<void>();
 
   // 3x3 grid of distinct colors plus default option
@@ -35,7 +35,7 @@ export class TagColorPickerComponent implements OnInit {
   ngOnInit() {
     // Adjust position to keep picker on screen
     const pickerWidth = 142;
-    const pickerHeight = 65;
+    const pickerHeight = 108;
 
     const position = this.position();
     if (position) {

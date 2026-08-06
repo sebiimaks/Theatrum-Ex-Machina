@@ -26,6 +26,7 @@ export interface FinalObject {
   removeTags: string[];          // tags to remove
   screenshotSettings: ScreenshotSettings;
   tagColors?: Record<string, string>; // lookup table for tag name to color mapping
+  tagDefinitions?: string[];          // persistent catalogue tags, including tags not assigned to a video
   version: number;               // version of this vha file
 }
 

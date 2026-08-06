@@ -4,6 +4,8 @@ export interface FilterObject {
   uniqueKey: string;
   string: string;  // search string
   array: string[]; // container for all search strings
+  branchPaths?: string[]; // tag filters selected from the hierarchical tray
+  exactPaths?: string[]; // exact tag filters selected from hierarchy leaves
   bool: boolean;   // dummy to flip the trigger pipe
   placeholder: string;
   conjunction: string;
@@ -76,6 +78,8 @@ export const Filters: FilterObject[] = [
     uniqueKey: 'tagUnion',
     string: '',
     array: [],
+    branchPaths: [],
+    exactPaths: [],
     bool: true,
     placeholder: 'SIDEBAR.tagUnion',
     conjunction: 'SIDEBAR.or',
@@ -84,6 +88,8 @@ export const Filters: FilterObject[] = [
     uniqueKey: 'tagIntersection',
     string: '',
     array: [],
+    branchPaths: [],
+    exactPaths: [],
     bool: true,
     placeholder: 'SIDEBAR.tagIntersection',
     conjunction: 'SIDEBAR.and',
@@ -92,6 +98,8 @@ export const Filters: FilterObject[] = [
     uniqueKey: 'tagExclusion',
     string: '',
     array: [],
+    branchPaths: [],
+    exactPaths: [],
     bool: true,
     placeholder: 'SIDEBAR.tagExclusion',
     conjunction: 'SIDEBAR.or',

@@ -16,21 +16,34 @@ export class AddTagComponent {
   readonly tag = output<string>();
 
   currentText = '';
+  tagValidationError = '';
   typeAhead = '';
 
   constructor(
     public manualTagsService: ManualTagsService
   ) { }
 
-  emitTag(text: string) {
-    if (text.trim()) { // if not empty
-      this.tag.emit(text.trim());
-      this.currentText = '';
+  emitTag(text: string): void {
+    if (typeof text !== 'string' || !text.trim()) {
+      return;
+    }
+
+    try {
+      const normalizedTag = this.manualTagsService.normalizeTagInput(text);
+      if (normalizedTag) {
+        this.tag.emit(normalizedTag);
+        this.tagValidationError = '';
+        this.currentText = '';
+        this.typeAhead = '';
+      }
+    } catch (error) {
+      this.tagValidationError = error instanceof Error ? error.message : 'Tag is invalid.';
       this.typeAhead = '';
     }
   }
 
-  checkTypeahead(text: string) {
+  checkTypeahead(text: string): void {
+    this.tagValidationError = '';
     this.typeAhead = this.manualTagsService.getTypeahead(text);
   }
 
@@ -46,6 +59,7 @@ export class AddTagComponent {
    */
   escape(): void {
     this.currentText = '';
+    this.tagValidationError = '';
     this.typeAhead = '';
   }
 

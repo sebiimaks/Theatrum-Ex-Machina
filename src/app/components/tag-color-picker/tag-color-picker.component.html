@@ -33,9 +33,10 @@
   <div class="color-actions">
     <button
       class="default-btn"
+      [disabled]="!currentColor()"
       (click)="clearColor()"
     >
-      Reset to Default
+      {{ 'TAGS.removeCustomColour' | translate }}
     </button>
   </div>
 </div>

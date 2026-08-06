@@ -900,16 +900,22 @@
                                  : settingsButtons['manualTags'].toggled
                                  : settingsButtons['autoFileTags'].toggled
                                  : settingsButtons['autoFolderTags'].toggled
+                                 : filters[6].branchPaths
+                                 : filters[6].exactPaths
 
                 | fileSearchPipe : filters[7].array : filters[7].bool : false : 'tag'    : false
                                  : settingsButtons['manualTags'].toggled
                                  : settingsButtons['autoFileTags'].toggled
                                  : settingsButtons['autoFolderTags'].toggled
+                                 : filters[7].branchPaths
+                                 : filters[7].exactPaths
 
                 | fileSearchPipe : filters[8].array : filters[8].bool : true  : 'tag'    : true
                                  : settingsButtons['manualTags'].toggled
                                  : settingsButtons['autoFileTags'].toggled
                                  : settingsButtons['autoFolderTags'].toggled
+                                 : filters[8].branchPaths
+                                 : filters[8].exactPaths
 
                 | fileSearchPipe : filters[9].array : filters[9].bool : false : 'notes'  : false
 
@@ -1329,9 +1335,11 @@
 <!-- TAGS -->
 @if (settingsButtons['showTagTray'].toggled) {
   <app-tag-tray
-    (handleTagWordClicked)="handleTagWordClicked($event.tag.name, $event.event)"
+    (handleTagWordClicked)="handleTagWordClicked($event.tag.name, $event.event, false, true)"
+    (handleTagBranchClicked)="handleTagWordClicked($event.tag.name, $event.event, true)"
     (selectAll)="selectAllVisible()"
     (selectNone)="unselectAllTags()"
+    (tagHierarchyMoved)="handleTagHierarchyMoved($event)"
     (tagRemovedGlobally)="ifShowDetailsViewRefreshTags()"
     (toggleBatchTaggingMode)="toggleBatchTaggingMode()"
     [appState]="appState"

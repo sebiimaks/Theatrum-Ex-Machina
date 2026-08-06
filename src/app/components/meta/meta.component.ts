@@ -10,6 +10,10 @@ import { ImageElementService } from './../../services/image-element.service';
 import { ManualTagsService } from '../tags-manual/manual-tags.service';
 
 import type { StarRating, ImageElement } from '../../../../interfaces/final-object.interface';
+import {
+  planVideoTagBranchRemoval,
+  tagPathsEqual,
+} from '../../../../interfaces/tag-hierarchy';
 import type { TagEmit, RenameFileResponse } from '../../../../interfaces/shared-interfaces';
 
 import { SettingsButtons } from '../../common/settings-buttons';
@@ -32,6 +36,7 @@ export class MetaComponent implements OnInit, OnDestroy {
 
   readonly darkMode = input<boolean>();
   readonly imgHeight = input<number>();
+  readonly individualTagSegments = input<boolean>(false);
   readonly largerFont = input<boolean>();
   readonly maxWidth = input<number>();
   readonly selectedSourceFolder = input<string>();
@@ -65,7 +70,7 @@ export class MetaComponent implements OnInit, OnDestroy {
     public electronService: ElectronService,
     public filePathService: FilePathService,
     public imageElementService: ImageElementService,
-    public manualTagsService: ManualTagsService
+    public manualTagsService: ManualTagsService,
   ) { }
 
   ngOnInit() {
@@ -100,7 +105,7 @@ export class MetaComponent implements OnInit, OnDestroy {
   }
 
   addThisTag(tag: string) {
-    if (this.video.tags && this.video.tags.includes(tag)) {
+    if (this.video.tags?.some((existingTag: string) => tagPathsEqual(existingTag, tag))) {
       // console.log('TAG ALREADY ADDED!');
     } else {
       this.manualTagsService.addTag(tag);
@@ -129,16 +134,41 @@ export class MetaComponent implements OnInit, OnDestroy {
     this.tagViewUpdateTrigger = !this.tagViewUpdateTrigger;
   }
 
+  /** Remove this video's displayed tag level and all of its descendants. */
+  removeDisplayedTag(tag: string): void {
+    if (!this.individualTagSegments()) {
+      this.removeThisTag(tag);
+      return;
+    }
+
+    const plan = planVideoTagBranchRemoval(this.video.tags || [], tag);
+    if (!plan.removedTags.length) {
+      return;
+    }
+
+    const videoIndex = this.imageElementService.imageElements.indexOf(this.video);
+    const applied = videoIndex !== -1
+      && this.imageElementService.applyVideoTagBranchRemovalPlan(videoIndex, plan);
+    if (!applied) {
+      return;
+    }
+
+    this.manualTagsService.rebuildFromImages(this.imageElementService.imageElements);
+    this.tagViewUpdateTrigger = !this.tagViewUpdateTrigger;
+    this.cd.detectChanges();
+  }
+
   /**
    * Handle tag right-click event - show color picker via service
    * @param event - Object containing tag and mouse event
    */
   onTagRightClick(event: { tag: any, event: PointerEvent }): void {
-    this.selectedTagForColor = event.tag.name;
+    const colourPath = event.tag.colourPath || event.tag.name;
+    this.selectedTagForColor = colourPath;
 
     // Emit event to show color picker at home component level
     this.manualTagsService.showColorPickerSubject.next({
-      tagName: event.tag.name,
+      tagName: colourPath,
       currentColor: event.tag.colour || '',
       position: {
         x: event.event.clientX,

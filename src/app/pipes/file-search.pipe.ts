@@ -2,6 +2,7 @@ import type { PipeTransform } from '@angular/core';
 import { Pipe } from '@angular/core';
 
 import type { ImageElement } from '../../../interfaces/final-object.interface';
+import { matchesManualTagQuery, tagPathsEqual } from '../../../interfaces/tag-hierarchy';
 
 type SearchType = 'folder' | 'file' | 'tag' | 'notes';
 
@@ -32,7 +33,9 @@ export class FileSearchPipe implements PipeTransform {
     exclude?: boolean,
     manualTags?: boolean,
     autoFileTags?: boolean,
-    autoFolderTags?: boolean
+    autoFolderTags?: boolean,
+    manualTagBranches: string[] = [],
+    exactManualTags: string[] = [],
   ): ImageElement[] {
 
     if (arrOfStrings.length === 0) {
@@ -51,6 +54,7 @@ export class FileSearchPipe implements PipeTransform {
         arrOfStrings.forEach(element => {
 
           let searchString = '';
+          let matched = false;
           if (searchType === 'folder') {
             searchString = item.partialPath;
 
@@ -61,18 +65,20 @@ export class FileSearchPipe implements PipeTransform {
             searchString = item.notes || '';
 
           } else if (searchType === 'tag') {
+            const branchSearch = manualTagBranches.some((branch) => tagPathsEqual(branch, element));
+            const exactSearch = exactManualTags.some((tag) => tagPathsEqual(tag, element));
             if (manualTags && item.tags) {
-              searchString += item.tags.join(' ');
+              matched = matchesManualTagQuery(item.tags, element, branchSearch, exactSearch);
             }
-            if (autoFileTags) {
+            if (!branchSearch && !exactSearch && autoFileTags) {
               searchString += ' ' + item.cleanName;
             }
-            if (autoFolderTags) {
+            if (!branchSearch && !exactSearch && autoFolderTags) {
               searchString += ' ' + item.partialPath.replace(/(\/)/, ' ');
             }
           }
 
-          if (searchString.toLowerCase().indexOf(element.toLowerCase()) !== -1) {
+          if (matched || searchString.toLowerCase().indexOf(element.toLowerCase()) !== -1) {
             matchFound++;
           }
         });

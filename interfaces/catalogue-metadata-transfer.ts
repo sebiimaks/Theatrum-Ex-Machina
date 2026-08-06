@@ -1,5 +1,6 @@
 import type { ImageElement, StarRating } from './final-object.interface';
 import { normalizeDateAdded } from './date-added';
+import { normalizeNewTagPath, tagIdentityKey } from './tag-hierarchy';
 
 export const CATALOGUE_METADATA_FORMAT = 'theatrum-ex-machina.catalogue-metadata';
 export const CATALOGUE_METADATA_FORMAT_VERSION = 1;
@@ -183,7 +184,12 @@ function normalizeIsoDate(value: unknown, label: string): string | null {
   return new Date(timestamp).toISOString();
 }
 
-function normalizeTags(value: unknown, label: string): string[] {
+function normalizeTags(
+  value: unknown,
+  label: string,
+  normalizeHierarchyPaths = false,
+  catalogueTagSpellings: Map<string, string> = new Map<string, string>(),
+): string[] {
   if (!Array.isArray(value)) {
     throw new Error(`${label} must be an array of text values.`);
   }
@@ -195,11 +201,21 @@ function normalizeTags(value: unknown, label: string): string[] {
   const seen = new Set<string>();
 
   value.forEach((tag: unknown, index: number) => {
-    const normalized = requireString(tag, `${label} item ${index + 1}`, 500).trim();
-    if (/[,\r\n]/.test(normalized)) {
+    const storedValue = requireString(tag, `${label} item ${index + 1}`, 500).trim();
+    if (/[,\r\n]/.test(storedValue)) {
       throw new Error(`${label} item ${index + 1} cannot contain commas or line breaks.`);
     }
-    const key = normalized.toLowerCase();
+    const establishedSpelling = catalogueTagSpellings.get(tagIdentityKey(storedValue));
+    let normalized = establishedSpelling || storedValue;
+    if (normalizeHierarchyPaths && establishedSpelling === undefined) {
+      try {
+        normalized = normalizeNewTagPath(storedValue);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Tag is invalid.';
+        throw new Error(`${label} item ${index + 1} is invalid: ${message}`);
+      }
+    }
+    const key = tagIdentityKey(normalized);
     if (!seen.has(key)) {
       seen.add(key);
       tags.push(normalized);
@@ -388,6 +404,7 @@ function parseImportEntry(
   value: unknown,
   index: number,
   categories: CatalogueMetadataCategory[],
+  catalogueTagSpellings: Map<string, string>,
 ): CatalogueMetadataImportEntry {
   const record = requireRecord(value, `Entry ${index + 1}`);
   const fileName = typeof record.fileName === 'string'
@@ -413,7 +430,7 @@ function parseImportEntry(
     } else if (category === 'timesPlayed') {
       entry.timesPlayed = requireNonNegativeInteger(record.timesPlayed, `${fileName} Times Played`);
     } else if (category === 'tags') {
-      entry.tags = normalizeTags(record.tags, `${fileName} Tags`);
+      entry.tags = normalizeTags(record.tags, `${fileName} Tags`, true, catalogueTagSpellings);
     } else if (category === 'notes') {
       entry.notes = normalizeNotes(record.notes, `${fileName} Notes`);
     }
@@ -425,6 +442,7 @@ function parseImportEntry(
 function parseCatalogueMetadataImport(
   json: string,
   categories: CatalogueMetadataCategory[],
+  catalogueTagSpellings: Map<string, string>,
 ): CatalogueMetadataImportEntry[] {
   let parsed: unknown;
   try {
@@ -435,7 +453,7 @@ function parseCatalogueMetadataImport(
 
   const document = validateDocumentHeader(parsed);
   return (document.entries as unknown[]).map((entry: unknown, index: number) => (
-    parseImportEntry(entry, index, categories)
+    parseImportEntry(entry, index, categories, catalogueTagSpellings)
   ));
 }
 
@@ -443,6 +461,33 @@ function arraysMatch(left: string[] | undefined, right: string[]): boolean {
   return left
     ? left.length === right.length && left.every((value: string, index: number) => value === right[index])
     : right.length === 0;
+}
+
+function establishedTagSpellings(images: ImageElement[]): Map<string, string> {
+  const spellings = new Map<string, string>();
+  images.forEach((item: ImageElement) => {
+    (item.tags || []).forEach((tag: string) => {
+      if (typeof tag === 'string' && tag && !spellings.has(tagIdentityKey(tag))) {
+        spellings.set(tagIdentityKey(tag), tag);
+      }
+    });
+  });
+  return spellings;
+}
+
+function preserveEstablishedTagSpellings(
+  incoming: string[],
+  item: ImageElement,
+  catalogueSpellings: Map<string, string>,
+): string[] {
+  const preferredSpellings = new Map(catalogueSpellings);
+  (item.tags || []).forEach((tag: string) => {
+    if (typeof tag === 'string' && tag) {
+      preferredSpellings.set(tagIdentityKey(tag), tag);
+    }
+  });
+
+  return incoming.map((tag: string) => preferredSpellings.get(tagIdentityKey(tag)) || tag);
 }
 
 function optionalValueMatches(current: unknown, incoming: unknown): boolean {
@@ -453,6 +498,7 @@ function buildUpdates(
   item: ImageElement,
   entry: CatalogueMetadataImportEntry,
   categories: CatalogueMetadataCategory[],
+  catalogueTagSpellings: Map<string, string>,
 ): { changedFieldCount: number; updates: CatalogueMetadataUpdate } {
   const updates: CatalogueMetadataUpdate = {};
   let changedFieldCount = 0;
@@ -462,7 +508,9 @@ function buildUpdates(
       return;
     }
 
-    const incoming = entry[category];
+    const incoming = category === 'tags'
+      ? preserveEstablishedTagSpellings(entry.tags || [], item, catalogueTagSpellings)
+      : entry[category];
     let changed = false;
     if (category === 'tags') {
       changed = !arraysMatch(item.tags, incoming as string[]);
@@ -488,7 +536,8 @@ export function buildCatalogueMetadataImportPlan(
   eligibleTargets: ImageElement[] = images,
 ): CatalogueMetadataImportPlan {
   const categories = normalizeCatalogueMetadataCategories(selectedCategories);
-  const importedEntries = parseCatalogueMetadataImport(json, categories);
+  const catalogueTagSpellings = establishedTagSpellings(images);
+  const importedEntries = parseCatalogueMetadataImport(json, categories, catalogueTagSpellings);
   const importedHashCounts = new Map<string, number>();
   const eligibleTargetSet = new Set(eligibleTargets);
 
@@ -542,7 +591,7 @@ export function buildCatalogueMetadataImportPlan(
     }
 
     matchedRecordCount++;
-    const update = buildUpdates(targets[0], entry, categories);
+    const update = buildUpdates(targets[0], entry, categories, catalogueTagSpellings);
     if (update.changedFieldCount > 0) {
       changedFieldCount += update.changedFieldCount;
       changes.push({ target: targets[0], updates: update.updates });

@@ -6,10 +6,39 @@
   position: relative;
 
   .tag {
+    align-items: center;
     background-color: variables.$manual-tag-color;
+    display: inline-flex;
+    gap: 4px;
     margin: 0;
     position: relative;
     z-index: 3;
+  }
+
+  .tag-auto-match-markers {
+    align-items: center;
+    display: inline-flex;
+    gap: 2px;
+  }
+
+  .tag-auto-match-dot {
+    border: 1px solid rgba(255, 255, 255, 0.78);
+    border-radius: 50%;
+    box-sizing: border-box;
+    display: inline-block;
+    height: 6px;
+    width: 6px;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  }
+
+  .tag-auto-file-match {
+    background-color: #147ce5;
+  }
+
+  .tag-auto-folder-match {
+    background-color: #ff9f0a;
+    border-radius: 1px;
+    transform: rotate(45deg) scale(0.82);
   }
 
   .tag-draggable {

@@ -47,8 +47,13 @@ export interface RightClickEmit {
 
 // Tags stuffs
 export interface Tag {
+  autoFileMatch?: boolean;
+  autoFolderMatch?: boolean;
   name: string;
+  /** Context-qualified label used only when identical visible names need disambiguation. */
+  displayName?: string;
   colour: string;
+  colourPath?: string;
   removable: boolean;
 }
 

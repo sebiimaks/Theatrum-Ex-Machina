@@ -8,6 +8,8 @@
     [(ngModel)]="currentText"
     (ngModelChange)="checkTypeahead($event)"
     (keydown.Tab)="tabPressed($event)"
+    [attr.aria-invalid]="tagValidationError ? true : null"
+    [attr.title]="'TAGS.hierarchyEntryHint' | translate"
     type="text"
     placeholder="{{ 'TAGS.addTag' | translate }}"
   >
@@ -15,6 +17,12 @@
 @if (typeAhead.length > 0) {
   <span class="typeahead">
     {{ typeAhead }}
+  </span>
+}
+
+@if (tagValidationError) {
+  <span class="tag-validation-error" role="alert">
+    {{ tagValidationError }}
   </span>
 }
 

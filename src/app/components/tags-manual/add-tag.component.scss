@@ -36,3 +36,20 @@
   top: 9px;
   z-index: -1;
 }
+
+.tag-validation-error {
+  background: var(--app-elevated-background);
+  border: 1px solid var(--app-destructive);
+  border-radius: var(--app-control-radius);
+  box-shadow: var(--app-shadow-elevated);
+  color: var(--app-destructive);
+  font-size: 11px;
+  left: 0;
+  line-height: 15px;
+  max-width: 260px;
+  padding: 4px 6px;
+  position: absolute;
+  top: calc(100% + 2px);
+  width: max-content;
+  z-index: 20;
+}

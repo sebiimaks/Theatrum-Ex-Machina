@@ -489,6 +489,11 @@
               type="text"
             >
           </div>
+          <span
+            *ngIf="tagValidationErrorFor(item)"
+            aria-live="polite"
+            class="catalogue-field-error"
+          >{{ tagValidationErrorFor(item) }}</span>
         </label>
 
         <label [class.catalogue-field-pending-change]="metadataFieldWillChange(item, 'stars')">

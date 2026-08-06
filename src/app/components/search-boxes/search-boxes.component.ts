@@ -32,7 +32,7 @@ export class SearchBoxesComponent {
 
   readonly settingsButtons = input<SettingsButtonsType>();
 
-  readonly tagTypeAhead = input();
+  readonly tagTypeAhead = input<string>('');
 
   constructor() { }
 
@@ -80,6 +80,12 @@ export class SearchBoxesComponent {
     if (isTagSearch) {
       this.checkTagTypeahead.emit(currentText);
     }
+  }
+
+  isManualTagSearch(uniqueKey: string): boolean {
+    return uniqueKey === 'tagUnion'
+      || uniqueKey === 'tagIntersection'
+      || uniqueKey === 'tagExclusion';
   }
 
 }

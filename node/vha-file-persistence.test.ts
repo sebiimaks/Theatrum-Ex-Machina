@@ -102,6 +102,36 @@ test('preserves Date Added while legacy entries remain valid without it', () => 
   assert.equal(parsed.images[1].dateAdded, undefined);
 });
 
+test('round-trips persistent tag definitions that are not assigned to videos', async () => {
+  const directory = createTemporaryDirectory();
+  const cataloguePath = path.join(directory, 'tag-definitions.scaena');
+  const catalogue = createCatalogue('Tag Definitions');
+  catalogue.tagDefinitions = [
+    'Camera',
+    'Camera > Rangefinder',
+    'Unassigned',
+  ];
+
+  await writeCatalogue(catalogue, cataloguePath);
+  const reloaded = await readVhaFileWithBackup(cataloguePath);
+
+  assert.equal(reloaded.source, 'primary');
+  assert.deepEqual(reloaded.finalObject?.tagDefinitions, catalogue.tagDefinitions);
+  assert.deepEqual(reloaded.finalObject?.images, []);
+});
+
+test('keeps legacy catalogues valid without tag definitions and rejects malformed registries', () => {
+  const legacyCatalogue = createCatalogue('Legacy Tags');
+  assert.equal(parseVhaJson(JSON.stringify(legacyCatalogue)).tagDefinitions, undefined);
+
+  const malformedCatalogue = createCatalogue('Malformed Tags') as unknown as Record<string, unknown>;
+  malformedCatalogue.tagDefinitions = ['valid', 42];
+  assert.throws(
+    () => parseVhaJson(JSON.stringify(malformedCatalogue)),
+    /invalid tag definitions/,
+  );
+});
+
 test('preserves temporarily missing entries and their user metadata', () => {
   const catalogue = createCatalogue('Temporarily Offline');
   const missingEntry = NewImageElement();

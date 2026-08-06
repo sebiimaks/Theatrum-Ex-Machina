@@ -1,4 +1,4 @@
-@for (tag of _tags; track tag.name) {
+@for (tag of _tags; track tag.colourPath || tag.name) {
 
 <div class="singleTag">
 
@@ -13,8 +13,20 @@
     (contextmenu)="onTagRightClick($event, tag)"
     [draggable]='draggable()'
     (dragstart)="tagDragStart($event, tag)"
+    [attr.aria-label]="getTagAriaLabel(tag)"
+    [attr.title]="getTagTitle(tag)"
   >
-    {{ tag.name }}
+    <span>{{ tag.displayName || tag.name }}</span>
+    @if (tag.autoFileMatch || tag.autoFolderMatch) {
+      <span class="tag-auto-match-markers" aria-hidden="true">
+        @if (tag.autoFileMatch) {
+          <span class="tag-auto-match-dot tag-auto-file-match"></span>
+        }
+        @if (tag.autoFolderMatch) {
+          <span class="tag-auto-match-dot tag-auto-folder-match"></span>
+        }
+      </span>
+    }
   </span>
 
 @if (displayFrequency()) {
@@ -28,7 +40,7 @@
     [icon]="'icon-close'"
     [ngClass]="{ 'remove-tag-dark': darkMode() }"
     class="remove-tag"
-    (click)="removeTag(tag.name)"
+    (click)="removeTag(tag.colourPath || tag.name)"
   />
 }
 

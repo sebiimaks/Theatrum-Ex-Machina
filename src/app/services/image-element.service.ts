@@ -2,6 +2,12 @@ import { Injectable } from '@angular/core';
 
 import type { DefaultScreenEmission, StarEmission } from '../components/sheet/sheet.component';
 import type { ImageElement } from './../../../interfaces/final-object.interface';
+import type {
+  TagBranchMovePlan,
+  TagBranchRemovalPlan,
+  VideoTagBranchRemovalPlan,
+} from './../../../interfaces/tag-hierarchy';
+import { tagPathsEqual } from './../../../interfaces/tag-hierarchy';
 import type { TagEmission } from './../../../interfaces/shared-interfaces';
 import type { YearEmission} from './../components/views/details/details.component';
 
@@ -100,25 +106,103 @@ export class ImageElementService {
    * Returns the number of videos that were changed.
    */
   removeTagFromAll(tag: string): number {
+    return this.removeTagsFromAll([tag]);
+  }
+
+  /** Remove several equivalent exact tag values in one catalogue pass. */
+  removeTagsFromAll(tags: readonly string[]): number {
     let affectedVideoCount = 0;
 
     this.imageElements.forEach((element: ImageElement) => {
-      if (!element.tags?.includes(tag)) {
+      if (!element.tags?.some((existingTag: string) => (
+        typeof existingTag === 'string'
+        && tags.some((tag: string) => tagPathsEqual(existingTag, tag))
+      ))) {
         return;
       }
 
-      element.tags = element.tags.filter((existingTag) => existingTag !== tag);
+      element.tags = element.tags.filter((existingTag: string) => (
+        typeof existingTag !== 'string'
+        || !tags.some((tag: string) => tagPathsEqual(existingTag, tag))
+      ));
       affectedVideoCount++;
     });
 
     if (affectedVideoCount > 0) {
       this.imageElements = this.imageElements.slice();
+      this.finalArrayNeedsSaving = true;
     }
 
-    // Also persists the removal of any catalogue-level metadata for this tag.
-    this.finalArrayNeedsSaving = true;
+    return affectedVideoCount;
+  }
+
+  /** Apply a freshly revalidated hierarchy-removal plan in one transaction. */
+  applyTagBranchRemovalPlan(plan: TagBranchRemovalPlan): number {
+    let affectedVideoCount = 0;
+
+    plan.entries.forEach((entry) => {
+      const element = this.imageElements[entry.index];
+      if (!element || !entry.removedTags.length) {
+        return;
+      }
+      element.tags = entry.remainingTags.slice();
+      affectedVideoCount++;
+    });
+
+    if (affectedVideoCount > 0) {
+      this.imageElements = this.imageElements.slice();
+      this.finalArrayNeedsSaving = true;
+    }
 
     return affectedVideoCount;
+  }
+
+  /** Apply a freshly revalidated hierarchy-move plan in one transaction. */
+  applyTagBranchMovePlan(plan: TagBranchMovePlan): number {
+    const planIsCurrent = plan.entries.every((entry) => {
+      const currentTags = this.imageElements[entry.index]?.tags;
+      return Array.isArray(currentTags)
+        && currentTags.length === entry.originalTags.length
+        && currentTags.every((tag: string, index: number) => tag === entry.originalTags[index]);
+    });
+
+    if (!planIsCurrent) {
+      return 0;
+    }
+
+    plan.entries.forEach((entry) => {
+      this.imageElements[entry.index].tags = entry.updatedTags.slice();
+    });
+
+    if (plan.entries.length > 0) {
+      this.imageElements = this.imageElements.slice();
+      this.finalArrayNeedsSaving = true;
+    }
+
+    return plan.entries.length;
+  }
+
+  /** Apply a revalidated hierarchy-branch removal to one exact video. */
+  applyVideoTagBranchRemovalPlan(
+    index: number,
+    plan: VideoTagBranchRemovalPlan,
+  ): boolean {
+    const element = this.imageElements[index];
+    const currentTags = element?.tags;
+    const planIsCurrent = Array.isArray(currentTags)
+      && currentTags.length === plan.originalTags.length
+      && currentTags.every((tag: string, tagIndex: number) => (
+        tag === plan.originalTags[tagIndex]
+      ));
+
+    if (!element || !plan.removedTags.length || !planIsCurrent) {
+      return false;
+    }
+
+    element.tags = plan.remainingTags.slice();
+    this.imageElements = this.imageElements.slice();
+    this.finalArrayNeedsSaving = true;
+    return true;
   }
 
   /**
@@ -165,15 +249,26 @@ export class ImageElementService {
 
   private handleTagEmission(emission: TagEmission): void {
     const position: number = emission.index;
+    const element = this.imageElements[position];
+    if (!element) {
+      return;
+    }
+
     if (emission.type === 'add') {
-      if (this.imageElements[position].tags) {
-        this.imageElements[position].tags.push(emission.tag);
+      if (element.tags) {
+        if (!element.tags.some((existingTag: string) => (
+          typeof existingTag === 'string' && tagPathsEqual(existingTag, emission.tag)
+        ))) {
+          element.tags.push(emission.tag);
+        }
       } else {
-        this.imageElements[position].tags = [emission.tag];
+        element.tags = [emission.tag];
       }
     } else {
-      this.imageElements[position].tags.
-        splice(this.imageElements[position].tags.indexOf(emission.tag), 1);
+      const tagIndex = element.tags?.indexOf(emission.tag) ?? -1;
+      if (tagIndex !== -1) {
+        element.tags.splice(tagIndex, 1);
+      }
     }
   }
 

@@ -118,8 +118,9 @@
 }
 
 .color-actions {
-  display: none;  // disabled for visual style
+  display: flex;
   justify-content: center;
+  margin-top: 9px;
   padding-top: 8px;
   border-top: 1px solid var(--app-border-subtle);
 
@@ -140,6 +141,11 @@
 
   &:hover {
     background: var(--app-control-hover);
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.5;
   }
 
   .dark-mode & {

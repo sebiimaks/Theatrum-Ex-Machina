@@ -38,6 +38,12 @@ import {
   markMissingFolderEntries,
   replaceRecoveredFolderEntry,
 } from '../../../interfaces/folder-rescan';
+import {
+  addTagToSelectedEntries,
+  isTagInBranch,
+  remapTagBranchPath,
+  tagPathsEqual,
+} from '../../../interfaces/tag-hierarchy';
 import type { ImportStage } from '../../../node/main-support';
 import type {
   FolderThumbnailRegenerationProgress,
@@ -57,6 +63,7 @@ import type {
   FolderThumbnailRegenerationStatus,
   ServerDetails,
 } from './statistics/statistics.component';
+import type { TagHierarchyMoveEmission } from './tag-tray/tag-tray.component';
 import type { RemoteSettings, SettingsButtonSavedProperties, SettingsObject } from '../../../interfaces/settings-object.interface';
 import type { SortType } from '../pipes/sorting.pipe';
 import type { WizardOptions } from '../../../interfaces/wizard-options.interface';
@@ -210,6 +217,8 @@ export class HomeComponent implements OnInit, AfterViewInit {
   currentTagColor = '';
   currentTagName = '';
   tagColorPickerSubscription: any;
+  tagColorPersistenceSubscription: any;
+  tagDefinitionsPersistenceSubscription: any;
 
   // ========================================================================
   // Import / extraction progress
@@ -486,6 +495,12 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.tagColorPickerPosition = data.position;
       this.showTagColorPicker = true;
       this.cd.detectChanges();
+    });
+    this.tagColorPersistenceSubscription = this.manualTagsService.tagColorPersistenceChangedSubject.subscribe(() => {
+      this.imageElementService.finalArrayNeedsSaving = true;
+    });
+    this.tagDefinitionsPersistenceSubscription = this.manualTagsService.tagDefinitionsPersistenceChangedSubject.subscribe(() => {
+      this.imageElementService.finalArrayNeedsSaving = true;
     });
 
     setTimeout(() => {
@@ -932,6 +947,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.folderViewNavigationPath = '';
 
       this.manualTagsService.removeAllTags();
+      this.manualTagsService.loadTagDefinitions(finalObject.tagDefinitions);
       this.manualTagsService.populateManualTagsService(finalObject.images);
       this.manualTagsService.loadTagColors(finalObject.tagColors);
 
@@ -1523,6 +1539,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
         removeTags: this.autoTagsSaveService.getRemoveTags(),
         screenshotSettings: this.currentScreenshotSettings,
         tagColors: this.manualTagsService.getTagColors(),
+        tagDefinitions: this.manualTagsService.getTagDefinitions(),
         version: 3,
       };
       return propsToReturn;
@@ -1684,14 +1701,24 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * Add filter to tag search when word in word cloud or tag tray is clicked
    * @param filter - particular tag clicked
    */
-  handleTagWordClicked(filter: string, event?: PointerEvent): void {
+  handleTagWordClicked(
+    filter: string,
+    event?: PointerEvent,
+    branchMatch = false,
+    exactMatch = false,
+  ): void {
     if (this.batchTaggingMode) {
       this.addTagToManyVideos(filter);
       return;
     }
 
+    if (branchMatch && !this.settingsButtons['manualTags'].toggled) {
+      this.settingsButtons['manualTags'].toggled = true;
+    }
+
     if (  // if all tags disabled, perform a FILE search
-         !this.settingsButtons['manualTags'].toggled
+         !branchMatch
+      && !this.settingsButtons['manualTags'].toggled
       && !this.settingsButtons['autoFileTags'].toggled
       && !this.settingsButtons['autoFolderTags'].toggled
     ) {
@@ -1704,13 +1731,84 @@ export class HomeComponent implements OnInit, AfterViewInit {
       if (!this.settingsButtons['tagExclusion'].toggled) {
         this.settingsButtons['tagExclusion'].toggled = true;
       }
-      this.onEnterKey(filter, 8); // 8th item is the `tagExclusion` filter in `FilterKeyNames`
+      this.onEnterKey(filter, 8, branchMatch, exactMatch); // 8th item is the `tagExclusion` filter
     } else {
       if (!this.settingsButtons['tagIntersection'].toggled) {
         this.settingsButtons['tagIntersection'].toggled = true;
       }
-      this.onEnterKey(filter, 7); // 7th item is the `tagIntersection` filter in `FilterKeyNames`
+      this.onEnterKey(filter, 7, branchMatch, exactMatch); // 7th item is the `tagIntersection` filter
     }
+  }
+
+  /** Keep structured tag filters aligned after a hierarchy branch is moved. */
+  handleTagHierarchyMoved(move: TagHierarchyMoveEmission): void {
+    let filtersChanged = false;
+
+    [6, 7, 8].forEach((filterIndex: number) => {
+      const filter = this.filters[filterIndex];
+      const originalBranchPaths = filter.branchPaths || [];
+      const originalExactPaths = filter.exactPaths || [];
+      const originalStructuredPaths = originalBranchPaths.concat(originalExactPaths);
+      const remapPath = (path: string): string => (
+        isTagInBranch(path, move.sourcePath)
+          ? remapTagBranchPath(path, move.sourcePath, move.destinationPath)
+          : path
+      );
+      const nextBranchPaths = this.uniqueTagPaths(originalBranchPaths.map(remapPath));
+      const nextExactPaths = this.uniqueTagPaths(originalExactPaths.map(remapPath))
+        .filter((exactPath: string) => !nextBranchPaths.some((branchPath: string) => (
+          tagPathsEqual(branchPath, exactPath)
+        )));
+      const nextArray: string[] = [];
+
+      filter.array.forEach((value: string) => {
+        const structuredPath = originalStructuredPaths.find((path: string) => (
+          tagPathsEqual(path, value)
+        ));
+        const nextValue = structuredPath ? remapPath(structuredPath) : value;
+        if (!nextArray.some((existingValue: string) => (
+          structuredPath
+            ? tagPathsEqual(existingValue, nextValue)
+            : existingValue === nextValue
+        ))) {
+          nextArray.push(nextValue);
+        }
+      });
+
+      nextBranchPaths.concat(nextExactPaths).forEach((path: string) => {
+        if (!nextArray.some((value: string) => tagPathsEqual(value, path))) {
+          nextArray.push(path);
+        }
+      });
+
+      const changed = JSON.stringify(filter.array) !== JSON.stringify(nextArray)
+        || JSON.stringify(originalBranchPaths) !== JSON.stringify(nextBranchPaths)
+        || JSON.stringify(originalExactPaths) !== JSON.stringify(nextExactPaths);
+      if (!changed) {
+        return;
+      }
+
+      filter.array = nextArray;
+      filter.branchPaths = nextBranchPaths;
+      filter.exactPaths = nextExactPaths;
+      filter.bool = !filter.bool;
+      filtersChanged = true;
+    });
+
+    this.tagTypeAhead = '';
+    this.ifShowDetailsViewRefreshTags();
+    if (filtersChanged) {
+      this.scrollToTop();
+    }
+  }
+
+  private uniqueTagPaths(paths: readonly string[]): string[] {
+    return paths.reduce((uniquePaths: string[], path: string) => {
+      if (!uniquePaths.some((existingPath: string) => tagPathsEqual(existingPath, path))) {
+        uniquePaths.push(path);
+      }
+      return uniquePaths;
+    }, []);
   }
 
   /**
@@ -2076,8 +2174,11 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
       // ======== Filter buttons =========================
     } else if (FilterKeyNames.includes(uniqueKey)) {
-      this.filters[filterKeyToIndex[uniqueKey]].array = [];
-      this.filters[filterKeyToIndex[uniqueKey]].bool = !this.filters[filterKeyToIndex[uniqueKey]].bool;
+      const filter = this.filters[filterKeyToIndex[uniqueKey]];
+      filter.array = [];
+      filter.branchPaths = [];
+      filter.exactPaths = [];
+      filter.bool = !filter.bool;
       this.toggleButtonOpposite(uniqueKey);
     } else if (uniqueKey === 'magic') {
       this.magicSearchString = '';
@@ -2337,22 +2438,54 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * @param value  -- the string to filter
    * @param origin -- number in filter array of the filter to target
    */
-  onEnterKey(value: string, origin: number): void {
+  onEnterKey(value: string, origin: number, branchMatch = false, exactMatch = false): void {
     const trimmed = value.trim();
+    const tagFilter = origin >= 6 && origin <= 8;
 
-    if (origin === 6) {
-      // the `tags include` search
+    if (tagFilter) {
       this.tagTypeAhead = '';
     }
 
     if (trimmed) {
-      // don't include duplicates
-      if (!this.filters[origin].array.includes(trimmed)) {
-        this.filters[origin].array.push(trimmed);
-        this.filters[origin].bool = !this.filters[origin].bool;
-        this.filters[origin].string = '';
+      const filter = this.filters[origin];
+      const existingIndex = filter.array.findIndex((existing: string) => (
+        tagFilter ? tagPathsEqual(existing, trimmed) : existing === trimmed
+      ));
+      let changed = false;
+
+      if (existingIndex === -1) {
+        filter.array.push(trimmed);
+        changed = true;
+      }
+      if (branchMatch) {
+        const previousExactCount = (filter.exactPaths || []).length;
+        filter.exactPaths = (filter.exactPaths || [])
+          .filter((path: string) => !tagPathsEqual(path, trimmed));
+        if (filter.exactPaths.length !== previousExactCount) {
+          changed = true;
+        }
+        if (!(filter.branchPaths || []).some((branch: string) => tagPathsEqual(branch, trimmed))) {
+          filter.branchPaths = [...(filter.branchPaths || []), trimmed];
+          changed = true;
+        }
+      } else if (exactMatch) {
+        const previousBranchCount = (filter.branchPaths || []).length;
+        filter.branchPaths = (filter.branchPaths || [])
+          .filter((path: string) => !tagPathsEqual(path, trimmed));
+        if (filter.branchPaths.length !== previousBranchCount) {
+          changed = true;
+        }
+        if (!(filter.exactPaths || []).some((path: string) => tagPathsEqual(path, trimmed))) {
+          filter.exactPaths = [...(filter.exactPaths || []), trimmed];
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        filter.bool = !filter.bool;
         this.scrollToTop();
       }
+      filter.string = '';
     }
   }
 
@@ -2363,8 +2496,15 @@ export class HomeComponent implements OnInit, AfterViewInit {
    */
   onBackspace(value: string, origin: number): void {
     if (value === '' && this.filters[origin].array.length > 0) {
-      this.filters[origin].array.pop();
-      this.filters[origin].bool = !this.filters[origin].bool;
+      const filter = this.filters[origin];
+      const removed = filter.array.pop();
+      if (removed) {
+        filter.branchPaths = (filter.branchPaths || [])
+          .filter((branch: string) => !tagPathsEqual(branch, removed));
+        filter.exactPaths = (filter.exactPaths || [])
+          .filter((path: string) => !tagPathsEqual(path, removed));
+      }
+      filter.bool = !filter.bool;
     }
   }
 
@@ -2375,8 +2515,15 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * @param origin  {number}  index within filters array
    */
   removeThisFilter(item: number, origin: number): void {
-    this.filters[origin].array.splice(item, 1);
-    this.filters[origin].bool = !this.filters[origin].bool;
+    const filter = this.filters[origin];
+    const [removed] = filter.array.splice(item, 1);
+    if (removed) {
+      filter.branchPaths = (filter.branchPaths || [])
+        .filter((branch: string) => !tagPathsEqual(branch, removed));
+      filter.exactPaths = (filter.exactPaths || [])
+        .filter((path: string) => !tagPathsEqual(path, removed));
+    }
+    filter.bool = !filter.bool;
   }
 
   /**
@@ -3246,11 +3393,25 @@ export class HomeComponent implements OnInit, AfterViewInit {
   }
 
   addTagToManyVideos(tag: string): void {
-    this.imageElementService.imageElements.forEach((element: ImageElement) => {
-      if (element.selected) {
-        this.addTagToThisElement(tag, element);
-      }
-    });
+    const existingTag = this.manualTagsService.tagsList.find((knownTag: string) => (
+      tagPathsEqual(knownTag, tag)
+    ));
+    let normalizedTag: string;
+    try {
+      normalizedTag = existingTag || this.manualTagsService.normalizeTagInput(tag);
+    } catch {
+      return;
+    }
+
+    const affectedEntryCount = addTagToSelectedEntries(
+      this.imageElementService.imageElements,
+      normalizedTag,
+    );
+    if (affectedEntryCount > 0) {
+      this.imageElementService.imageElements = this.imageElementService.imageElements.slice();
+      this.imageElementService.finalArrayNeedsSaving = true;
+      this.manualTagsService.rebuildFromImages(this.imageElementService.imageElements);
+    }
 
     this.ifShowDetailsViewRefreshTags();
   }
@@ -3262,14 +3423,22 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * @param element
    */
   addTagToThisElement(tag: string, element: ImageElement): void {
-    if (!element.tags || !element.tags.includes(tag)) {
+    const existingTag = this.manualTagsService.tagsList.find((knownTag: string) => knownTag === tag);
+    let normalizedTag: string;
+    try {
+      normalizedTag = existingTag || this.manualTagsService.normalizeTagInput(tag);
+    } catch {
+      return;
+    }
 
-      this.manualTagsService.addTag(tag); // only updates the count in the tray, nothing else!
+    if (!element.tags || !element.tags.some((currentTag: string) => tagPathsEqual(currentTag, normalizedTag))) {
+
+      this.manualTagsService.addTag(normalizedTag); // only updates the count in the tray, nothing else!
 
       this.imageElementService.HandleEmission({
         type: 'add',
         index: element.index,
-        tag: tag
+        tag: normalizedTag
       });
     }
   }
@@ -3369,6 +3538,8 @@ export class HomeComponent implements OnInit, AfterViewInit {
     // Clear all filter arrays and bools
     this.filters.forEach((filter) => {
       filter.array = [];
+      filter.branchPaths = [];
+      filter.exactPaths = [];
       filter.bool = false;
       filter.string = '';
     });
@@ -3426,7 +3597,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
   /**
    * Handle tag color selection from color picker
    */
-  onTagColorSelected(color: string): void {
+  onTagColorSelected(color: string | null): void {
     this.manualTagsService.setTagColor(this.currentTagName, color);
     this.showTagColorPicker = false;
     // setTagColor will trigger tagColorUpdatedSubject which updates all views

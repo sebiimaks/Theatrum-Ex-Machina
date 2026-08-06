@@ -1,5 +1,6 @@
 import { Component, Input, input, output, viewChild } from '@angular/core';
 import type { ElementRef } from '@angular/core';
+import { TranslateService } from '@ngx-translate/core';
 
 import { ManualTagsService } from './manual-tags.service';
 
@@ -59,8 +60,44 @@ export class ViewTagsComponent {
   readonly dragHack = viewChild<ElementRef>('dragHack');
 
   constructor(
-    public tagService: ManualTagsService
+    public tagService: ManualTagsService,
+    private translate: TranslateService,
   ) { }
+
+  getAutoMatchDescription(tag: Tag): string | null {
+    if (tag.autoFileMatch && tag.autoFolderMatch) {
+      return this.translate.instant('TAGS.manualTagAutoFileAndFolderMatch');
+    }
+    if (tag.autoFileMatch) {
+      return this.translate.instant('TAGS.manualTagAutoFileMatch');
+    }
+    if (tag.autoFolderMatch) {
+      return this.translate.instant('TAGS.manualTagAutoFolderMatch');
+    }
+    return null;
+  }
+
+  getTagAriaLabel(tag: Tag): string {
+    const autoMatchDescription = this.getAutoMatchDescription(tag);
+    const pathDescription = tag.colourPath && tag.colourPath !== tag.name
+      ? `${tag.displayName || tag.name}. ${tag.colourPath}`
+      : tag.displayName || tag.name;
+    return autoMatchDescription
+      ? `${pathDescription}. ${autoMatchDescription}`
+      : pathDescription;
+  }
+
+  getTagTitle(tag: Tag): string | null {
+    const details: string[] = [];
+    if (tag.colourPath && tag.colourPath !== tag.name) {
+      details.push(tag.colourPath);
+    }
+    const autoMatchDescription = this.getAutoMatchDescription(tag);
+    if (autoMatchDescription) {
+      details.push(autoMatchDescription);
+    }
+    return details.length ? details.join(' — ') : null;
+  }
 
   /**
    * Emit to parent component a tag has been clicked
@@ -109,12 +146,15 @@ export class ViewTagsComponent {
    * @param event - DragEvent
    */
   tagDragStart(event: DragEvent, tag: Tag): void {
+    if (!event.dataTransfer) {
+      return;
+    }
 
-    event.dataTransfer.setData('text/plain', (event.target as HTMLElement).innerText);
+    event.dataTransfer.setData('text/plain', tag.name);
 
     const quickHack: HTMLElement = this.dragHack().nativeElement;
 
-    quickHack.innerHTML = (event.target as HTMLElement).innerText;
+    quickHack.innerText = tag.name;
     quickHack.style.backgroundColor = tag.colour ? tag.colour : "#f5f5f5";
 
     event.dataTransfer.setDragImage(quickHack, event.offsetX * 1.5, 21);

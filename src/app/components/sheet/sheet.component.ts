@@ -9,6 +9,7 @@ import { ImageElementService } from './../../services/image-element.service';
 import { ManualTagsService } from '../tags-manual/manual-tags.service';
 
 import type { StarRating, ImageElement } from '../../../../interfaces/final-object.interface';
+import { tagPathsEqual } from '../../../../interfaces/tag-hierarchy';
 import type { TagEmit, RenameFileResponse } from '../../../../interfaces/shared-interfaces';
 
 import { metaAppear, textAppear, modalAnimation } from '../../common/animations';
@@ -102,7 +103,7 @@ export class SheetComponent implements OnInit {
 
   addThisTag(tag: string) {
     const video = this.video();
-    if (video.tags && video.tags.includes(tag)) {
+    if (video.tags?.some((existingTag: string) => tagPathsEqual(existingTag, tag))) {
       // console.log('TAG ALREADY ADDED!');
     } else {
       this.manualTagsService.addTag(tag);

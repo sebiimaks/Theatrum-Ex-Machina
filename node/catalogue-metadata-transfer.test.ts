@@ -123,6 +123,95 @@ test('imports only selected categories by exact hash and includes unavailable en
   assert.equal(target.hash, 'same-hash');
 });
 
+test('exports existing legacy tag spellings without silently converting them into hierarchy paths', () => {
+  const entry = image({
+    hash: 'legacy-tags-hash',
+    tags: ['People>Family', 'People > Family', 'Standalone'],
+  });
+
+  const result = createCatalogueMetadataExport([entry]);
+  assert.deepEqual(result.document.entries[0].tags, [
+    'People>Family',
+    'People > Family',
+    'Standalone',
+  ]);
+  assert.deepEqual(JSON.parse(serializeCatalogueMetadataExport(result.document)).entries[0].tags, [
+    'People>Family',
+    'People > Family',
+    'Standalone',
+  ]);
+});
+
+test('keeps an unchanged exported legacy tag flat when it is imported again', () => {
+  const target = image({
+    hash: 'legacy-round-trip-hash',
+    tags: ['People>Family', 'Standalone'],
+  });
+  const exported = createCatalogueMetadataExport([target]);
+  const plan = buildCatalogueMetadataImportPlan(
+    [target],
+    serializeCatalogueMetadataExport(exported.document),
+    ['tags'],
+  );
+
+  assert.equal(plan.changedFieldCount, 0);
+  assert.deepEqual(plan.changes, []);
+  assert.deepEqual(target.tags, ['People>Family', 'Standalone']);
+});
+
+test('canonicalizes imported hierarchy paths and preserves established catalogue spelling', () => {
+  const target = image({ hash: 'target-hash', tags: ['People > FAMILY'] });
+  const establishedElsewhere = image({
+    hash: 'other-hash',
+    index: 2,
+    tags: ['Topics > Art'],
+  });
+  const json = metadataJson([{
+    fileName: 'target.mp4',
+    hash: 'target-hash',
+    tags: ['people>family', 'TOPICS  >art', 'topics > ART'],
+  }]);
+
+  const plan = buildCatalogueMetadataImportPlan([target, establishedElsewhere], json, ['tags']);
+  assert.deepEqual(plan.changes[0].updates.tags, ['People > FAMILY', 'Topics > Art']);
+  applyCatalogueMetadataImportPlan(plan);
+  assert.deepEqual(target.tags, ['People > FAMILY', 'Topics > Art']);
+});
+
+test('rejects an invalid imported hierarchy atomically before any metadata is applied', () => {
+  const first = image({ hash: 'first-hash', notes: 'First original', tags: ['First original tag'] });
+  const second = image({
+    fileName: 'second.mp4',
+    hash: 'second-hash',
+    index: 2,
+    notes: 'Second original',
+    tags: ['Second original tag'],
+  });
+  const json = metadataJson([
+    {
+      fileName: 'first.mp4',
+      hash: 'first-hash',
+      notes: 'First changed',
+      tags: ['Valid>Path'],
+    },
+    {
+      fileName: 'second.mp4',
+      hash: 'second-hash',
+      notes: 'Second changed',
+      tags: ['Invalid>>Path'],
+    },
+  ]);
+
+  assert.throws(
+    () => buildCatalogueMetadataImportPlan([first, second], json, ['tags', 'notes']),
+    /Tag hierarchy cannot contain an empty level/,
+  );
+  assert.deepEqual(first.tags, ['First original tag']);
+  assert.equal(first.notes, 'First original');
+  assert.deepEqual(second.tags, ['Second original tag']);
+  assert.equal(second.notes, 'Second original');
+});
+
 test('imports only globally unique targets within the filtered scope', () => {
   const included = image({ hash: 'included-hash', notes: 'Old included notes' });
   const excluded = image({ hash: 'excluded-hash', index: 2, notes: 'Old excluded notes' });
