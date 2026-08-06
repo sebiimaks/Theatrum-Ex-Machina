@@ -5,7 +5,7 @@
 **All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
 
 - Current fork version: `v3.3.0-tem.2`
-- Change summary updated: 04/08/2026
+- Change summary updated: 06/08/2026
 
 # Fork Changelog
 
@@ -15,7 +15,10 @@ Changes under Unreleased are present on the production branch but have not yet b
 
 ## Unreleased
 
-No unreleased changes.
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/371e976"><code>371e976</code></a> — <strong>Add persistent hierarchical tagging</strong></summary>
+<p>Manual tags can now be organised into persistent nested hierarchies in the Tags tray. Tags and branches can be created independently of videos, moved or separated with drag and drop, coloured individually, filtered as exact tags or complete branches, and removed catalogue-wide with affected-video safeguards. Unassigned tag definitions survive saving and reopening, while Catalogue Editor metadata import and search preserve canonical hierarchy paths. Batch assignment supports nested tags, and Video Details presents compact individual tag levels whose removal is restricted to the selected hierarchy branch and its descendants, including when unrelated branches use the same visible name.</p>
+</details>
 
 ## [v3.3.0-tem.2](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.2) — 4 August 2026
 
