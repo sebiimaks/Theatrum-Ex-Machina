@@ -1,28 +1,146 @@
 @use "../variables";
 
+:host {
+  display: block;
+}
+
+.dialog-shell {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 32px);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+  padding: 24px 26px 22px;
+}
+
+h1,
+p,
+dl,
+dd {
+  margin: 0;
+}
+
 h1 {
   color: var(--app-text-primary);
-  font-size: 16px;
-  margin-bottom: 20px;
-  text-align: center;
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.3;
 }
 
-span {
+.dialog-summary {
   color: var(--app-text-primary);
-  display: block;
-  margin: 10px 10px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
 }
 
-.message {
+.dialog-supporting-text,
+.dialog-message-details {
   color: var(--app-text-secondary);
-  font-style: italic;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.dialog-transition {
+  align-items: stretch;
+  background: color-mix(in srgb, var(--app-gallery-background) 72%, transparent);
+  border: 1px solid var(--app-border-subtle);
+  border-radius: var(--app-control-radius);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  padding: 12px 14px;
+}
+
+.dialog-transition-value {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+
+  span {
+    color: var(--app-text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  code {
+    color: var(--app-text-primary);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+}
+
+.dialog-transition-arrow {
+  align-self: center;
+  color: var(--app-accent-text);
+  font-size: 18px;
+}
+
+.dialog-disclosure {
+  border-top: 1px solid var(--app-border-subtle);
+  color: var(--app-text-secondary);
+  padding-top: 12px;
+
+  summary {
+    color: var(--app-accent-text);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    width: fit-content;
+  }
+
+  dl {
+    border: 1px solid var(--app-border-subtle);
+    border-radius: var(--app-control-radius);
+    margin-top: 11px;
+    overflow: hidden;
+  }
+}
+
+.dialog-fact {
+  align-items: baseline;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 8px 11px;
+
+  & + & {
+    border-top: 1px solid var(--app-border-subtle);
+  }
+
+  dt {
+    color: var(--app-text-secondary);
+    min-width: 0;
+  }
+
+  dd {
+    color: var(--app-text-primary);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+    text-align: right;
+  }
 }
 
 .dialog-actions {
+  background: color-mix(in srgb, var(--app-elevated-background) 88%, var(--app-gallery-background));
+  border-top: 1px solid var(--app-border-subtle);
   display: flex;
   gap: 10px;
   justify-content: flex-end;
-  margin: 20px 10px 10px;
+  padding: 14px 18px;
 }
 
 .dialog-button {
@@ -31,8 +149,10 @@ span {
   border-radius: var(--app-control-radius);
   color: var(--app-text-primary);
   cursor: pointer;
+  font-size: 14px;
+  min-height: 38px;
   min-width: 80px;
-  padding: 8px 14px;
+  padding: 8px 16px;
 
   &:hover {
     background: var(--app-control-hover);
@@ -40,14 +160,56 @@ span {
   }
 }
 
-.dialog-button-delete {
+.dialog-button-confirm {
   background: var(--app-action-background);
   border-color: var(--app-action-background);
   color: var(--app-on-action);
-  font-weight: bold;
+  font-weight: 600;
 
   &:hover {
     background: var(--app-action-hover);
     border-color: var(--app-action-hover);
+  }
+}
+
+.dialog-shell-destructive {
+  .dialog-button-confirm {
+    background: var(--app-destructive);
+    border-color: var(--app-destructive);
+    color: var(--app-elevated-background);
+  }
+
+  .dialog-supporting-text {
+    color: var(--app-destructive);
+  }
+}
+
+.dialog-shell-warning {
+  .dialog-transition {
+    border-color: var(--app-border-strong);
+  }
+}
+
+@media (max-width: 560px) {
+  .dialog-content {
+    padding: 20px 18px 18px;
+  }
+
+  .dialog-transition {
+    grid-template-columns: 1fr;
+  }
+
+  .dialog-transition-arrow {
+    justify-self: center;
+    transform: rotate(90deg);
+  }
+
+  .dialog-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .dialog-button {
+    width: 100%;
   }
 }

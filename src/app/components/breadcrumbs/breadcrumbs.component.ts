@@ -19,6 +19,7 @@ export class BreadcrumbsComponent {
   readonly appState = input<AppStateInterface>();
   readonly settingsButtons = input<SettingsButtonsType>();
   readonly folderViewNavigationPath = input();
+  readonly rightPanelOpen = input<boolean>(false);
 
   constructor() { }
 

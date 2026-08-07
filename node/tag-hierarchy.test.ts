@@ -606,7 +606,14 @@ test('uses pointer-driven hierarchy dragging without covering tag rows', () => {
   );
   assert.match(template, /class="tag-node-branch-glyph"/);
   assert.doesNotMatch(template, /TAGS\.(tagActionShort|branchActionShort)/);
-  assert.match(template, /\[draggable\]="!batchTaggingMode\(\)"/);
+  assert.match(
+    template,
+    /\[draggable\]="!batchTaggingMode\(\) && !verticalLayout\(\)"/,
+  );
+  assert.match(
+    template,
+    /\(pointerdown\)="verticalLayout\(\) \? beginTagPointerDrag\(\$event, node\) : null"/,
+  );
   assert.match(
     homeComponent,
     /addTagToSelectedEntries[\s\S]*rebuildFromImages\(this\.imageElementService\.imageElements\)/,
@@ -615,12 +622,76 @@ test('uses pointer-driven hierarchy dragging without covering tag rows', () => {
   assert.match(component, /@HostListener\('document:pointermove'/);
   assert.match(component, /@HostListener\('document:pointerup'/);
   assert.match(component, /@HostListener\('window:blur'/);
+  assert.match(component, /suppressNextTagClick/);
   assert.match(
     component,
     /finishTagPointerDrag[\s\S]*updatePointerDropTarget\(event\.clientX, event\.clientY\)/,
   );
   assert.match(component, /document\.elementFromPoint\(clientX, clientY\)/);
   assert.doesNotMatch(component, /hierarchyMoveEnabled = !this\.batchTaggingMode\(\)/);
+});
+
+test('renders the hierarchy as an independent vertical right-side panel', () => {
+  const homeTemplate = readFileSync(
+    join(__dirname, '../src/app/components/home.component.html'),
+    'utf8',
+  );
+  const homeComponent = readFileSync(
+    join(__dirname, '../src/app/components/home.component.ts'),
+    'utf8',
+  );
+  const layoutStyles = readFileSync(
+    join(__dirname, '../src/app/components/layout.scss'),
+    'utf8',
+  );
+  const tagStyles = readFileSync(
+    join(__dirname, '../src/app/components/tag-tray/tag-tray.component.scss'),
+    'utf8',
+  );
+  const sharedInterfaces = readFileSync(
+    join(__dirname, '../interfaces/shared-interfaces.ts'),
+    'utf8',
+  );
+
+  const panelStart = homeTemplate.indexOf('class="right-tag-panel"');
+  const bottomTrayStart = homeTemplate.indexOf('class="bottom-tray"');
+  const bottomTabsStart = homeTemplate.indexOf('class="all-settings-tabs bottom-tray-tabs"');
+  const floatingButtonStart = homeTemplate.indexOf('class="catalogueEditorButton tag-panel-button"');
+  const windowContentEnd = homeTemplate.indexOf('end of window-content');
+  assert.ok(panelStart > -1);
+  assert.ok(panelStart < bottomTrayStart);
+  assert.match(
+    homeTemplate.slice(panelStart, bottomTrayStart),
+    /<app-tag-tray[\s\S]*\[verticalLayout\]="true"/,
+  );
+  assert.doesNotMatch(homeTemplate.slice(bottomTrayStart), /<app-tag-tray/);
+  assert.ok(floatingButtonStart > panelStart);
+  assert.ok(floatingButtonStart > windowContentEnd);
+  assert.doesNotMatch(
+    homeTemplate.slice(bottomTabsStart),
+    /toggleButton\('showTagTray'\)/,
+  );
+  assert.match(
+    homeTemplate.slice(panelStart, bottomTabsStart),
+    /!settingsButtons\['showTagTray'\]\.toggled[\s\S]*toggleButton\('showTagTray'\)/,
+  );
+  assert.match(homeComponent, /uniqueKey === 'showTagTray'[\s\S]*scheduleGalleryLayoutRefresh/);
+  assert.match(layoutStyles, /--app-tag-panel-width: #\{variables\.\$sidebar-width\};/);
+  assert.match(
+    homeTemplate.slice(floatingButtonStart),
+    /<app-icon[^>]*\[icon\]="'icon-tag'"[\s\S]*SETTINGS\.trayTags/,
+  );
+  assert.match(layoutStyles, /\.catalogueEditorButton\.tag-panel-button\s*\{[\s\S]*bottom: 12px;[\s\S]*color: var\(--app-accent-text\);[\s\S]*font-weight: 700;[\s\S]*right: 12px;[\s\S]*width: 72px;/);
+  assert.match(layoutStyles, /\.gallery-container-tag-panel-open\s*\{/);
+  assert.match(layoutStyles, /\.right-tag-panel\s*\{[\s\S]*position: absolute;/);
+  assert.match(tagStyles, /\.manual-tag-tray-vertical\s*\{[\s\S]*flex-direction: column;/);
+  assert.match(tagStyles, /\.manual-tag-tray-vertical[\s\S]*\.tag-tree-root\s*\{[\s\S]*display: block;/);
+
+  const bottomTrayViews = sharedInterfaces.slice(
+    sharedInterfaces.indexOf('export const AllSupportedBottomTrayViews'),
+    sharedInterfaces.indexOf('// Mouse click events'),
+  );
+  assert.doesNotMatch(bottomTrayViews, /showTagTray/);
 });
 
 test('keeps zero-frequency catalogue tag definitions visible and separate from assignments', () => {

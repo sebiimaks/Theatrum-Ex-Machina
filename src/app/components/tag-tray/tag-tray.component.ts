@@ -71,10 +71,12 @@ export class TagTrayComponent {
   readonly selectNone = output<void>();
   readonly tagHierarchyMoved = output<TagHierarchyMoveEmission>();
   readonly tagRemovedGlobally = output<void>();
+  readonly closeRequested = output<void>();
 
   readonly appState = input<AppStateInterface>();
   readonly batchTaggingMode = input();
   readonly darkMode = input<boolean>();
+  readonly verticalLayout = input<boolean>(false);
   readonly updateTotalSelectedTrigger = input<number>(0);
 
   manualTagFilterString = '';
@@ -97,6 +99,7 @@ export class TagTrayComponent {
   private pointerDragStartX = 0;
   private pointerDragStartY = 0;
   private pointerDropDestinationPath: string | null | undefined;
+  private suppressNextTagClick = false;
 
   private cachedHierarchy: TagHierarchyNode[] = [];
   private hierarchyCacheInitialized = false;
@@ -253,6 +256,13 @@ export class TagTrayComponent {
   }
 
   tagClicked(node: TagHierarchyNode, event: PointerEvent): void {
+    if (this.suppressNextTagClick) {
+      this.suppressNextTagClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     const tagValue = this.getExactTagValue(node);
     const tagEvent: TagEmit = {
       event,
@@ -290,8 +300,6 @@ export class TagTrayComponent {
       return;
     }
 
-    event.preventDefault();
-    event.stopPropagation();
     this.clearTagDragState();
     this.pointerDragCandidatePath = node.fullPath;
     this.pointerDragPointerId = event.pointerId;
@@ -341,10 +349,14 @@ export class TagTrayComponent {
       return;
     }
 
-    event.preventDefault();
-    event.stopPropagation();
     if (this.pointerDragActive) {
+      event.preventDefault();
+      event.stopPropagation();
       this.updatePointerDropTarget(event.clientX, event.clientY);
+      this.suppressNextTagClick = true;
+      setTimeout(() => {
+        this.suppressNextTagClick = false;
+      });
     }
     const active = this.pointerDragActive;
     const sourcePath = this.pointerDragCandidatePath;
@@ -554,19 +566,21 @@ export class TagTrayComponent {
       return;
     }
     const confirmedScopeSignature = this.exactRemovalSignature(tagPath);
-    const messageKey = affectedVideoCount === 1
-      ? 'TAGS.confirmRemoveTagMessageSingle'
-      : 'TAGS.confirmRemoveTagMessage';
+    const videoLabel = affectedVideoCount === 1 ? 'video' : 'videos';
 
-    this.modalService.openConfirmationDialog(
-      this.translate.instant('TAGS.confirmRemoveTagTitle'),
-      this.translate.instant(messageKey, {
-        count: affectedVideoCount,
-        tagName: tagPath,
-      }),
-      this.translate.instant('TAGS.removeFromCatalogue'),
-      this.translate.instant('SYSTEM.cancel'),
-    ).subscribe((confirmed: boolean) => {
+    this.modalService.openConfirmationDialog({
+      cancelLabel: this.translate.instant('SYSTEM.cancel'),
+      confirmLabel: this.translate.instant('TAGS.removeFromCatalogue'),
+      facts: [
+        { label: 'Tag', value: tagPath },
+        { label: 'Videos affected', value: affectedVideoCount },
+        { label: 'Catalogue definitions removed', value: definitionCount },
+      ],
+      summary: `“${tagPath}” will be removed from ${affectedVideoCount} ${videoLabel}.`,
+      supportingText: 'This cannot be undone.',
+      title: this.translate.instant('TAGS.confirmRemoveTagTitle'),
+      tone: 'destructive',
+    }).subscribe((confirmed: boolean) => {
       if (!confirmed) {
         return;
       }
@@ -600,21 +614,22 @@ export class TagTrayComponent {
       return;
     }
     const confirmedScopeSignature = this.branchRemovalSignature(plan);
-    const messageKey = plan.affectedEntryCount === 1
-      ? 'TAGS.confirmRemoveBranchMessageSingle'
-      : 'TAGS.confirmRemoveBranchMessage';
+    const videoLabel = plan.affectedEntryCount === 1 ? 'video' : 'videos';
 
-    this.modalService.openConfirmationDialog(
-      this.translate.instant('TAGS.confirmRemoveBranchTitle'),
-      this.translate.instant(messageKey, {
-        count: plan.affectedEntryCount,
-        definitionCount,
-        tagCount: plan.affectedTagValues.length,
-        tagName: branchPath,
-      }),
-      this.translate.instant('TAGS.removeBranchFromCatalogue'),
-      this.translate.instant('SYSTEM.cancel'),
-    ).subscribe((confirmed: boolean) => {
+    this.modalService.openConfirmationDialog({
+      cancelLabel: this.translate.instant('SYSTEM.cancel'),
+      confirmLabel: this.translate.instant('TAGS.removeBranchFromCatalogue'),
+      facts: [
+        { label: 'Tag branch', value: branchPath },
+        { label: 'Videos affected', value: plan.affectedEntryCount },
+        { label: 'Exact tag paths removed', value: plan.affectedTagValues.length },
+        { label: 'Catalogue definitions removed', value: definitionCount },
+      ],
+      summary: `The “${branchPath}” branch will be removed from ${plan.affectedEntryCount} ${videoLabel}.`,
+      supportingText: 'Every descendant in this branch will be removed. This cannot be undone.',
+      title: this.translate.instant('TAGS.confirmRemoveBranchTitle'),
+      tone: 'destructive',
+    }).subscribe((confirmed: boolean) => {
       if (!confirmed) {
         return;
       }
@@ -755,24 +770,38 @@ export class TagTrayComponent {
         : 'TAGS.moveBranch';
     const confirmedScopeSignature = this.tagBranchMoveSignature(plan, colourPlan, definitionPlan);
 
-    this.modalService.openConfirmationDialog(
-      this.translate.instant(titleKey),
-      this.translate.instant('TAGS.confirmMoveBranchMessage', {
-        assignmentCount: plan.affectedAssignmentCount,
-        colourConflictCount: colourPlan.conflictCount,
-        destination: plan.destinationPath,
-        definitionCount: definitionPlan.affectedDefinitionCount,
-        definitionDuplicateCount: definitionPlan.deduplicatedDefinitionCount,
-        duplicateCount: plan.deduplicatedAssignmentCount,
-        pendingDeletionCount,
-        source: plan.sourcePath,
-        tagCount: plan.affectedTagPathCount,
-        unavailableCount,
-        videoCount: plan.affectedEntryCount,
-      }),
-      this.translate.instant(confirmKey),
-      this.translate.instant('SYSTEM.cancel'),
-    ).subscribe((confirmed: boolean) => {
+    const videoLabel = plan.affectedEntryCount === 1 ? 'video' : 'videos';
+    const pathLabel = plan.affectedTagPathCount === 1 ? 'path' : 'paths';
+    const assignmentLabel = plan.affectedAssignmentCount === 1 ? 'assignment' : 'assignments';
+    const definitionLabel = definitionPlan.affectedDefinitionCount === 1
+      ? 'catalogue definition'
+      : 'catalogue definitions';
+
+    this.modalService.openConfirmationDialog({
+      cancelLabel: this.translate.instant('SYSTEM.cancel'),
+      confirmLabel: this.translate.instant(confirmKey),
+      facts: [
+        { label: 'Videos affected', value: plan.affectedEntryCount },
+        { label: 'Tag paths affected', value: plan.affectedTagPathCount },
+        { label: 'Tag assignments rewritten', value: plan.affectedAssignmentCount },
+        { label: 'Duplicate assignments consolidated', value: plan.deduplicatedAssignmentCount },
+        { label: 'Catalogue tag definitions moved', value: definitionPlan.affectedDefinitionCount },
+        { label: 'Equivalent definitions consolidated', value: definitionPlan.deduplicatedDefinitionCount },
+        { label: 'Existing destination colours retained', value: colourPlan.conflictCount },
+        { label: 'Temporarily unavailable videos', value: unavailableCount },
+        { label: 'Entries pending deletion', value: pendingDeletionCount },
+      ],
+      summary: `${plan.affectedEntryCount} ${videoLabel}, ${plan.affectedTagPathCount} ${pathLabel}, and ${plan.affectedAssignmentCount} ${assignmentLabel} will change.`,
+      supportingText: `${definitionPlan.affectedDefinitionCount} ${definitionLabel} and all descendants will move with the branch.`,
+      title: this.translate.instant(titleKey),
+      tone: combinesBranches ? 'warning' : 'primary',
+      transition: {
+        from: plan.sourcePath,
+        fromLabel: 'Current',
+        to: plan.destinationPath,
+        toLabel: destinationParentPath === null ? 'Top level' : 'After',
+      },
+    }).subscribe((confirmed: boolean) => {
       if (!confirmed) {
         return;
       }

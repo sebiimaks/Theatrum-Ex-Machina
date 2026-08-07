@@ -30,7 +30,6 @@ export const AllSupportedBottomTrayViews: SupportedTrayView[] = [
                                 'showFreq',
                                 'showRecentlyPlayed',
                                 'showRelatedVideosTray',
-                                'showTagTray',
 ];
 
 // Mouse click events

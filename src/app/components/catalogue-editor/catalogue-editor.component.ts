@@ -499,20 +499,21 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       + plan.missingHashRecordCount
       + plan.duplicateHashRecordCount
       + plan.ambiguousCatalogueRecordCount;
-    const skippedSummary = skippedCount
-      ? ` ${skippedCount} imported ${skippedCount === 1 ? 'record cannot' : 'records cannot'} be matched safely and will be skipped.`
-      : '';
-    const outsideScopeSummary = plan.outsideScopeRecordCount
-      ? ` ${plan.outsideScopeRecordCount} ${plan.outsideScopeRecordCount === 1 ? 'record matches an entry' : 'records match entries'} outside the displayed results and will not be changed.`
-      : '';
-
     this.metadataTransferBusy = true;
-    this.modalService.openConfirmationDialog(
-      'Import Selected Metadata?',
-      `Replace ${plan.changedFieldCount} selected metadata ${fieldLabel} across ${plan.changedEntryCount} displayed ${entryLabel}? Categories: ${categorySummary}.${skippedSummary}${outsideScopeSummary} Filename is reference-only; files are matched solely by hash.`,
-      `Import into ${plan.changedEntryCount} ${entryLabel}`,
-      'Cancel',
-    ).subscribe((confirmed: boolean) => {
+    this.modalService.openConfirmationDialog({
+      cancelLabel: 'Cancel',
+      confirmLabel: `Import into ${plan.changedEntryCount} ${entryLabel}`,
+      facts: [
+        { label: 'Categories', value: categorySummary },
+        { label: 'Imported records skipped', value: skippedCount },
+        { label: 'Matches outside displayed results', value: plan.outsideScopeRecordCount },
+        { label: 'Matching method', value: 'File hash only' },
+      ],
+      summary: `${plan.changedFieldCount} selected metadata ${fieldLabel} across ${plan.changedEntryCount} displayed ${entryLabel} will be replaced.`,
+      supportingText: 'Only the currently displayed results are in scope. Filenames are reference-only and are never used for matching.',
+      title: 'Import Selected Metadata?',
+      tone: 'warning',
+    }).subscribe((confirmed: boolean) => {
       if (this.destroyed) {
         return;
       }
@@ -724,24 +725,39 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     const fieldLabel = catalogueOverwriteFieldLabels[field];
     const entryCount = targetEntries.length;
     const entryLabel = entryCount === 1 ? 'entry' : 'entries';
+    const entryPossessive = entryCount === 1 ? 'its' : 'their';
     const clearingField = validation.action === 'clear';
     const title = clearingField
       ? `Clear ${fieldLabel} for Displayed Results?`
       : `Overwrite ${fieldLabel} for Displayed Results?`;
     const displayValuePreview = this.getOverwriteConfirmationPreview(validation.displayValue);
-    const content = clearingField
-      ? `Clear '${fieldLabel}' from all ${entryCount} currently displayed ${entryLabel}? Existing values in this field will be removed.`
-      : `Set '${fieldLabel}' to '${displayValuePreview}' for all ${entryCount} currently displayed ${entryLabel}? Existing values in this field will be replaced.`;
     const confirmLabel = clearingField
       ? `Clear ${entryCount} ${entryLabel}`
       : `Overwrite ${entryCount} ${entryLabel}`;
 
-    this.modalService.openConfirmationDialog(
-      title,
-      content,
+    this.modalService.openConfirmationDialog({
+      cancelLabel: 'Cancel',
       confirmLabel,
-      'Cancel',
-    ).subscribe((confirmed: boolean) => {
+      facts: [
+        { label: 'Displayed entries', value: entryCount },
+        { label: 'Field', value: fieldLabel },
+        { label: clearingField ? 'Action' : 'New value', value: clearingField ? 'Clear field' : displayValuePreview },
+      ],
+      summary: clearingField
+        ? `${entryCount} displayed ${entryLabel} will have ${entryPossessive} ${fieldLabel} value cleared.`
+        : `${entryCount} displayed ${entryLabel} will have ${entryPossessive} ${fieldLabel} value overwritten.`,
+      supportingText: clearingField
+        ? 'Existing values in this field will be removed.'
+        : 'Existing values in this field will be replaced.',
+      title,
+      tone: clearingField ? 'destructive' : 'warning',
+      transition: {
+        from: fieldLabel,
+        fromLabel: 'Field',
+        to: clearingField ? 'Cleared' : displayValuePreview,
+        toLabel: clearingField ? 'Action' : 'New value',
+      },
+    }).subscribe((confirmed: boolean) => {
       if (!confirmed) {
         return;
       }

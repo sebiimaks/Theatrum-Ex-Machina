@@ -2022,7 +2022,6 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.settingsButtons['showFreq'].toggled = false;
     this.settingsButtons['showRecentlyPlayed'].toggled = false;
     this.settingsButtons['showRelatedVideosTray'].toggled = false;
-    this.settingsButtons['showTagTray'].toggled = false;
     this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
   }
 
@@ -2154,6 +2153,16 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.appState.currentView = <SupportedView>uniqueKey;
       this.computeTextBufferAmount();
       this.scheduleGalleryLayoutRefresh(0, true);
+
+      // ======== Right-side tag panel ===============================
+    } else if (uniqueKey === 'showTagTray') {
+      const openingTagPanel = !this.settingsButtons['showTagTray'].toggled;
+      if (!openingTagPanel && this.batchTaggingMode) {
+        this.toggleBatchTaggingMode();
+      }
+      this.settingsButtons['showTagTray'].toggled = openingTagPanel;
+      this.cd.detectChanges();
+      this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
 
       // ======== Bottom tray views buttons =========================
     } else if (AllSupportedBottomTrayViews.includes(<SupportedTrayView>uniqueKey)) {
@@ -2682,6 +2691,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.settingsButtons['showTagTray'].toggled = false;
       setTimeout(() => {
         this.settingsButtons['showTagTray'].toggled = true; // needs a delay to show up correctly
+        this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
       }, 100);
     }
   }
@@ -2839,26 +2849,23 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
     const folderPath = folder.path;
     const folderName = path.basename(folderPath) || folderPath;
-    const messageKey = plan.videoCount === 1
-      ? 'STATISTICS.confirmRegenerateFolderThumbnailsMessageSingle'
-      : 'STATISTICS.confirmRegenerateFolderThumbnailsMessage';
-    let message = this.translate.instant(messageKey, {
-      count: plan.videoCount,
-      folderName,
-    });
-    if (plan.skippedVideos > 0) {
-      message += ' ' + this.translate.instant('STATISTICS.folderThumbnailRegenerationSkippedNotice', {
-        count: plan.skippedVideos,
-      });
-    }
+    const videoLabel = plan.videoCount === 1 ? 'video' : 'videos';
 
     const hubFile = this.appState.currentVhaFile;
-    this.modalService.openConfirmationDialog(
-      this.translate.instant('STATISTICS.confirmRegenerateFolderThumbnailsTitle'),
-      message,
-      this.translate.instant('STATISTICS.regenerateFolderThumbnails'),
-      this.translate.instant('SYSTEM.cancel'),
-    ).subscribe((confirmed: boolean) => {
+    this.modalService.openConfirmationDialog({
+      cancelLabel: this.translate.instant('SYSTEM.cancel'),
+      confirmLabel: this.translate.instant('STATISTICS.regenerateFolderThumbnails'),
+      facts: [
+        { label: 'Folder', value: folderPath },
+        { label: 'Eligible videos', value: plan.videoCount },
+        { label: 'Skipped videos', value: plan.skippedVideos },
+        { label: 'Extraction settings', value: 'Current catalogue settings' },
+      ],
+      summary: `${plan.videoCount} eligible ${videoLabel} in “${folderName}” will have thumbnails regenerated.`,
+      supportingText: 'Existing thumbnails will be replaced using the catalogue’s current extraction settings. This may take some time.',
+      title: this.translate.instant('STATISTICS.confirmRegenerateFolderThumbnailsTitle'),
+      tone: 'warning',
+    }).subscribe((confirmed: boolean) => {
       if (!confirmed || this.appState.currentVhaFile !== hubFile) {
         return;
       }
@@ -3173,12 +3180,29 @@ export class HomeComponent implements OnInit, AfterViewInit {
       ? 'RIGHTCLICK.confirmPermanentDeleteMessage'
       : 'RIGHTCLICK.confirmDeleteMessage';
 
-    this.modalService.openConfirmationDialog(
-      this.translate.instant('RIGHTCLICK.confirmDeleteTitle'),
-      this.translate.instant(messageKey, { fileName: item.fileName }),
-      this.translate.instant('RIGHTCLICK.delete'),
-      this.translate.instant('SYSTEM.cancel'),
-    ).subscribe((confirmed: boolean) => {
+    this.modalService.openConfirmationDialog({
+      cancelLabel: this.translate.instant('SYSTEM.cancel'),
+      confirmLabel: this.translate.instant('RIGHTCLICK.delete'),
+      facts: [
+        { label: 'File', value: item.fileName },
+        {
+          label: 'Action',
+          value: dangerously ? 'Permanent deletion' : 'Move to Trash / Recycle Bin',
+        },
+      ],
+      summary: this.translate.instant(messageKey, { fileName: item.fileName }),
+      supportingText: dangerously
+        ? 'This action bypasses the Trash / Recycle Bin.'
+        : 'The operating system will move the file to the Trash / Recycle Bin.',
+      title: this.translate.instant('RIGHTCLICK.confirmDeleteTitle'),
+      tone: dangerously ? 'destructive' : 'warning',
+      transition: {
+        from: item.fileName,
+        fromLabel: 'File',
+        to: dangerously ? 'Permanently deleted' : 'Trash / Recycle Bin',
+        toLabel: 'Destination',
+      },
+    }).subscribe((confirmed: boolean) => {
       if (!confirmed) {
         return;
       }
@@ -3640,6 +3664,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
         this.settingsButtons['showTagTray'].toggled = false;
         setTimeout(() => {
           this.settingsButtons['showTagTray'].toggled = true;
+          this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
         }, 0);
       }
   }

@@ -6,7 +6,8 @@
 <div
   [ngClass]="{
       'breadcrumbs-full-width': settingsButtons().hideSidebar.toggled,
-      'breadcrumbs-dark-mode': settingsButtons().darkMode.toggled
+      'breadcrumbs-dark-mode': settingsButtons().darkMode.toggled,
+      'breadcrumbs-right-panel-open': rightPanelOpen()
     }"
   class="breadcrumbs"
   @breadcrumbsAppear

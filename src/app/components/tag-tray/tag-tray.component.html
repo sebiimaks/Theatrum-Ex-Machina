@@ -1,71 +1,92 @@
 <div
   class="manual-tag-tray"
-  [ngClass]="{ 'manual-tag-tray-dark': darkMode() }"
+  [ngClass]="{
+    'manual-tag-tray-dark': darkMode(),
+    'manual-tag-tray-vertical': verticalLayout()
+  }"
   (dragend)="tagDragEnd()"
 >
+
+  @if (verticalLayout()) {
+    <header class="tag-source-header">
+      <h2>{{ 'SETTINGS.trayTags' | translate }}</h2>
+      <div class="tag-source-header-actions">
+        <button
+          (click)="toggleAddTagForm()"
+          [attr.aria-expanded]="showAddTagForm"
+          [attr.aria-label]="'TAGS.createTagDefinition' | translate"
+          [attr.title]="'TAGS.createTagDefinition' | translate"
+          type="button"
+        >
+          <app-icon [icon]="'icon-plus'" [size]="13" />
+        </button>
+        <button
+          (click)="closeRequested.emit()"
+          [attr.aria-label]="'SETTINGS.closeBottomTray' | translate"
+          [attr.title]="'SETTINGS.closeBottomTray' | translate"
+          type="button"
+        >
+          <app-icon [icon]="'icon-close'" [size]="13" />
+        </button>
+      </div>
+    </header>
+  }
 
   <div class="tag-tray-menu-left">
     <label class="visually-hidden" for="tag-tray-filter">
       {{ 'TAGS.filterTags' | translate }}
     </label>
-    <input
-      id="tag-tray-filter"
-      class="filter-general manual-tag-tray-filter"
-      [ngClass]="{ 'manual-tag-tray-filter-dark': darkMode() }"
-      (keyup.esc)="manualTagFilterString = ''"
-      [(ngModel)]="manualTagFilterString"
-      placeholder="{{ 'TAGS.filterTags' | translate }}"
-      type="search"
-    >
+    <div class="tag-source-search">
+      @if (verticalLayout()) {
+        <span class="tag-source-search-icon" aria-hidden="true"></span>
+      }
+      <input
+        id="tag-tray-filter"
+        class="filter-general manual-tag-tray-filter"
+        [ngClass]="{ 'manual-tag-tray-filter-dark': darkMode() }"
+        (keyup.esc)="manualTagFilterString = ''"
+        [(ngModel)]="manualTagFilterString"
+        placeholder="{{ 'TAGS.filterTags' | translate }}"
+        type="search"
+      >
+    </div>
 
   @if (!batchTaggingMode()) {
 
-    <button
-      class="tag-sort-by-toggle"
-      (click)="appState().sortTagsByFrequency = !appState().sortTagsByFrequency"
-      type="button"
-    >
-      {{ (appState().sortTagsByFrequency ? 'TAGS.sortByFrequency'
-                                         : 'TAGS.sortAlphabetical') | translate }}
-    </button>
+    @if (!verticalLayout()) {
+      <ng-container *ngTemplateOutlet="tagSortControls" />
+    }
 
-    <button
-      class="show-frequency"
-      (click)="manualTagShowFrequency = !manualTagShowFrequency"
-      type="button"
-    >
-      {{ (manualTagShowFrequency ? 'TAGS.showingFrequency'
-                                 : 'TAGS.hidingFrequency') | translate }}
-    </button>
-
-    <div class="tree-expand-controls" role="group" [attr.aria-label]="'TAGS.hierarchyControls' | translate">
-      <button
-        (click)="toggleAddTagForm()"
-        [attr.aria-expanded]="showAddTagForm"
-        title="{{ 'TAGS.createTagDefinition' | translate }}"
-        type="button"
-      >
-        {{ 'TAGS.createTagDefinition' | translate }}
-      </button>
-      <span aria-hidden="true">·</span>
-      <button
-        (click)="expandAll()"
-        [disabled]="tagFilterActive"
-        title="{{ 'TAGS.expandAll' | translate }}"
-        type="button"
-      >
-        {{ 'TAGS.expandAll' | translate }}
-      </button>
-      <span aria-hidden="true">·</span>
-      <button
-        (click)="collapseAll()"
-        [disabled]="tagFilterActive"
-        title="{{ 'TAGS.collapseAll' | translate }}"
-        type="button"
-      >
-        {{ 'TAGS.collapseAll' | translate }}
-      </button>
-    </div>
+    @if (!verticalLayout()) {
+      <div class="tree-expand-controls" role="group" [attr.aria-label]="'TAGS.hierarchyControls' | translate">
+        <button
+          (click)="toggleAddTagForm()"
+          [attr.aria-expanded]="showAddTagForm"
+          title="{{ 'TAGS.createTagDefinition' | translate }}"
+          type="button"
+        >
+          {{ 'TAGS.createTagDefinition' | translate }}
+        </button>
+        <span aria-hidden="true">·</span>
+        <button
+          (click)="expandAll()"
+          [disabled]="tagFilterActive"
+          title="{{ 'TAGS.expandAll' | translate }}"
+          type="button"
+        >
+          {{ 'TAGS.expandAll' | translate }}
+        </button>
+        <span aria-hidden="true">·</span>
+        <button
+          (click)="collapseAll()"
+          [disabled]="tagFilterActive"
+          title="{{ 'TAGS.collapseAll' | translate }}"
+          type="button"
+        >
+          {{ 'TAGS.collapseAll' | translate }}
+        </button>
+      </div>
+    }
 
     @if (showAddTagForm) {
       <form class="tag-definition-popover" (ngSubmit)="createTagDefinition()">
@@ -149,17 +170,11 @@
 
   }
 
-    <div class="batch-mode-button-container">
-      <button
-        class="button-toggle-batch-mode"
-        [attr.aria-pressed]="batchTaggingMode()"
-        [ngClass]="{ 'batch-edit-mode-active': batchTaggingMode() }"
-        (click)="toggleBatchTaggingMode.emit()"
-        type="button"
-      >
-        {{ 'TAGS.batchModeButton' | translate }}
-      </button>
-    </div>
+    @if (!verticalLayout()) {
+      <div class="batch-mode-button-container">
+        <ng-container *ngTemplateOutlet="batchModeButton" />
+      </div>
+    }
 
     <div
       class="tag-root-drop-zone"
@@ -184,6 +199,38 @@
     (drop)="dropTagAtRoot($event)"
   >
     @let displayedTags = displayedTagHierarchy;
+    @if (verticalLayout()) {
+      <div class="tag-source-list-heading">
+        <span>{{ 'SETTINGS.trayTags' | translate }}</span>
+        <span class="tag-source-list-actions" role="group" [attr.aria-label]="'TAGS.hierarchyControls' | translate">
+          <button
+            (click)="manualTagShowFrequency = !manualTagShowFrequency"
+            [attr.aria-label]="(manualTagShowFrequency ? 'TAGS.showingFrequency' : 'TAGS.hidingFrequency') | translate"
+            [attr.aria-pressed]="manualTagShowFrequency"
+            [attr.title]="(manualTagShowFrequency ? 'TAGS.showingFrequency' : 'TAGS.hidingFrequency') | translate"
+            type="button"
+          >#</button>
+          <button
+            (click)="expandAll()"
+            [disabled]="tagFilterActive"
+            [attr.aria-label]="'TAGS.expandAll' | translate"
+            [attr.title]="'TAGS.expandAll' | translate"
+            type="button"
+          >
+            <app-icon [icon]="'icon-chevron-down-mini'" [size]="11" />
+          </button>
+          <button
+            (click)="collapseAll()"
+            [disabled]="tagFilterActive"
+            [attr.aria-label]="'TAGS.collapseAll' | translate"
+            [attr.title]="'TAGS.collapseAll' | translate"
+            type="button"
+          >
+            <app-icon [icon]="'icon-chevron-up'" [size]="11" />
+          </button>
+        </span>
+      </div>
+    }
     @if (displayedTags.length) {
       <ul
         class="tag-tree tag-tree-root"
@@ -202,6 +249,23 @@
       </p>
     }
   </div>
+
+  @if (verticalLayout()) {
+    <footer class="tag-source-footer">
+      @if (!batchTaggingMode()) {
+        <button
+          class="tag-source-sort"
+          (click)="appState().sortTagsByFrequency = !appState().sortTagsByFrequency"
+          [attr.aria-label]="(appState().sortTagsByFrequency ? 'TAGS.sortByFrequency' : 'TAGS.sortAlphabetical') | translate"
+          [attr.title]="(appState().sortTagsByFrequency ? 'TAGS.sortByFrequency' : 'TAGS.sortAlphabetical') | translate"
+          type="button"
+        >
+          <span aria-hidden="true">{{ appState().sortTagsByFrequency ? '#' : 'A–Z' }}</span>
+        </button>
+      }
+      <ng-container *ngTemplateOutlet="batchModeButton" />
+    </footer>
+  }
 
   @if (pointerDragActive) {
     <div
@@ -226,6 +290,7 @@
     <div
       class="tag-tree-row"
       [attr.data-tag-path]="node.fullPath"
+      [class.tag-tree-row-expanded]="node.children.length && branchIsExpanded(node)"
       [class.tag-tree-row-dragging]="tagRowIsDragging(node)"
       [class.tag-tree-row-drop-invalid]="tagRowIsInvalidDropTarget(node)"
       [class.tag-tree-row-drop-target]="tagRowIsDropTarget(node)"
@@ -248,20 +313,26 @@
         <span class="tag-disclosure-placeholder" aria-hidden="true"></span>
       }
 
-      <span
-        class="tag-drag-handle"
-        [attr.title]="'TAGS.dragTagBranch' | translate : { tagName: node.fullPath }"
-        [attr.aria-label]="'TAGS.dragTagBranch' | translate : { tagName: node.fullPath }"
-        (pointerdown)="beginTagPointerDrag($event, node)"
-        role="button"
-      ></span>
+      @if (verticalLayout() && !node.children.length) {
+        <span class="tag-source-leaf-icon" aria-hidden="true"></span>
+      }
+
+      @if (!verticalLayout()) {
+        <span
+          class="tag-drag-handle"
+          [attr.title]="'TAGS.dragTagBranch' | translate : { tagName: node.fullPath }"
+          [attr.aria-label]="'TAGS.dragTagBranch' | translate : { tagName: node.fullPath }"
+          (pointerdown)="beginTagPointerDrag($event, node)"
+          role="button"
+        ></span>
+      }
 
       @let tagColor = getTagColor(node);
       <button
         class="tag-node-label"
         [class.tag-node-label-branch]="node.children.length"
         [class.tag-node-label-implicit]="!node.explicit"
-        [draggable]="!batchTaggingMode()"
+        [draggable]="!batchTaggingMode() && !verticalLayout()"
         [ngStyle]="tagColor ? {
           background: tagColor,
           color: getContrastColor(tagColor)
@@ -272,20 +343,11 @@
         (contextmenu)="onTagRightClick($event, node)"
         (dragend)="tagDragEnd()"
         (dragstart)="tagDragStart($event, node)"
+        (pointerdown)="verticalLayout() ? beginTagPointerDrag($event, node) : null"
         type="button"
       >
         {{ node.label }}
       </button>
-
-      @if (manualTagShowFrequency) {
-        <span
-          class="tag-node-frequency"
-          [attr.aria-label]="frequencyLabel(node)"
-          [attr.title]="frequencyLabel(node)"
-        >
-          {{ node.branchFrequency }}
-        </span>
-      }
 
       <span class="tag-node-actions">
         @if (node.explicit) {
@@ -313,6 +375,16 @@
           </button>
         }
       </span>
+
+      @if (manualTagShowFrequency) {
+        <span
+          class="tag-node-frequency"
+          [attr.aria-label]="frequencyLabel(node)"
+          [attr.title]="frequencyLabel(node)"
+        >
+          {{ node.branchFrequency }}
+        </span>
+      }
     </div>
 
     @if (node.children.length && branchIsExpanded(node)) {
@@ -325,4 +397,36 @@
       </ul>
     }
   </li>
+</ng-template>
+
+<ng-template #tagSortControls>
+  <button
+    class="tag-sort-by-toggle"
+    (click)="appState().sortTagsByFrequency = !appState().sortTagsByFrequency"
+    type="button"
+  >
+    {{ (appState().sortTagsByFrequency ? 'TAGS.sortByFrequency'
+                                       : 'TAGS.sortAlphabetical') | translate }}
+  </button>
+
+  <button
+    class="show-frequency"
+    (click)="manualTagShowFrequency = !manualTagShowFrequency"
+    type="button"
+  >
+    {{ (manualTagShowFrequency ? 'TAGS.showingFrequency'
+                               : 'TAGS.hidingFrequency') | translate }}
+  </button>
+</ng-template>
+
+<ng-template #batchModeButton>
+  <button
+    class="button-toggle-batch-mode"
+    [attr.aria-pressed]="batchTaggingMode()"
+    [ngClass]="{ 'batch-edit-mode-active': batchTaggingMode() }"
+    (click)="toggleBatchTaggingMode.emit()"
+    type="button"
+  >
+    {{ 'TAGS.batchModeButton' | translate }}
+  </button>
 </ng-template>

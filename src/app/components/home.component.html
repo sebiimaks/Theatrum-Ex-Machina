@@ -443,6 +443,7 @@
 
       [appState]="appState"
       [folderViewNavigationPath]="folderViewNavigationPath"
+      [rightPanelOpen]="settingsButtons['showTagTray'].toggled"
       [settingsButtons]="settingsButtons"
      />
 
@@ -465,7 +466,6 @@
                               || settingsButtons['showFreq'].toggled
                               || settingsButtons['showRecentlyPlayed'].toggled
                               || settingsButtons['showRelatedVideosTray'].toggled
-                              || settingsButtons['showTagTray'].toggled
                             )
                       ) + 'px)'
         }"
@@ -854,7 +854,6 @@
                               || settingsButtons['showFreq'].toggled
                               || settingsButtons['showRecentlyPlayed'].toggled
                               || settingsButtons['showRelatedVideosTray'].toggled
-                              || settingsButtons['showTagTray'].toggled
                             )
                       ) + 'px)'
         }"
@@ -864,6 +863,7 @@
       [ngClass]="{
           'gallery-container-full-width': settingsButtons['hideSidebar'].toggled,
           'gallery-container-dark-mode': settingsButtons['darkMode'].toggled,
+          'gallery-container-tag-panel-open': settingsButtons['showTagTray'].toggled,
           'gallery-showing-breadcrumbs': settingsButtons['showFolders'].toggled
                                          && (appState.currentView === 'showThumbnails' ||
                                              appState.currentView === 'showFiles' ||
@@ -1225,7 +1225,59 @@
     </div>
   }
 
+  @if (settingsButtons['showTagTray'].toggled) {
+    <aside
+      class="right-tag-panel"
+      [ngClass]="{ 'right-tag-panel-dark': settingsButtons['darkMode'].toggled }"
+      [ngStyle]="{
+        'height': 'calc(100vh - ' + (
+          appState.menuHidden | sidebarHeightPipe
+            : settingsButtons['hideTop'].toggled
+            : (
+                 settingsButtons['showDetailsTray'].toggled
+              || settingsButtons['showFreq'].toggled
+              || settingsButtons['showRecentlyPlayed'].toggled
+              || settingsButtons['showRelatedVideosTray'].toggled
+            )
+        ) + 'px)'
+      }"
+      @modalAnimation
+    >
+      <app-tag-tray
+        class="right-tag-panel-content"
+        (closeRequested)="toggleButton('showTagTray')"
+        (handleTagWordClicked)="handleTagWordClicked($event.tag.name, $event.event, false, true)"
+        (handleTagBranchClicked)="handleTagWordClicked($event.tag.name, $event.event, true)"
+        (selectAll)="selectAllVisible()"
+        (selectNone)="unselectAllTags()"
+        (tagHierarchyMoved)="handleTagHierarchyMoved($event)"
+        (tagRemovedGlobally)="ifShowDetailsViewRefreshTags()"
+        (toggleBatchTaggingMode)="toggleBatchTaggingMode()"
+        [appState]="appState"
+        [batchTaggingMode]="batchTaggingMode"
+        [darkMode]="settingsButtons['darkMode'].toggled"
+        [updateTotalSelectedTrigger]="tagBatchModeSelectionChangedTrigger"
+        [verticalLayout]="true"
+       />
+    </aside>
+  }
+
   </div> <!-- end of window-content -->
+
+  @if (!settingsButtons['showTagTray'].hidden && !settingsButtons['showTagTray'].toggled) {
+    <button
+      class="catalogueEditorButton tag-panel-button"
+      [class.tag-panel-button-raised]="settingsButtons['showDetailsTray'].toggled
+                                      || settingsButtons['showFreq'].toggled
+                                      || settingsButtons['showRecentlyPlayed'].toggled
+                                      || settingsButtons['showRelatedVideosTray'].toggled"
+      (click)="toggleButton('showTagTray')"
+      type="button"
+    >
+      <app-icon class="tag-panel-button-icon" [icon]="'icon-tag'" [size]="14" />
+      <span>{{ 'SETTINGS.trayTags' | translate }}</span>
+    </button>
+  }
 
 </div> <!-- end of window -->
 
@@ -1241,7 +1293,6 @@
                           || settingsButtons['showFreq'].toggled
                           || settingsButtons['showRecentlyPlayed'].toggled
                           || settingsButtons['showRelatedVideosTray'].toggled
-                          || settingsButtons['showTagTray'].toggled
   }"
 >
 @if (                         !settingsButtons['showFreq'].hidden) {
@@ -1250,15 +1301,6 @@
     [ngClass]="{ 'active-tab': settingsButtons['showFreq'].toggled }"
   >
     {{ 'SETTINGS.trayCloud'     | translate }}
-  </button>
-}
-
-@if (                         !settingsButtons['showTagTray'].hidden) {
-  <button
-    (click)="                     toggleButton('showTagTray')"
-    [ngClass]="{ 'active-tab': settingsButtons['showTagTray'].toggled }"
-  >
-    {{ 'SETTINGS.trayTags'      | translate }}
   </button>
 }
 
@@ -1297,8 +1339,7 @@
 @if (settingsButtons['showDetailsTray'].toggled
   || settingsButtons['showFreq'].toggled
   || settingsButtons['showRecentlyPlayed'].toggled
-  || settingsButtons['showRelatedVideosTray'].toggled
-  || settingsButtons['showTagTray'].toggled) {
+  || settingsButtons['showRelatedVideosTray'].toggled) {
 <div
   class="bottom-tray"
   [ngClass]="{ 'bottom-tray-dark': settingsButtons['darkMode'].toggled }"
@@ -1329,23 +1370,6 @@
     [previewWidthRelated]="previewWidthRelated"
     [settingsButtons]="settingsButtons"
     [showRecentNotSimilar]="settingsButtons['showRecentlyPlayed'].toggled"
-   />
-}
-
-<!-- TAGS -->
-@if (settingsButtons['showTagTray'].toggled) {
-  <app-tag-tray
-    (handleTagWordClicked)="handleTagWordClicked($event.tag.name, $event.event, false, true)"
-    (handleTagBranchClicked)="handleTagWordClicked($event.tag.name, $event.event, true)"
-    (selectAll)="selectAllVisible()"
-    (selectNone)="unselectAllTags()"
-    (tagHierarchyMoved)="handleTagHierarchyMoved($event)"
-    (tagRemovedGlobally)="ifShowDetailsViewRefreshTags()"
-    (toggleBatchTaggingMode)="toggleBatchTaggingMode()"
-    [appState]="appState"
-    [batchTaggingMode]="batchTaggingMode"
-    [darkMode]="settingsButtons['darkMode'].toggled"
-    [updateTotalSelectedTrigger]="tagBatchModeSelectionChangedTrigger"
    />
 }
 

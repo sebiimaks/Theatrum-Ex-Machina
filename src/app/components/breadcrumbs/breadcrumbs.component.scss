@@ -43,6 +43,24 @@
   width: 100vw;
 }
 
+.breadcrumbs-right-panel-open {
+  width: calc(100vw - #{variables.$sidebar-width} - var(--app-tag-panel-width));
+}
+
+.breadcrumbs-full-width.breadcrumbs-right-panel-open {
+  width: calc(100vw - var(--app-tag-panel-width));
+}
+
+@media (max-width: 850px) {
+  .breadcrumbs-right-panel-open {
+    width: calc(100vw - #{variables.$sidebar-width});
+  }
+
+  .breadcrumbs-full-width.breadcrumbs-right-panel-open {
+    width: 100vw;
+  }
+}
+
 .breadcrumb-folder-word {
   color: var(--app-text-secondary);
   cursor: pointer;

@@ -1,30 +1,77 @@
-<h1>
-  {{ data.title }}
-</h1>
+<section
+  class="dialog-shell"
+  [class.dialog-shell-destructive]="data.tone === 'destructive'"
+  [class.dialog-shell-warning]="data.tone === 'warning'"
+>
+  <div class="dialog-content">
+    <h1 id="app-dialog-title">
+      {{ data.title }}
+    </h1>
 
-<span class="message">
-  {{ data.content }}
-</span>
+    @if (data.transition) {
+      <div
+        class="dialog-transition"
+        [attr.aria-label]="data.transition.from + ' changes to ' + data.transition.to"
+      >
+        <div class="dialog-transition-value">
+          <span>{{ data.transition.fromLabel || 'Current' }}</span>
+          <code>{{ data.transition.from }}</code>
+        </div>
+        <span class="dialog-transition-arrow" aria-hidden="true">→</span>
+        <div class="dialog-transition-value">
+          <span>{{ data.transition.toLabel || 'After' }}</span>
+          <code>{{ data.transition.to }}</code>
+        </div>
+      </div>
+    }
 
-<span class="details">
-  {{ data?.details }}
-</span>
+    <p id="app-dialog-description" class="dialog-summary">
+      {{ data.summary }}
+    </p>
 
-@if (data.cancelLabel && data.confirmLabel) {
-  <div class="dialog-actions">
-    <button
-      (click)="close(false)"
-      class="dialog-button"
-      type="button"
-    >
-      {{ data.cancelLabel }}
-    </button>
-    <button
-      (click)="close(true)"
-      class="dialog-button dialog-button-delete"
-      type="button"
-    >
-      {{ data.confirmLabel }}
-    </button>
+    @if (data.supportingText) {
+      <p class="dialog-supporting-text">
+        {{ data.supportingText }}
+      </p>
+    }
+
+    @if (data.kind === 'confirmation' && data.facts?.length) {
+      <details class="dialog-disclosure">
+        <summary>{{ data.detailsLabel || 'Show full impact' }}</summary>
+        <dl>
+          @for (fact of data.facts; track fact.label) {
+            <div class="dialog-fact">
+              <dt>{{ fact.label }}</dt>
+              <dd>{{ fact.value }}</dd>
+            </div>
+          }
+        </dl>
+      </details>
+    }
+
+    @if (data.kind === 'message' && data.details) {
+      <p class="dialog-message-details">
+        {{ data.details }}
+      </p>
+    }
   </div>
-}
+
+  @if (data.cancelLabel && data.confirmLabel) {
+    <div class="dialog-actions">
+      <button
+        (click)="close(false)"
+        class="dialog-button"
+        type="button"
+      >
+        {{ data.cancelLabel }}
+      </button>
+      <button
+        (click)="close(true)"
+        class="dialog-button dialog-button-confirm"
+        type="button"
+      >
+        {{ data.confirmLabel }}
+      </button>
+    </div>
+  }
+</section>
