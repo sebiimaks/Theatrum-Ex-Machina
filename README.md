@@ -4,8 +4,8 @@
 
 **All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
 
-- Current fork version: `v3.3.0-tem.2`
-- Change summary updated: 06/08/2026
+- Current fork version: `v3.3.0-tem.3`
+- Change summary updated: 07/08/2026
 
 # Fork Changelog
 
@@ -15,9 +15,23 @@ Changes under Unreleased are present on the production branch but have not yet b
 
 ## Unreleased
 
+No unreleased changes.
+
+## [v3.3.0-tem.3](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.3) — 7 August 2026
+
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/371e976"><code>371e976</code></a> — <strong>Add persistent hierarchical tagging</strong></summary>
 <p>Manual tags can now be organised into persistent nested hierarchies in the Tags tray. Tags and branches can be created independently of videos, moved or separated with drag and drop, coloured individually, filtered as exact tags or complete branches, and removed catalogue-wide with affected-video safeguards. Unassigned tag definitions survive saving and reopening, while Catalogue Editor metadata import and search preserve canonical hierarchy paths. Batch assignment supports nested tags, and Video Details presents compact individual tag levels whose removal is restricted to the selected hierarchy branch and its descendants, including when unrelated branches use the same visible name.</p>
+</details>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/fa9e7a4"><code>fa9e7a4</code></a> — <strong>Move hierarchical tags into a right-side source panel</strong></summary>
+<p>Replaced the bottom Tags tray with a compact right-side source panel that keeps nested tags visible alongside the gallery. The panel provides filtering, independent tag creation, hierarchy expansion, frequency display, sorting, batch assignment, drag-and-drop organisation, and catalogue-wide removal controls. Gallery and breadcrumb sizing now adapt to the panel, while a floating Tags control opens it without displacing the other tray tabs.</p>
+</details>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/fa9e7a4"><code>fa9e7a4</code></a> — <strong>Clarify application confirmation dialogs</strong></summary>
+<p>Reworked renderer confirmation dialogs into a consistent progressive-disclosure layout with concise summaries, before-and-after transitions, supporting safety guidance, expandable impact details, and action-specific warning or destructive styling. Metadata changes, thumbnail regeneration, file deletion, and hierarchy operations now present their scope more clearly before execution.</p>
 </details>
 
 ## [v3.3.0-tem.2](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.2) — 4 August 2026
