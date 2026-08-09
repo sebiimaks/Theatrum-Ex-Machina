@@ -11,7 +11,16 @@ import { SourceFolderService } from './source-folder.service';
 import type { AppStateInterface } from '../../common/app-state';
 import type { ImageElement, ScreenshotSettings, InputSources } from '../../../../interfaces/final-object.interface';
 import { isMetadataImportFailure } from '../../../../interfaces/final-object.interface';
-import { buildEligibleFolderThumbnailVideoCounts } from '../../../../node/thumbnail-count';
+import { getImageLocations } from '../../../../interfaces/media-locations';
+import {
+  configuredSourceRootsEqual,
+  normalizeIgnoredSubdirectories,
+} from '../../../../interfaces/source-folder-path';
+import {
+  buildSourceFolderTree,
+  normalizeSourceFolderRelativePath,
+} from '../../../../interfaces/source-folder-tree';
+import type { SourceFolderTreeNode } from '../../../../interfaces/source-folder-tree';
 
 import { metaAppear, breadcrumbWordAppear } from '../../common/animations';
 
@@ -24,8 +33,14 @@ export interface ServerDetails {
 export interface FolderThumbnailRegenerationStatus {
   cancelling?: boolean;
   completedJobs: number;
+  relativePath?: string;
   sourceIndex: number;
   totalJobs: number;
+}
+
+export interface FolderScopeTarget {
+  relativePath: string;
+  sourceIndex: number;
 }
 
 @Component({
@@ -46,8 +61,9 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
   readonly deleteInputSourceFiles = output<number>();
   readonly cancelFolderThumbnailRegeneration = output<void>();
   readonly finalArrayNeedsSaving = output<any>();
-  readonly regenerateFolderThumbnails = output<number>();
+  readonly regenerateFolderThumbnails = output<FolderScopeTarget>();
   readonly startServerOnPort = output<number>();
+  readonly toggleIgnoredSubdirectory = output<FolderScopeTarget>();
 
   readonly appState = input<AppStateInterface>();
   readonly darkMode = input<boolean>(false);
@@ -91,7 +107,11 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
   serverRunning = false;
 
   objectKeys = Object.keys; // to use in template
-  private eligibleVideoCounts = new Map<number, number>();
+  private expandedFolderScopes = new Set<string>();
+  private folderTrees = new Map<number, SourceFolderTreeNode>();
+  private lastFolderTreeElements: ImageElement[] | undefined;
+  private lastFolderTreeSourceSignature = '';
+  private lastFolderTreeDirectoryRevision = -1;
 
   constructor(
     public cd: ChangeDetectorRef,
@@ -148,6 +168,12 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
   computeAverages() {
     console.log(this.inputFolders());
 
+    this.longest = 0;
+    this.shortest = Infinity;
+    this.totalLength = 0;
+    this.largest = 0;
+    this.smallest = Infinity;
+    this.totalSize = 0;
     let filesWithDurationMetadata = 0;
 
     this.imageElementService.imageElements.forEach((element: ImageElement): void => {
@@ -167,6 +193,9 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
 
     if (this.shortest === Infinity) {
       this.shortest = 0;
+    }
+    if (this.smallest === Infinity) {
+      this.smallest = 0;
     }
     this.avgLength = filesWithDurationMetadata > 0
       ? Math.round(this.totalLength / filesWithDurationMetadata)
@@ -204,8 +233,21 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
     console.log('NEW FOLDER CHOSEN !!!');
     console.log(sourceIndex);
     console.log(newPath);
-    this.inputFolders()[sourceIndex] = { path: newPath, watch: false };
-    this.sourceFolderService.sourceFolderConnected[sourceIndex] = true;
+    this.inputFolders()[sourceIndex] = {
+      ...this.inputFolders()[sourceIndex],
+      path: newPath,
+      watch: false,
+    };
+    this.sourceFolderService.clearSourceState(sourceIndex);
+    this.sourceFolderService.sourceFolderConnected[sourceIndex] = false;
+    this.finalArrayNeedsSaving.emit(true);
+    this.electronService.ipcRenderer.send(
+      'configure-source-folder',
+      sourceIndex,
+      newPath,
+      true,
+      this.appState().generatePreviewsOnFolderAddition,
+    );
     setTimeout(() => {
       this.cd.detectChanges();
     }, 1);
@@ -222,7 +264,7 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
     let pathAlreadyExists = false;
 
     Object.keys(this.inputFolders()).forEach((key: string) => {
-      if (this.inputFolders()[key].path === filePath) {
+      if (configuredSourceRootsEqual(this.inputFolders()[key].path, filePath)) {
         pathAlreadyExists = true;
       }
     });
@@ -230,8 +272,16 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
     if (!pathAlreadyExists) {
       const nextIndex: number = this.pickNextIndex(this.inputFolders());
       this.inputFolders()[nextIndex] = { path: filePath, watch: false };
-      this.sourceFolderService.sourceFolderConnected[nextIndex] = true;
-      this.electronService.ipcRenderer.send('start-watching-folder', nextIndex, filePath, false);
+      this.sourceFolderService.clearSourceState(nextIndex);
+      this.sourceFolderService.sourceFolderConnected[nextIndex] = false;
+      this.finalArrayNeedsSaving.emit(true);
+      this.electronService.ipcRenderer.send(
+        'configure-source-folder',
+        nextIndex,
+        filePath,
+        this.appState().scanFoldersOnAddition,
+        this.appState().generatePreviewsOnFolderAddition,
+      );
     }
 
     this.cd.detectChanges();
@@ -248,7 +298,7 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
     const indexesAsStrings: string[] = Object.keys(inputSource);
     const indexesAsNumbers: number[] = indexesAsStrings.map((item: string) => parseInt(item, 10));
 
-    return Math.max(...indexesAsNumbers) + 1;
+    return indexesAsNumbers.length > 0 ? Math.max(...indexesAsNumbers) + 1 : 0;
   }
 
   folderSourceIndex(itemSourceKey: string | number): number {
@@ -256,20 +306,161 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
   }
 
   ngDoCheck(): void {
-    this.eligibleVideoCounts = buildEligibleFolderThumbnailVideoCounts(
-      this.imageElementService.imageElements,
-    );
+    const inputFolders = this.inputFolders();
+    if (this.lastFolderTreeElements !== this.imageElementService.imageElements) {
+      this.computeAverages();
+    }
+    const sourceSignature = Object.keys(inputFolders)
+      .sort((left: string, right: string) => Number(left) - Number(right))
+      .map((sourceKey: string) => {
+        const folder = inputFolders[sourceKey];
+        const ignoredSubdirectories = normalizeIgnoredSubdirectories(
+          folder?.ignoredSubdirectories,
+        );
+        return `${sourceKey}\0${folder?.path || ''}\0${ignoredSubdirectories.join('\0')}`;
+      })
+      .join('\0');
+    const directoryRevision = this.sourceFolderService.getDiscoveredDirectoryRevision();
+    if (
+      this.lastFolderTreeElements === this.imageElementService.imageElements
+      && this.lastFolderTreeSourceSignature === sourceSignature
+      && this.lastFolderTreeDirectoryRevision === directoryRevision
+    ) {
+      return;
+    }
+
+    this.lastFolderTreeElements = this.imageElementService.imageElements;
+    this.lastFolderTreeSourceSignature = sourceSignature;
+    this.lastFolderTreeDirectoryRevision = directoryRevision;
+    const nextTrees = new Map<number, SourceFolderTreeNode>();
+    Object.keys(inputFolders).forEach((sourceKey: string) => {
+      const sourceIndex = this.folderSourceIndex(sourceKey);
+      if (!Number.isSafeInteger(sourceIndex) || sourceIndex < 0) {
+        return;
+      }
+
+      // A hand-edited legacy catalogue must not make the Current Hub panel
+      // unusable. Invalid relative paths remain untouched in the catalogue,
+      // but are excluded from this display-only folder tree.
+      const validTreeElements = this.imageElementService.imageElements.filter(
+        (element: ImageElement): boolean => {
+          let matchingLocations;
+          try {
+            matchingLocations = getImageLocations(element).filter(location => (
+              Number(location.inputSource) === sourceIndex
+            ));
+          } catch {
+            return false;
+          }
+          if (matchingLocations.length === 0) {
+            return false;
+          }
+          try {
+            matchingLocations.forEach(location => (
+              normalizeSourceFolderRelativePath(location.partialPath)
+            ));
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      );
+      nextTrees.set(sourceIndex, buildSourceFolderTree(
+        validTreeElements,
+        sourceIndex,
+        this.sourceFolderService.getDiscoveredDirectories(sourceIndex),
+        normalizeIgnoredSubdirectories(inputFolders[sourceKey]?.ignoredSubdirectories),
+      ));
+    });
+    this.folderTrees = nextTrees;
   }
 
-  folderEligibleVideoCount(itemSourceKey: string | number): number {
-    return this.eligibleVideoCounts.get(this.folderSourceIndex(itemSourceKey)) || 0;
+  folderScopeTarget(sourceIndex: string | number, relativePath = ''): FolderScopeTarget {
+    return {
+      relativePath: normalizeSourceFolderRelativePath(relativePath),
+      sourceIndex: this.folderSourceIndex(sourceIndex),
+    };
   }
 
-  folderDisplayName(itemSourceKey: string | number): string {
-    const folder = this.inputFolders()[this.folderSourceIndex(itemSourceKey)];
+  folderDisplayName(target: FolderScopeTarget): string {
+    if (target.relativePath) {
+      const segments = target.relativePath.split('/');
+      return segments[segments.length - 1];
+    }
+    const folder = this.inputFolders()[target.sourceIndex];
     const folderPath = folder && folder.path ? folder.path : '';
     const segments = folderPath.split(/[\\/]/).filter(Boolean);
     return segments.length > 0 ? segments[segments.length - 1] : folderPath;
+  }
+
+  folderRowTrackBy(_index: number, row: SourceFolderTreeNode): string {
+    return this.folderScopeKey(row.sourceIndex, row.relativePath);
+  }
+
+  visibleFolderRows(itemSourceKey: string | number): SourceFolderTreeNode[] {
+    const sourceIndex = this.folderSourceIndex(itemSourceKey);
+    const root = this.folderTrees.get(sourceIndex);
+    if (!root) {
+      return [];
+    }
+
+    const visibleRows: SourceFolderTreeNode[] = [];
+    const appendVisible = (node: SourceFolderTreeNode): void => {
+      const hideEmpty = this.appState().hideSubdirectoriesWithNoVideos;
+      const shouldDisplay = node.relativePath === ''
+        || !hideEmpty
+        || node.recursiveVideoCount > 0
+        || node.ignored
+        || node.containsIgnoredScope;
+      if (!shouldDisplay) {
+        return;
+      }
+      visibleRows.push(node);
+      if (
+        node.ignored
+        || !this.isFolderScopeExpanded(node.sourceIndex, node.relativePath)
+      ) {
+        return;
+      }
+      node.children.forEach(appendVisible);
+    };
+    appendVisible(root);
+    return visibleRows;
+  }
+
+  toggleFolderScope(row: SourceFolderTreeNode): void {
+    if (row.ignored || row.children.length === 0) {
+      return;
+    }
+    const key = this.folderScopeKey(row.sourceIndex, row.relativePath);
+    if (this.expandedFolderScopes.has(key)) {
+      this.expandedFolderScopes.delete(key);
+    } else {
+      this.expandedFolderScopes.add(key);
+    }
+  }
+
+  isFolderScopeExpanded(sourceIndex: number, relativePath: string): boolean {
+    return this.expandedFolderScopes.has(this.folderScopeKey(sourceIndex, relativePath));
+  }
+
+  folderScopeIsScanning(target: FolderScopeTarget): boolean {
+    return this.sourceFolderService.currentlyScanning.get(target.sourceIndex) === true
+      && this.sourceFolderService.getActiveScanScope(target.sourceIndex) === target.relativePath;
+  }
+
+  folderSourceIsBusy(sourceIndex: number): boolean {
+    return this.sourceFolderService.currentlyScanning.get(sourceIndex) === true;
+  }
+
+  folderRegenerationMatches(target: FolderScopeTarget): boolean {
+    const status = this.folderThumbnailRegenerationStatus();
+    return status?.sourceIndex === target.sourceIndex
+      && normalizeSourceFolderRelativePath(status.relativePath || '') === target.relativePath;
+  }
+
+  private folderScopeKey(sourceIndex: number, relativePath: string): string {
+    return `${sourceIndex}:${normalizeSourceFolderRelativePath(relativePath)}`;
   }
 
   /**
@@ -293,12 +484,13 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
    * Single scan to add any new videos
    * @param index
    */
-  rescanFolder(index: number) {
-    console.log(index);
-    console.log(typeof(index));
-    const inputFolders = this.inputFolders();
-    console.log(inputFolders[index].path);
-    this.tellNodeStartWatching(index, inputFolders[index].path, false);
+  rescanFolder(target: FolderScopeTarget) {
+    this.electronService.ipcRenderer.send(
+      'rescan-source-folder-scope',
+      target.sourceIndex,
+      target.relativePath,
+      this.appState().generatePreviewsOnFolderAddition,
+    );
     setTimeout(() => {
       this.cd.detectChanges(); // to update template whether to show "Rescan" or not
     }, 1);
@@ -341,7 +533,7 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
     console.log(inputFolders[itemSourceKey]);
     this.tellNodeStopWatching(itemSourceKey);
     delete inputFolders[itemSourceKey];
-    delete this.sourceFolderService.sourceFolderConnected[itemSourceKey];
+    this.sourceFolderService.clearSourceState(itemSourceKey);
     this.deleteInputSourceFiles.emit(itemSourceKey);
   }
 

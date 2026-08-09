@@ -4,6 +4,7 @@ import { Component, ElementRef, EventEmitter, Input, Output, QueryList, ViewChil
 import type { ImageElement, StarRating } from '../../../../interfaces/final-object.interface';
 import { formatDateAddedForInput, parseDateAddedInput } from '../../../../interfaces/date-added';
 import { tagIdentityKey } from '../../../../interfaces/tag-hierarchy';
+import { updatePreferredImageLocationFields } from '../../../../interfaces/media-locations';
 import {
   applyCatalogueMetadataImportPlan,
   buildCatalogueMetadataImportPlan,
@@ -1012,6 +1013,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
 
     if (item[field] !== nextValue) {
       item[field] = nextValue;
+      if (field === 'fileName' || field === 'partialPath') {
+        updatePreferredImageLocationFields(item, { [field]: nextValue });
+      }
       this.markDirty();
       this.refreshFilteredEntries();
     }

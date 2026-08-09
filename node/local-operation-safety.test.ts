@@ -11,6 +11,7 @@ import {
   normalizeAbsolutePath,
   parsePlayerArguments,
   requireConfiguredSourceRoot,
+  resolveExistingSourceSubfolder,
   resolveExistingMediaPath,
   resolveMediaPath,
   resolveNewMediaPath,
@@ -63,6 +64,75 @@ test('authorizes destructive operations only for configured source roots', () =>
     () => requireConfiguredSourceRoot('/Volumes/Private', ['/Volumes/Videos']),
     /not part of the currently open catalogue/,
   );
+});
+
+test('resolves only existing root-relative source subfolders', () => {
+  const rootDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-source-root-'));
+  try {
+    const nestedDirectory = path.join(rootDirectory, 'Cameras', 'Rangefinders');
+    fs.mkdirSync(nestedDirectory, { recursive: true });
+    fs.writeFileSync(path.join(rootDirectory, 'not-a-folder.mp4'), 'video');
+
+    assert.equal(resolveExistingSourceSubfolder(rootDirectory, ''), rootDirectory);
+    assert.equal(resolveExistingSourceSubfolder(rootDirectory, '.'), rootDirectory);
+    assert.equal(
+      resolveExistingSourceSubfolder(rootDirectory, 'Cameras/Rangefinders'),
+      nestedDirectory,
+    );
+    assert.equal(
+      resolveExistingSourceSubfolder(rootDirectory, 'Cameras\\Rangefinders'),
+      nestedDirectory,
+    );
+    assert.throws(
+      () => resolveExistingSourceSubfolder(rootDirectory, path.join(rootDirectory, 'Cameras')),
+      /root-relative/,
+    );
+    assert.throws(
+      () => resolveExistingSourceSubfolder(rootDirectory, '../outside'),
+      /cannot traverse parent folders/,
+    );
+    assert.throws(
+      () => resolveExistingSourceSubfolder(rootDirectory, 'Cameras/../Cameras'),
+      /cannot traverse parent folders/,
+    );
+    assert.throws(
+      () => resolveExistingSourceSubfolder(rootDirectory, 'Cameras\0Rangefinders'),
+      /scope is invalid/,
+    );
+    assert.throws(
+      () => resolveExistingSourceSubfolder(rootDirectory, 'missing'),
+      /existing directory/,
+    );
+    assert.throws(
+      () => resolveExistingSourceSubfolder(rootDirectory, 'not-a-folder.mp4'),
+      /existing directory/,
+    );
+  } finally {
+    fs.rmSync(rootDirectory, { force: true, recursive: true });
+  }
+});
+
+test('rejects source subfolders that escape through symlinks', () => {
+  const rootDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-source-root-'));
+  const outsideDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-source-outside-'));
+  try {
+    const containedDirectory = path.join(rootDirectory, 'contained');
+    fs.mkdirSync(containedDirectory);
+    fs.symlinkSync(containedDirectory, path.join(rootDirectory, 'linked-inside'), 'dir');
+    fs.symlinkSync(outsideDirectory, path.join(rootDirectory, 'linked-outside'), 'dir');
+
+    assert.equal(
+      resolveExistingSourceSubfolder(rootDirectory, 'linked-inside'),
+      path.join(rootDirectory, 'linked-inside'),
+    );
+    assert.throws(
+      () => resolveExistingSourceSubfolder(rootDirectory, 'linked-outside'),
+      /resolves outside its source folder/,
+    );
+  } finally {
+    fs.rmSync(rootDirectory, { force: true, recursive: true });
+    fs.rmSync(outsideDirectory, { force: true, recursive: true });
+  }
 });
 
 test('rejects existing files and rename destinations that escape through symlinks', () => {

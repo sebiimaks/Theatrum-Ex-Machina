@@ -8,6 +8,7 @@ import type {
   VideoTagBranchRemovalPlan,
 } from './../../../interfaces/tag-hierarchy';
 import { tagPathsEqual } from './../../../interfaces/tag-hierarchy';
+import { renameImageLocationFile } from './../../../interfaces/media-locations';
 import type { TagEmission } from './../../../interfaces/shared-interfaces';
 import type { YearEmission} from './../components/views/details/details.component';
 
@@ -58,7 +59,9 @@ export class ImageElementService {
   replaceFileNameInFinalArray(renameTo: string, oldFileName: string, index: number): void {
 
     if (this.imageElements[index].fileName === oldFileName) {
-      this.imageElements[index].fileName = renameTo;
+      if (!renameImageLocationFile(this.imageElements[index], oldFileName, renameTo)) {
+        this.imageElements[index].fileName = renameTo;
+      }
       this.imageElements[index].cleanName = renameTo.slice().substr(0, renameTo.lastIndexOf('.'));
     }
 

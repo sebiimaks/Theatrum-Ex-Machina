@@ -20,6 +20,12 @@ import type { Stats } from 'fs';
 
 import type { FinalObject, ImageElement, ScreenshotSettings, InputSources, ResolutionString } from '../interfaces/final-object.interface';
 import { NewImageElement } from '../interfaces/final-object.interface';
+import {
+  getImageLocations,
+  normalizeImageElementLocations,
+  removeImageLocationsForSource,
+} from '../interfaces/media-locations';
+import { shouldStartSourceOnCatalogueSetup } from '../interfaces/folder-scan-startup';
 import { startFileSystemWatching, resetWatchers } from './main-extract-async';
 import { writeVhaJsonAtomically } from './vha-file-persistence';
 import { buildFfprobeArguments } from './local-operation-safety';
@@ -215,6 +221,22 @@ function markDuplicatesAsDeleted(imagesArray: ImageElement[]): ImageElement[] {
   return imagesArray;
 }
 
+/** Remove stale source associations and promote a configured survivor. */
+export function retainConfiguredImageLocations(
+  element: ImageElement,
+  inputDirs: InputSources,
+): boolean {
+  normalizeImageElementLocations(element);
+  const configuredSources = new Set(Object.keys(inputDirs));
+  const sourcesToRemove = new Set(getImageLocations(element)
+    .map(location => location.inputSource)
+    .filter(sourceIndex => !configuredSources.has(String(sourceIndex))));
+  sourcesToRemove.forEach((sourceIndex: number) => {
+    removeImageLocationsForSource(element, sourceIndex);
+  });
+  return getImageLocations(element).length > 0;
+}
+
 /**
  * Write the final object into `vha` file
  *  -- this correctly alphabetizes all the videos
@@ -229,11 +251,11 @@ export function writeVhaFileToDisk(finalObject: FinalObject, pathToTheFile: stri
 
     finalObject.images = stripOutTemporaryFields(finalObject.images);
 
-    // remove any videos that have no reference (unsure how this could happen, but just in case)
-    const allKeys: string[] = Object.keys(finalObject.inputDirs);
-    finalObject.images = finalObject.images.filter(element => {
-      return allKeys.includes(element.inputSource.toString());
-    });
+    // Detach stale sources and retain a logical entry whenever another
+    // configured location can still resolve it.
+    finalObject.images = finalObject.images.filter(element => (
+      retainConfiguredImageLocations(element, finalObject.inputDirs)
+    ));
 
     finalObject.images = alphabetizeFinalArray(finalObject.images); // needed for `default` sort to show proper order
     finalObject.images = markDuplicatesAsDeleted(finalObject.images); // expects `alphabetizeFinalArray` to run first
@@ -612,9 +634,14 @@ export function upgradeToVersion3(finalObject: FinalObject): void {
  * Notify Angular that a folder is 'connected'
  * If user wants continuous watching, watching directories with `chokidar`
  * @param inputDirs
- * @param currentImages -- if creating a new VHA file, this will be [] empty (and `watch` = false)
+ * @param currentImages currently saved catalogue entries, used to seed known paths
+ * @param scanNonWatchingSources true only when a brand-new catalogue needs its first scan
  */
-export function setUpDirectoryWatchers(inputDirs: InputSources, currentImages: ImageElement[]): void {
+export function setUpDirectoryWatchers(
+  inputDirs: InputSources,
+  currentImages: ImageElement[],
+  scanNonWatchingSources: boolean,
+): void {
 
   console.log('---------------------------------');
   console.log(' SETTING UP FILE SYSTEM WATCHERS' );
@@ -630,15 +657,17 @@ export function setUpDirectoryWatchers(inputDirs: InputSources, currentImages: I
     console.log(key, 'watch =', shouldWatch, ':', pathToDir);
 
     // check if directory connected
-    fs.access(pathToDir, fs.constants.W_OK, (err: any) => {
+    // Reading is sufficient for catalogue scans and playback. A read-only
+    // external or network volume should still be treated as connected.
+    fs.access(pathToDir, fs.constants.R_OK, (err: any) => {
 
       if (!err) {
         GLOBALS.angularApp.sender.send('directory-now-connected', parseInt(key, 10), pathToDir);
 
-        if (shouldWatch || currentImages.length === 0) {
+        if (shouldStartSourceOnCatalogueSetup(shouldWatch, scanNonWatchingSources)) {
 
           // Temp logging
-          if (currentImages.length === 0) {
+          if (!shouldWatch) {
             console.log('FIRST SCAN');
           } else {
             console.log('PERSISTENT WATCHING !!!');

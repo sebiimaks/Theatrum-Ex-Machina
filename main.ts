@@ -479,7 +479,7 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
 
     app.addRecentDocument(pathToVhaFile);
     sendFinalObjectToAngular(finalObject, GLOBALS, catalogueSettingsNormalized);
-    setUpDirectoryWatchers(finalObject.inputDirs, finalObject.images);
+    setUpDirectoryWatchers(finalObject.inputDirs, finalObject.images, false);
   } catch (error) {
     const unexpectedError = error instanceof Error ? error.message : String(error);
     await dialog.showMessageBox(win, {
@@ -679,7 +679,7 @@ function writeVhaFileAndStartExtraction(): void {
 
     sendFinalObjectToAngular(finalObject, GLOBALS);
 
-    setUpDirectoryWatchers(finalObject.inputDirs, []);
+    setUpDirectoryWatchers(finalObject.inputDirs, [], true);
   });
 }
 

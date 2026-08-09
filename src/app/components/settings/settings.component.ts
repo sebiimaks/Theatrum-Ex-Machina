@@ -5,7 +5,7 @@ import { TranslateService } from '@ngx-translate/core';
 import { ElectronService } from './../../providers/electron.service';
 import { ModalService } from './../modal/modal.service';
 
-import { SettingsMetaGroup, SettingsMetaGroupLabels } from '../../common/settings-buttons';
+import { SettingsMetaGroupLabels, SettingsSections } from '../../common/settings-buttons';
 
 import type { OnChanges, SimpleChanges } from '@angular/core';
 import type { OnInit } from '@angular/core';
@@ -43,8 +43,8 @@ export class SettingsComponent implements OnInit, OnChanges {
 
   additionalInput = '';
   editAdditional = false;
-  settingsMetaGroup = SettingsMetaGroup;
   settingsMetaGroupLabels = SettingsMetaGroupLabels;
+  settingsSections = SettingsSections;
 
   constructor(
     private electronService: ElectronService,
@@ -75,6 +75,10 @@ export class SettingsComponent implements OnInit, OnChanges {
     } else {
       this.modalService.openSnackbar(this.translate.instant('SETTINGS.extensionsInputError'));
     }
+  }
+
+  formatSectionIndex(index: number): string {
+    return String(index + 1).padStart(2, '0');
   }
 
   openExternalLink(event: MouseEvent, url: string): void {

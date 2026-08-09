@@ -1,16 +1,50 @@
 <div class="statistics">
 
-  <span class="stats-heading title hub-name">
-    <img
-      class="icon-image"
-      [src]="darkMode() ? './assets/logo-dark.png' : './assets/logo-light.png'"
-      alt=""
-    >
-    {{ hubName() }}
-  </span>
-  <span class="stats-heading folder" [innerHtml]="pathToVhaFile() | folderArrowsPipe"></span>
+  <section class="ledger-section identity-section">
+    <div class="ledger-index">
+      <span class="ledger-number">01</span>
+      <h3>
+        <span class="ledger-heading-line">Catalogue</span>
+        <span class="ledger-heading-line">File</span>
+      </h3>
+    </div>
 
-  <span class="stats-heading title sources">{{ 'STATISTICS.videoFolder' | translate }}</span>
+    <div class="ledger-content identity-content">
+      <div class="catalogue-identity">
+        <h2 class="stats-heading title hub-name">
+          <img
+            class="icon-image"
+            [src]="darkMode() ? './assets/logo-dark.png' : './assets/logo-light.png'"
+            alt=""
+          >
+          {{ hubName() }}
+        </h2>
+        <span class="stats-heading folder catalogue-path" [innerHtml]="pathToVhaFile() | folderArrowsPipe"></span>
+      </div>
+
+      <div class="ledger-summary">
+        <span class="ledger-chip">
+          <strong>{{ numFolders() | number:'.0' }}</strong>
+          <span>Folders</span>
+        </span>
+        <span class="ledger-chip">
+          <strong>{{ totalFiles | number:'.0' }}</strong>
+          <span>files</span>
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <section class="ledger-section sources-section">
+    <div class="ledger-index">
+      <span class="ledger-number">02</span>
+      <h3>
+        <span class="ledger-heading-line">Video</span>
+        <span class="ledger-heading-line">Location</span>
+      </h3>
+    </div>
+
+    <div class="ledger-content sources-content">
 
   <div
     class="input-sources"
@@ -18,125 +52,203 @@
   >
 
   @for (item of inputFolders() | keyvalue | alphabetizeSourceFolders : 'value.path'; track trackByFn(i, item); let i = $index) {
-    @let eligibleVideoCount = folderEligibleVideoCount(item.key);
+    @let sourceIndex = folderSourceIndex(item.key);
 
-    <div
-      class="input-sources-row"
-      [ngClass]="{ 'input-sources-row-editing': removeFoldersMode || folderThumbnailRegenerationStatus() !== null }"
-    >
-    @if ((objectKeys(inputFolders()).length > 1) && removeFoldersMode) {
-      <span
-        class="delete-input-folder"
-        (click)="folderThumbnailRegenerationStatus() === null && deleteInputSource(item.key)"
-        [attr.aria-disabled]="folderThumbnailRegenerationStatus() !== null"
-        @breadcrumbWordAppear
+    @for (row of visibleFolderRows(item.key); track folderRowTrackBy($index, row)) {
+      @let target = folderScopeTarget(sourceIndex, row.relativePath);
+      @let isRoot = row.relativePath === '';
+
+      <div
+        class="input-sources-row"
+        [class.input-sources-row-child]="!isRoot"
+        [class.input-sources-row-editing]="removeFoldersMode || folderThumbnailRegenerationStatus() !== null"
+        [class.input-sources-row-ignored]="row.ignored"
       >
-        {{ 'STATISTICS.removeFolder' | translate }}
-      </span>
-    }
-
-      <span
-        class="stats-heading folder input-folder"
-        [innerHtml]="item.value.path | folderArrowsPipe : true"
-      ></span>
-
-    @if (folderThumbnailRegenerationStatus()?.sourceIndex === folderSourceIndex(item.key)) {
-        <button
-          type="button"
-          class="regenerate-folder-thumbnails cancel-folder-thumbnail-regeneration"
-          (click)="cancelFolderThumbnailRegeneration.emit()"
-          [disabled]="folderThumbnailRegenerationStatus()?.cancelling === true"
+        <div
+          class="folder-path-cell"
+          [style.padding-left.px]="row.depth * 18"
         >
-          @if (folderThumbnailRegenerationStatus()?.cancelling) {
-            {{ 'STATISTICS.cancellingFolderThumbnailRegeneration' | translate }}
+          @if (row.children.length > 0 && !row.ignored) {
+            <button
+              type="button"
+              class="folder-disclosure"
+              [class.folder-disclosure-expanded]="isFolderScopeExpanded(row.sourceIndex, row.relativePath)"
+              [attr.aria-expanded]="isFolderScopeExpanded(row.sourceIndex, row.relativePath)"
+              [attr.aria-label]="(isFolderScopeExpanded(row.sourceIndex, row.relativePath)
+                ? ('STATISTICS.collapseFolder' | translate)
+                : ('STATISTICS.expandFolder' | translate)) + ' ' + folderDisplayName(target)"
+              (click)="toggleFolderScope(row)"
+            >
+              <span class="folder-disclosure-chevron" aria-hidden="true"></span>
+            </button>
           } @else {
-            {{ 'STATISTICS.cancelFolderThumbnailRegeneration' | translate }}
+            <span class="folder-disclosure-spacer" aria-hidden="true"></span>
           }
-        </button>
-        <span class="folder-thumbnail-regeneration-progress" aria-live="polite" role="status">
-          {{ 'STATISTICS.regeneratingFolderThumbnails' | translate : {
-            completed: folderThumbnailRegenerationStatus()?.completedJobs,
-            total: folderThumbnailRegenerationStatus()?.totalJobs
-          } }}
-        </span>
-    } @else if (removeFoldersMode) {
-        <button
-          type="button"
-          class="regenerate-folder-thumbnails"
-          (click)="regenerateFolderThumbnails.emit(folderSourceIndex(item.key))"
-          [attr.aria-label]="'STATISTICS.regenerateFolderThumbnailsAriaLabel' | translate : {
-            count: eligibleVideoCount,
-            folderName: folderDisplayName(item.key)
-          }"
-          [disabled]="folderThumbnailRegenerationStatus() !== null
-                      || sourceFolderService.sourceFolderConnected[item.key] !== true
-                      || eligibleVideoCount === 0"
-          [attr.title]="sourceFolderService.sourceFolderConnected[item.key] === true
-                        && eligibleVideoCount > 0
-                        ? ('STATISTICS.regenerateFolderThumbnailsHint' | translate)
-                        : null"
-        >
-          {{ 'STATISTICS.regenerateFolderThumbnails' | translate }}
-        </button>
+
+          @if (isRoot) {
+            <span
+              class="stats-heading folder input-folder"
+              [innerHtml]="item.value.path | folderArrowsPipe : true"
+            ></span>
+          } @else {
+            <span class="stats-heading folder input-folder subfolder-name" [attr.title]="row.relativePath">
+              {{ row.name }}
+            </span>
+          }
+
+          @if (row.ignored) {
+            <span class="folder-video-count ignored-subdirectory-status">
+              {{ 'STATISTICS.ignoredSubdirectory' | translate }}
+            </span>
+          } @else {
+            <span class="folder-video-count">
+              {{ (row.recursiveVideoCount === 1
+                ? 'STATISTICS.folderVideoCountSingle'
+                : 'STATISTICS.folderVideoCount') | translate : { count: row.recursiveVideoCount } }}
+            </span>
+          }
+        </div>
+
+        <div class="folder-row-actions">
+        @if (!isRoot) {
+          <button
+            type="button"
+            class="ignore-subdirectory-control"
+            [class.ignore-subdirectory-control-active]="row.ignored"
+            (click)="toggleIgnoredSubdirectory.emit(target)"
+            [disabled]="folderThumbnailRegenerationStatus() !== null || folderSourceIsBusy(sourceIndex)"
+            [attr.aria-label]="row.ignored
+              ? ('STATISTICS.includeSubdirectoryAriaLabel' | translate : { folderName: folderDisplayName(target) })
+              : ('STATISTICS.ignoreSubdirectoryAriaLabel' | translate : { folderName: folderDisplayName(target) })"
+            [attr.aria-pressed]="row.ignored"
+            [attr.title]="row.ignored
+              ? ('STATISTICS.includeSubdirectoryHint' | translate)
+              : ('STATISTICS.ignoreSubdirectoryHint' | translate)"
+          >
+            <app-icon
+              class="ignore-subdirectory-icon"
+              [icon]="row.ignored ? 'icon-eye-closed' : 'icon-eye-open'"
+              [size]="15"
+            />
+          </button>
+        }
+
+        @if (isRoot && (objectKeys(inputFolders()).length > 1) && removeFoldersMode) {
+          <button
+            type="button"
+            class="folder-text-action delete-input-folder"
+            (click)="folderThumbnailRegenerationStatus() === null && deleteInputSource(sourceIndex)"
+            [disabled]="folderThumbnailRegenerationStatus() !== null"
+            @breadcrumbWordAppear
+          >
+            {{ 'STATISTICS.removeFolder' | translate }}
+          </button>
+        }
+
+        @if (folderRegenerationMatches(target)) {
+          <button
+            type="button"
+            class="regenerate-folder-thumbnails cancel-folder-thumbnail-regeneration"
+            (click)="cancelFolderThumbnailRegeneration.emit()"
+            [disabled]="folderThumbnailRegenerationStatus()?.cancelling === true"
+          >
+            @if (folderThumbnailRegenerationStatus()?.cancelling) {
+              {{ 'STATISTICS.cancellingFolderThumbnailRegeneration' | translate }}
+            } @else {
+              {{ 'STATISTICS.cancelFolderThumbnailRegeneration' | translate }}
+            }
+          </button>
+        } @else if (removeFoldersMode && !row.ignored) {
+          <button
+            type="button"
+            class="regenerate-folder-thumbnails"
+            (click)="regenerateFolderThumbnails.emit(target)"
+            [attr.aria-label]="'STATISTICS.regenerateFolderThumbnailsAriaLabel' | translate : {
+              count: row.eligibleThumbnailCount,
+              folderName: folderDisplayName(target)
+            }"
+            [disabled]="folderThumbnailRegenerationStatus() !== null
+                        || folderSourceIsBusy(sourceIndex)
+                        || sourceFolderService.sourceFolderConnected[sourceIndex] !== true
+                        || row.eligibleThumbnailCount === 0"
+            [attr.title]="sourceFolderService.sourceFolderConnected[sourceIndex] === true
+                          && row.eligibleThumbnailCount > 0
+                          ? ('STATISTICS.regenerateFolderThumbnailsHint' | translate)
+                          : null"
+          >
+            {{ 'STATISTICS.regenerateFolderThumbnails' | translate }}
+          </button>
+        }
+
+        @if (!row.ignored && !removeFoldersMode && folderThumbnailRegenerationStatus() === null && !item.value.watch && sourceFolderService.sourceFolderConnected[sourceIndex]) {
+          <button
+            type="button"
+            class="folder-text-action rescan-input-folder"
+            (click)="($event.button === 0) && rescanFolder(target)"
+            (mouseup)="($event.button === 0) && animateThis($event)"
+            [disabled]="folderSourceIsBusy(sourceIndex)"
+            title="{{ 'STATISTICS.clickToRescan' | translate }}"
+            @breadcrumbWordAppear
+          >
+            @if (folderScopeIsScanning(target)) {
+              {{ 'STATISTICS.scanningFolder' | translate }}
+            } @else {
+              {{ 'STATISTICS.rescanFolder' | translate }}
+            }
+          </button>
+        }
+
+        @if (isRoot && !sourceFolderService.sourceFolderConnected[sourceIndex] && !removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
+          <button
+            type="button"
+            class="folder-text-action input-not-connected"
+            (click)="reconnectThisFolder(sourceIndex)"
+            title="{{ 'STATISTICS.clickToConnect' | translate }}"
+            @breadcrumbWordAppear
+          >
+            {{ 'STATISTICS.notConnected' | translate }}
+          </button>
+        }
+
+        @if (isRoot && !removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
+          <label
+            class="watch-folder-control"
+            title="{{ 'STATISTICS.watchFolderHelpText' | translate }}"
+            @metaAppear
+          >
+            <span class="watch-folder-note">{{ 'STATISTICS.watchFolder' | translate }}</span>
+            <span class="switch">
+              <input
+                type="checkbox"
+                [(ngModel)]="item.value.watch"
+                (change)="folderWatchStatusChange(sourceIndex, item.value.watch)"
+                [disabled]="folderSourceIsBusy(sourceIndex)"
+              >
+              <span
+                title="{{
+                          item.value.watch
+                          ? ('STATISTICS.currentlyWatching' | translate)
+                          : ('STATISTICS.currentlyNotWatching' | translate)
+                }}"
+                class="slider round"
+              ></span>
+            </span>
+          </label>
+        }
+        </div>
+
+        @if (folderRegenerationMatches(target)) {
+          <span class="folder-thumbnail-regeneration-progress" aria-live="polite" role="status">
+            {{ 'STATISTICS.regeneratingFolderThumbnails' | translate : {
+              completed: folderThumbnailRegenerationStatus()?.completedJobs,
+              total: folderThumbnailRegenerationStatus()?.totalJobs
+            } }}
+          </span>
+        }
+
+      </div>
     }
-
-    @if (!removeFoldersMode && folderThumbnailRegenerationStatus() === null && !item.value.watch && sourceFolderService.sourceFolderConnected[item.key]) {
-      <span
-        class="rescan-input-folder"
-        (click)="($event.button === 0) && rescanFolder(item.key)"
-        (mouseup)="($event.button === 0) && animateThis($event)"
-        title="{{ 'STATISTICS.clickToRescan' | translate }}"
-        @breadcrumbWordAppear
-      >
-        {{ 'STATISTICS.rescanFolder' | translate }}
-      </span>
-    }
-
-    @if (!sourceFolderService.sourceFolderConnected[item.key] && !removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
-      <span
-        class="input-not-connected"
-        (click)="reconnectThisFolder(item.key)"
-        title="{{ 'STATISTICS.clickToConnect' | translate }}"
-        @breadcrumbWordAppear
-      >
-        {{ 'STATISTICS.notConnected' | translate }}
-      </span>
-    }
-
-    @if (i === 0 && !removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
-      <span
-        class="watch-folder-note"
-        title="{{ 'STATISTICS.watchFolderHelpText' | translate }}"
-        @metaAppear
-      >
-        {{ 'STATISTICS.watchFolder' | translate }}
-      </span>
-    }
-
-    @if (!removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
-      <label
-        class="switch"
-        @metaAppear
-      >
-        <input
-          type="checkbox"
-          [(ngModel)]="item.value.watch"
-          (change)="folderWatchStatusChange(item.key, item.value.watch)"
-        >
-        <span
-          title="{{
-                    item.value.watch
-                    ? ('STATISTICS.currentlyWatching' | translate)
-                    : ('STATISTICS.currentlyNotWatching' | translate)
-                  }}"
-          class="slider round"
-        ></span>
-      </label>
-    }
-
-    </div> <!-- end of input-sources-row -->
-
-  } <!-- end of the @for -->
+  }
 
   </div> <!-- end of input-sources -->
 
@@ -159,6 +271,51 @@
     >
       {{ 'STATISTICS.editFolders' | translate }}
     </button>
+
+    <label
+      class="scan-on-addition-control"
+      title="{{ 'STATISTICS.scanFoldersOnAdditionHelpText' | translate }}"
+    >
+      <span>{{ 'STATISTICS.scanFoldersOnAddition' | translate }}</span>
+      <span class="switch">
+        <input
+          type="checkbox"
+          [ngModel]="appState().scanFoldersOnAddition"
+          (ngModelChange)="appState().scanFoldersOnAddition = $event"
+        >
+        <span class="slider round"></span>
+      </span>
+    </label>
+
+    <label
+      class="generate-on-addition-control"
+      title="{{ 'STATISTICS.generatePreviewsOnFolderAdditionHelpText' | translate }}"
+    >
+      <span>{{ 'STATISTICS.generatePreviewsOnFolderAddition' | translate }}</span>
+      <span class="switch">
+        <input
+          type="checkbox"
+          [ngModel]="appState().generatePreviewsOnFolderAddition"
+          (ngModelChange)="appState().generatePreviewsOnFolderAddition = $event"
+        >
+        <span class="slider round"></span>
+      </span>
+    </label>
+
+    <label
+      class="hide-empty-subdirectories-control"
+      title="{{ 'STATISTICS.hideSubdirectoriesWithNoVideosHelpText' | translate }}"
+    >
+      <span>{{ 'STATISTICS.hideSubdirectoriesWithNoVideos' | translate }}</span>
+      <span class="switch">
+        <input
+          type="checkbox"
+          [ngModel]="appState().hideSubdirectoriesWithNoVideos"
+          (ngModelChange)="appState().hideSubdirectoriesWithNoVideos = $event"
+        >
+        <span class="slider round"></span>
+      </span>
+    </label>
 
     <button
       class="wizard-button"
@@ -190,11 +347,19 @@
 
   </span>
 
+    </div>
+  </section>
+
   <!-- SERVER STUFF -->
 
-  <span class="stats-heading title sources server-title">{{ 'STATISTICS.server' | translate }}</span>
+  <section class="ledger-section server-ledger-section">
+    <div class="ledger-index">
+      <span class="ledger-number">03</span>
+      <h3>{{ 'STATISTICS.server' | translate }}</h3>
+    </div>
 
-  <span class="edit-mode-container server-section">
+    <div class="ledger-content server-content">
+      <span class="edit-mode-container server-section">
 
     <button
       class="wizard-button start-import"
@@ -257,12 +422,21 @@
     </div>
   }
 
-  </span>
+      </span>
+    </div>
+  </section>
 
 
   <!-- STATISTICS FOR THE HUB  -->
 
-  <div class="table-container">
+  <section class="ledger-section summary-section">
+    <div class="ledger-index">
+      <span class="ledger-number">04</span>
+      <h3>Catalogue Summary</h3>
+    </div>
+
+    <div class="ledger-content summary-content">
+      <div class="table-container">
 
     <table class="stats-table">
       <tr>
@@ -280,7 +454,7 @@
       </tr>
 
       <tr>
-        <td colSpan=2 class="span-both" style="padding-top: 68px;">
+        <td colSpan=2 class="span-both">
           {{ 'STATISTICS.settings' | translate }}
         </td>
       </tr>
@@ -379,6 +553,8 @@
       </tr>
     </table>
 
-  </div>
+      </div>
+    </div>
+  </section>
 
 </div>

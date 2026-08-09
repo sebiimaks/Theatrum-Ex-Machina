@@ -10,11 +10,21 @@ export type ResolutionString = '' | 'SD' | '720' | '720+' | '1080' | '1080+' | '
 export const IMPORT_ERROR_TAG = 'import_error';
 
 export interface SourceFolder {
+  /** Canonical source-root-relative folder scopes deliberately excluded by the user. */
+  ignoredSubdirectories?: string[];
   path: string;
   watch: boolean;
 }
 
 export type InputSources = Record<number, SourceFolder>;
+
+/** One filesystem location capable of resolving a logical catalogue video. */
+export interface ImageLocation {
+  fileName: string;
+  inputSource: number;
+  missing?: boolean;
+  partialPath: string;
+}
 
 export interface FinalObject {
   addTags: string[];             // tags to add
@@ -59,6 +69,11 @@ export interface ImageElement {
   playlist?: number;             // timestamp of when user clicked `add to playlist`
   tags?: string[];               // tags associated with this particular file
   year?: number;                 // optional tag to track the year of the video
+  /**
+   * Authoritative locations for videos reachable through overlapping source
+   * folders. The first location is mirrored into the legacy path fields.
+   */
+  locations?: ImageLocation[];
   // ========================================================================
   // Stripped out and not saved in the VHA file
   // ------------------------------------------------------------------------

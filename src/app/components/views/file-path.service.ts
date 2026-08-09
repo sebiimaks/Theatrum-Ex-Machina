@@ -4,7 +4,11 @@ import * as path from 'path';
 
 import { SourceFolderService } from '../statistics/source-folder.service';
 
-import type { ImageElement } from '../../../../interfaces/final-object.interface';
+import type { ImageElement, ImageLocation } from '../../../../interfaces/final-object.interface';
+import {
+  imageElementAtLocation,
+  selectAvailableImageLocation,
+} from '../../../../interfaces/media-locations';
 
 type FolderType = 'thumbnails' | 'filmstrips' | 'clips';
 
@@ -70,11 +74,35 @@ export class FilePathService {
    * Return full filesystem path to video file
    */
   getPathFromImageElement(item: ImageElement): string {
+    const location = this.getAvailableImageLocation(item);
+    if (!location) {
+      throw new Error('No available source location exists for this catalogue entry.');
+    }
+    return this.getPathFromImageLocation(location);
+  }
+
+  getAvailableImageLocation(item: ImageElement): ImageLocation | undefined {
+    return selectAvailableImageLocation(item, (sourceIndex: number) => (
+      Boolean(this.sourceFolderService.selectedSourceFolder[sourceIndex])
+      && this.sourceFolderService.sourceFolderConnected[sourceIndex] === true
+    ));
+  }
+
+  getPathFromImageLocation(location: ImageLocation): string {
+    const source = this.sourceFolderService.selectedSourceFolder[location.inputSource];
+    if (!source?.path) {
+      throw new Error('The source folder for this media location is unavailable.');
+    }
     return path.join(
-      this.sourceFolderService.selectedSourceFolder[item.inputSource].path,
-      item.partialPath,
-      item.fileName
+      source.path,
+      location.partialPath,
+      location.fileName,
     );
+  }
+
+  projectToAvailableImageLocation(item: ImageElement): ImageElement | undefined {
+    const location = this.getAvailableImageLocation(item);
+    return location ? imageElementAtLocation(item, location) : undefined;
   }
 
 }

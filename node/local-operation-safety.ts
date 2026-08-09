@@ -80,6 +80,73 @@ export function requireConfiguredSourceRoot(
 }
 
 /**
+ * Resolve an existing directory beneath a configured source folder.
+ *
+ * The scope is deliberately root-relative: an empty string or `.` selects the
+ * source root, while absolute and parent-traversal paths are rejected. Both
+ * the lexical path and its real path must remain inside the configured root so
+ * a symlink or junction cannot redirect a scoped operation elsewhere.
+ */
+export function resolveExistingSourceSubfolder(
+  basePath: unknown,
+  scope: unknown,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const normalizedBase = path.resolve(normalizeAbsolutePath(basePath, 'Source folder'));
+
+  if (typeof scope !== 'string' || scope.includes('\0')) {
+    throw new Error('The source subfolder scope is invalid.');
+  }
+  if (
+    path.isAbsolute(scope)
+    || path.posix.isAbsolute(scope)
+    || path.win32.isAbsolute(scope)
+  ) {
+    throw new Error('The source subfolder scope must be root-relative.');
+  }
+
+  const scopeSegments = scope.split(/[\\/]+/);
+  if (scopeSegments.some(segment => segment === '..')) {
+    throw new Error('The source subfolder scope cannot traverse parent folders.');
+  }
+
+  const normalizedScope = scopeSegments
+    .filter(segment => segment !== '' && segment !== '.')
+    .join(path.sep);
+  const candidate = path.resolve(normalizedBase, normalizedScope);
+  if (!samePath(normalizedBase, candidate, platform) && !pathIsWithin(normalizedBase, candidate)) {
+    throw new Error('The source subfolder is outside its source folder.');
+  }
+
+  let baseStats: fs.Stats;
+  let candidateStats: fs.Stats;
+  try {
+    baseStats = fs.statSync(normalizedBase);
+  } catch {
+    throw new Error('The source folder must be an existing directory.');
+  }
+  if (!baseStats.isDirectory()) {
+    throw new Error('The source folder must be an existing directory.');
+  }
+  try {
+    candidateStats = fs.statSync(candidate);
+  } catch {
+    throw new Error('The source subfolder must be an existing directory.');
+  }
+  if (!candidateStats.isDirectory()) {
+    throw new Error('The source subfolder must be an existing directory.');
+  }
+
+  const realBase = fs.realpathSync.native(normalizedBase);
+  const realCandidate = fs.realpathSync.native(candidate);
+  if (!samePath(realBase, realCandidate, platform) && !pathIsWithin(realBase, realCandidate)) {
+    throw new Error('The source subfolder resolves outside its source folder.');
+  }
+
+  return candidate;
+}
+
+/**
  * Resolve a catalogue-relative media path without allowing traversal outside its source folder.
  * Catalogue partial paths historically start with a slash, so leading separators are removed.
  */

@@ -17,10 +17,12 @@ import {
   extractSingleFrameArgs,
   extractThumbnailWithRecovery,
   fillMissingRecoveryFrames,
+  FILMSTRIP_FRAME_CONCURRENCY,
   generatePreviewClipArgs,
   generateScreenshotStripArgs,
   readJpegDimensions,
   replaceThumbnailWithNewImage,
+  runBoundedMediaWork,
   selectRecoveryFrameIndexes,
   setExtractionDurations,
   spawn_ffmpeg_and_run,
@@ -168,6 +170,90 @@ test('partial filmstrip recovery keeps the configured number of cells', () => {
   assert.match(stackArgs[stackArgs.indexOf('-filter_complex') + 1], /hstack=inputs=3$/);
 });
 
+test('filmstrip frame work uses a small fixed decoder pool', async () => {
+  let active = 0;
+  let maximumActive = 0;
+  const completed: number[] = [];
+
+  await runBoundedMediaWork(
+    Array.from({ length: 12 }, (_value, index) => index),
+    FILMSTRIP_FRAME_CONCURRENCY,
+    async (index: number) => {
+      active++;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      completed.push(index);
+      active--;
+    },
+  );
+
+  assert.equal(FILMSTRIP_FRAME_CONCURRENCY, 2);
+  assert.equal(maximumActive, FILMSTRIP_FRAME_CONCURRENCY);
+  assert.deepEqual(completed.sort((left, right) => left - right),
+    Array.from({ length: 12 }, (_value, index) => index));
+  await assert.rejects(
+    runBoundedMediaWork([1], 0, async () => undefined),
+    /concurrency is invalid/,
+  );
+});
+
+test('bounded media work stops queued jobs after cancellation', async () => {
+  let continueWork = true;
+  let releaseActiveWorkers: () => void = () => undefined;
+  const activeWorkerGate = new Promise<void>((resolve) => {
+    releaseActiveWorkers = resolve;
+  });
+  const started: number[] = [];
+
+  const work = runBoundedMediaWork(
+    [0, 1, 2, 3, 4],
+    2,
+    async (index: number) => {
+      started.push(index);
+      await activeWorkerGate;
+    },
+    () => continueWork,
+  );
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, [0, 1]);
+  continueWork = false;
+  releaseActiveWorkers();
+  await work;
+  assert.deepEqual(started, [0, 1]);
+});
+
+test('bounded media work waits for active peers before reporting an error', async () => {
+  let releasePeer: () => void = () => undefined;
+  const peerGate = new Promise<void>((resolve) => {
+    releasePeer = resolve;
+  });
+  let peerFinished = false;
+
+  const work = runBoundedMediaWork(
+    [0, 1, 2],
+    2,
+    async (index: number) => {
+      if (index === 0) {
+        throw new Error('expected worker failure');
+      }
+      await peerGate;
+      peerFinished = true;
+    },
+  );
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  let rejected = false;
+  void work.catch(() => {
+    rejected = true;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(rejected, false);
+  releasePeer();
+  await assert.rejects(work, /expected worker failure/);
+  assert.equal(peerFinished, true);
+});
+
 test('media extraction timeout settles even when the child never closes', async () => {
   const mediaProcess = new FakeMediaProcess();
   const extraction = spawn_ffmpeg_and_run([], 10, 'timeout regression test', () => mediaProcess);
@@ -177,11 +263,11 @@ test('media extraction timeout settles even when the child never closes', async 
     const result = await Promise.race([
       extraction,
       new Promise<never>((_resolve, reject) => {
-        watchdog = setTimeout(() => reject(new Error('Timed-out extraction did not settle')), 250);
+        watchdog = setTimeout(() => reject(new Error('Timed-out extraction did not settle')), 2000);
       }),
     ]);
     assert.equal(result, false);
-    assert.deepEqual(mediaProcess.killSignals, [undefined]);
+    assert.deepEqual(mediaProcess.killSignals, [undefined, 'SIGKILL']);
   } finally {
     if (watchdog) {
       clearTimeout(watchdog);

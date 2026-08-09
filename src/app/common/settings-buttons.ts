@@ -266,6 +266,89 @@ export const SettingsMetaGroupLabels: string[] = [
   'SETTINGS.otherSettings',
 ];
 
+export interface SettingsSectionMetadata {
+  heading: string;
+  buttonKeys: SettingsButtonKey[];
+}
+
+// The settings screen uses this metadata to present each button group as a
+// deliberate review section. Keep the button lists sourced from
+// `SettingsButtonsGroups` so the ribbon and settings screen cannot drift apart.
+export const SettingsSections: SettingsSectionMetadata[][] = [
+  [
+    {
+      heading: 'SETTINGS.searchAndFilter',
+      buttonKeys: SettingsButtonsGroups[0],
+    },
+    {
+      heading: 'SETTINGS.searchFilters',
+      buttonKeys: SettingsButtonsGroups[1],
+    },
+    {
+      heading: 'SETTINGS.sortingFilters',
+      buttonKeys: SettingsButtonsGroups[2],
+    },
+    {
+      heading: 'SETTINGS.duplicateLength',
+      buttonKeys: SettingsButtonsGroups[3],
+    },
+  ],
+  [
+    {
+      heading: 'SETTINGS.galleryAndView',
+      buttonKeys: SettingsButtonsGroups[4],
+    },
+    {
+      heading: 'SETTINGS.folderView',
+      buttonKeys: SettingsButtonsGroups[5],
+    },
+    {
+      heading: 'SETTINGS.wordCloud',
+      buttonKeys: SettingsButtonsGroups[6],
+    },
+    {
+      heading: 'SETTINGS.miscView',
+      buttonKeys: SettingsButtonsGroups[7],
+    },
+    {
+      heading: 'SETTINGS.manualTags',
+      buttonKeys: SettingsButtonsGroups[8],
+    },
+    {
+      heading: 'SETTINGS.thumbnailHeading',
+      buttonKeys: SettingsButtonsGroups[9],
+    },
+    {
+      heading: 'SETTINGS.clipsHeading',
+      buttonKeys: SettingsButtonsGroups[10],
+    },
+    {
+      heading: 'SETTINGS.zoom',
+      buttonKeys: SettingsButtonsGroups[11],
+    },
+    {
+      heading: 'SETTINGS.darkMode',
+      buttonKeys: SettingsButtonsGroups[12],
+    },
+    {
+      heading: 'SETTINGS.buttonStyle',
+      buttonKeys: SettingsButtonsGroups[13],
+    },
+  ],
+  [
+    {
+      heading: 'SETTINGS.variousSettings',
+      buttonKeys: SettingsButtonsGroups[14].filter((buttonKey: SettingsButtonKey) => (
+        buttonKey !== 'openAtTimestamp'
+      )),
+    },
+    {
+      heading: 'BUTTONS.videoPlayerSettings',
+      buttonKeys: ['openAtTimestamp'],
+    },
+  ],
+];
+
 export type SettingsButtonsType = { [key in SettingsButtonKey]: SettingsButton };
 
 export const SettingsButtons: SettingsButtonsType = {

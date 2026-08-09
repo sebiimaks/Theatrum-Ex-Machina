@@ -210,30 +210,35 @@
 
 @if (settingsModalOpen) {
   <div
-    class="all-settings-tabs"
+    class="all-settings-tabs settings-review-tabs"
     [ngClass]="{ 'settings-tabs-dark': settingsButtons['darkMode'].toggled }"
+    aria-label="Settings sections"
+    role="tablist"
     @modalAnimation
   >
-    <button (click)="settingTabToShow = 0" [ngClass]="{ 'active-tab': settingTabToShow === 0 }">
+    <button type="button" id="settings-tab-0" role="tab" aria-controls="settings-review-panel" [attr.aria-selected]="settingTabToShow === 0" [attr.tabindex]="settingTabToShow === 0 ? 0 : -1" (click)="settingTabToShow = 0" (keydown)="onSettingsTabKeydown($event)" [ngClass]="{ 'active-tab': settingTabToShow === 0 }">
       {{ 'SETTINGS.tabFilter'     | translate }}
     </button>
-    <button (click)="settingTabToShow = 1" [ngClass]="{ 'active-tab': settingTabToShow === 1 }">
+    <button type="button" id="settings-tab-1" role="tab" aria-controls="settings-review-panel" [attr.aria-selected]="settingTabToShow === 1" [attr.tabindex]="settingTabToShow === 1 ? 0 : -1" (click)="settingTabToShow = 1" (keydown)="onSettingsTabKeydown($event)" [ngClass]="{ 'active-tab': settingTabToShow === 1 }">
       {{ 'SETTINGS.tabView'       | translate }}
     </button>
-    <button (click)="settingTabToShow = 2" [ngClass]="{ 'active-tab': settingTabToShow === 2 }">
+    <button type="button" id="settings-tab-2" role="tab" aria-controls="settings-review-panel" [attr.aria-selected]="settingTabToShow === 2" [attr.tabindex]="settingTabToShow === 2 ? 0 : -1" (click)="settingTabToShow = 2" (keydown)="onSettingsTabKeydown($event)" [ngClass]="{ 'active-tab': settingTabToShow === 2 }">
       {{ 'SETTINGS.tabMain'       | translate }}
     </button>
-    <button (click)="settingTabToShow = 3" [ngClass]="{ 'active-tab': settingTabToShow === 3 }">
+    <button type="button" id="settings-tab-3" role="tab" aria-controls="settings-review-panel" [attr.aria-selected]="settingTabToShow === 3" [attr.tabindex]="settingTabToShow === 3 ? 0 : -1" (click)="settingTabToShow = 3" (keydown)="onSettingsTabKeydown($event)" [ngClass]="{ 'active-tab': settingTabToShow === 3 }">
       {{ 'SETTINGS.tabCurrentHub' | translate }}
     </button>
-    <button (click)="settingTabToShow = 4" [ngClass]="{ 'active-tab': settingTabToShow === 4 }">
+    <button type="button" id="settings-tab-4" role="tab" aria-controls="settings-review-panel" [attr.aria-selected]="settingTabToShow === 4" [attr.tabindex]="settingTabToShow === 4 ? 0 : -1" (click)="settingTabToShow = 4" (keydown)="onSettingsTabKeydown($event)" [ngClass]="{ 'active-tab': settingTabToShow === 4 }">
       {{ 'SETTINGS.tabShortcuts'  | translate }}
     </button>
   </div>
 
   <div
-    class="settings-modal"
+    class="settings-modal settings-review-modal"
     [ngClass]="{ 'settings-modal-dark': settingsButtons['darkMode'].toggled }"
+    id="settings-review-panel"
+    role="tabpanel"
+    [attr.aria-labelledby]="'settings-tab-' + settingTabToShow"
     @modalAnimation
     #settingsModal
   >
@@ -272,13 +277,14 @@
     <!-- HUB STATISTICS / Current Hub Settings -->
 
   @if (settingTabToShow == 3) {
-    <div class="shortcut-menu">
+    <div class="shortcut-menu settings-review-host">
       <app-statistics
         (cancelFolderThumbnailRegeneration)="cancelFolderThumbnailRegeneration()"
         (deleteInputSourceFiles)="deleteInputSourceFiles($event)"
         (finalArrayNeedsSaving)="imageElementService.finalArrayNeedsSaving = true"
         (regenerateFolderThumbnails)="confirmRegenerateFolderThumbnails($event)"
         (startServerOnPort)="startServer($event)"
+        (toggleIgnoredSubdirectory)="toggleIgnoredSubdirectory($event)"
 
         [appState]="appState"
         [darkMode]="settingsButtons['darkMode'].toggled"
@@ -298,7 +304,7 @@
   }
     <!-- KEYBOARD SHORTCUTS -->
   @if (settingTabToShow == 4) {
-    <div class="shortcut-menu">
+    <div class="shortcut-menu settings-review-host">
       <app-shortcuts [macVersion]="macVersion" />
     </div>
   }

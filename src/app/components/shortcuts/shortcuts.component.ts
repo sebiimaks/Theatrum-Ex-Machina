@@ -18,9 +18,14 @@ export class ShortcutsComponent {
   @HostListener('window:keydown', ['$event'])
   handleThisEvent(event: KeyboardEvent) {
     if (this.isReadyToReceiveKey) {
+      // Prevent Enter or Space from activating the focused shortcut button a
+      // second time after it has just been accepted as the new binding.
+      event.preventDefault();
+      event.stopPropagation();
       this.shortcutService.setNewKeyBinding(event.key, this.shortcutToChange);
       this.isReadyToReceiveKey = false;
       this.shortcutToChange = undefined;
+      (document.activeElement as HTMLElement | null)?.blur();
     }
   }
 
@@ -57,6 +62,36 @@ export class ShortcutsComponent {
 
     // 'quit',           // w - hardcoded in template
     // 'quit',           // q - hardcoded in template
+  ];
+
+  readonly shortcutSections: {
+    heading: string;
+    actions: (SettingsButtonKey | CustomShortcutAction)[];
+  }[] = [
+    {
+      heading: 'Gallery Views',
+      actions: this.shortcutsInOrder.slice(0, 7)
+    },
+    {
+      heading: 'Search and Focus',
+      actions: this.shortcutsInOrder.slice(7, 10)
+    },
+    {
+      heading: 'Scaling and Order',
+      actions: this.shortcutsInOrder.slice(10, 13)
+    },
+    {
+      heading: 'Workspace',
+      actions: this.shortcutsInOrder.slice(13, 18)
+    },
+    {
+      heading: 'Layout and Appearance',
+      actions: this.shortcutsInOrder.slice(18, 22)
+    },
+    {
+      heading: 'Catalogue',
+      actions: this.shortcutsInOrder.slice(22)
+    }
   ];
 
   constructor(

@@ -5,7 +5,7 @@
 **All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
 
 - Current fork version: `v3.3.0-tem.3`
-- Change summary updated: 07/08/2026
+- Change summary updated: 09/08/2026
 
 # Fork Changelog
 
@@ -15,7 +15,11 @@ Changes under Unreleased are present on the production branch but have not yet b
 
 ## Unreleased
 
-No unreleased changes.
+<details>
+<summary><strong>Improve Current Hub folder management and extraction safety</strong></summary>
+<p>Restyled every settings tab as a structured review ledger and reorganised Current Hub around clearer catalogue, video-location, server, and summary sections. Configured roots now expose expandable subdirectory trees with independent rescanning and thumbnail regeneration, optional empty-folder hiding, persistent per-subdirectory ignore controls, and separate choices for scanning and preview generation when adding or rescanning folders. Ignoring a subtree excludes it from future scans and removes only its catalogue associations; entries reachable through another configured location retain their metadata, while metadata-bearing removals receive a structured confirmation.</p>
+<p>Overlapping parent and child source folders now resolve to one logical catalogue entry with multiple durable locations, preserving tags, notes, ratings, play history, Date Added, and availability when either source is removed or temporarily offline. Rescan snapshots, watcher restoration, playback paths, folder statistics, and thumbnail planning understand those alternate locations. Extraction was also hardened for broad and network-hosted folders with bounded directory traversal, deduplicated work, controlled decoder concurrency, cancellable media processes, sequentially assembled filmstrips, scan safety limits, and batched interface refreshes. These changes prevent the previous memory and allocation spikes while retaining practical throughput on capped network storage.</p>
+</details>
 
 ## [v3.3.0-tem.3](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.3) — 7 August 2026
 

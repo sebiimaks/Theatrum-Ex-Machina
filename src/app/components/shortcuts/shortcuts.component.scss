@@ -1,19 +1,118 @@
 @use "../variables";
 
-.shortcut-container {
-  display: flex;
-  flex-direction: column;
-  flex-wrap: wrap;
-  margin: 20px 40px 0;
-  max-height: 700px;
+:host {
+  color: var(--app-text-primary);
 }
 
-.shortcut-item {
-  line-height: 20px;
-  list-style: none;
-  margin: 0 0 16px 0;
-  min-width: 250px;
-  padding: 0;
+.shortcut-review-page {
+  counter-reset: shortcut-review-section;
+  margin: 0 auto;
+  max-width: 1040px;
+  padding: 8px 24px 36px;
+}
+
+.shortcut-review-header {
+  align-items: end;
+  border-bottom: 1px solid var(--app-border-strong);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0;
+  padding: 10px 0 18px;
+
+  h2 {
+    color: var(--app-text-primary);
+    font-size: 20px;
+    font-weight: 680;
+    letter-spacing: -0.015em;
+    margin: 0;
+  }
+
+  p {
+    color: var(--app-text-secondary);
+    font-size: 11px;
+    margin: 5px 0 0;
+  }
+}
+
+.shortcut-review-summary {
+  background: var(--app-accent-soft);
+  border: 1px solid var(--app-accent);
+  border-radius: var(--app-control-radius);
+  color: var(--app-accent-text);
+  font-size: 10px;
+  padding: 4px 8px;
+}
+
+.shortcut-review-context {
+  align-items: center;
+  color: var(--app-text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  gap: 5px;
+  margin: 0;
+  padding: 12px 0;
+}
+
+.shortcut-review-section {
+  counter-increment: shortcut-review-section;
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+}
+
+.shortcut-review-index {
+  border-top: 1px solid var(--app-border-subtle);
+  color: var(--app-text-secondary);
+  padding: 17px 18px 17px 0;
+
+  h3 {
+    color: var(--app-text-primary);
+    display: block;
+    font-size: 12px;
+    font-weight: 620;
+    line-height: 1.35;
+    margin-bottom: 0;
+    margin-top: 7px;
+  }
+}
+
+.shortcut-review-number::before {
+  content: counter(shortcut-review-section, decimal-leading-zero);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.shortcut-review-rows {
+  border-left: 1px solid var(--app-border-subtle);
+  border-top: 1px solid var(--app-border-subtle);
+}
+
+.shortcut-review-row,
+.shortcut-gesture-row {
+  align-items: center;
+  border-bottom: 1px solid var(--app-border-subtle);
+  display: grid;
+  font-size: 12px;
+  gap: 12px;
+  min-height: 46px;
+  padding: 8px 4px 8px 16px;
+}
+
+.shortcut-review-row {
+  grid-template-columns: 34px minmax(0, 1fr);
+}
+
+.shortcut-gesture-row {
+  grid-template-columns: minmax(170px, auto) minmax(0, 1fr);
+}
+
+.shortcut-gesture-keys {
+  align-items: center;
+  color: var(--app-text-secondary);
+  display: flex;
+  gap: 5px;
 }
 
 .shortcut-key {
@@ -22,30 +121,31 @@
   border-radius: var(--app-control-radius);
   box-shadow: var(--app-shadow-subtle);
   color: var(--app-text-primary);
-  display: inline-block;
+  display: inline-grid;
   font-family: var(--app-font-mono);
+  font-size: 11px;
   font-style: normal;
-  margin-right: 6px;
-  padding: 3px 5px 3px 5px;
-  text-align: center;
-  width: 16px;
+  height: 27px;
+  min-width: 27px;
+  padding: 3px 6px;
+  place-items: center;
+}
+
+button.shortcut-key {
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--app-control-hover);
+    border-color: var(--app-accent);
+    outline: 2px solid var(--app-accent-soft);
+    outline-offset: 1px;
+  }
 }
 
 .modifier-key {
-  line-height: 20px;
-  margin: 0 4px;
-  margin-right: initial;
-  padding: 3px 10px;
-  width: initial;
-}
-
-.shortcut-description {
-  display: block;
-  margin-bottom: 15px;
-}
-
-.clickable {
-  cursor: pointer;
+  min-width: 46px;
+  width: auto;
 }
 
 .selected-for-change {
@@ -58,18 +158,54 @@
   color: var(--app-text-secondary);
 }
 
-.space-after {
-  margin-bottom: 50px;
-}
-
 .disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
 
-@media (max-width: 700px) {
-  .shortcut-container {
-    flex-wrap: nowrap;
-    max-height: initial;
+.shortcut-review-guidance {
+  padding: 11px 16px;
+
+  p {
+    color: var(--app-text-secondary);
+    font-size: 11px;
+    line-height: 1.45;
+    margin: 0 0 5px;
+  }
+
+  p:last-child {
+    margin-bottom: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .shortcut-review-page {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .shortcut-review-section {
+    grid-template-columns: 1fr;
+  }
+
+  .shortcut-review-index {
+    padding-bottom: 9px;
+  }
+
+  .shortcut-review-rows {
+    border-left: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .shortcut-review-header {
+    align-items: start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .shortcut-gesture-row {
+    align-items: start;
+    grid-template-columns: 1fr;
   }
 }

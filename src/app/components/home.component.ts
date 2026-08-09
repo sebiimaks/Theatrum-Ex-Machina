@@ -27,17 +27,39 @@ import { SortOrderComponent } from './sort-order/sort-order.component';
 
 // Interfaces
 import type { ContextMenuCoordinate } from '../../../interfaces/shared-interfaces';
-import type { FinalObject, ImageElement, ScreenshotSettings, ResolutionString } from '../../../interfaces/final-object.interface';
+import type {
+  FinalObject,
+  ImageElement,
+  ImageLocation,
+  SourceFolder,
+  ScreenshotSettings,
+  ResolutionString,
+} from '../../../interfaces/final-object.interface';
 import { IMPORT_ERROR_TAG, isMetadataImportFailure } from '../../../interfaces/final-object.interface';
 import {
   ensureDateAddedForNewEntry,
   findDeletedMetadataOrigin,
 } from '../../../interfaces/date-added';
 import {
+  attachKnownLocationsFromSnapshot,
   copyRecoveredEntryMetadata,
-  markMissingFolderEntries,
+  reconcileMissingFolderEntriesInScope,
   replaceRecoveredFolderEntry,
 } from '../../../interfaces/folder-rescan';
+import {
+  attachImageLocation,
+  getImageLocations,
+  markImageLocationsMissingInScope,
+  normalizeImageElementLocations,
+  normalizeImageLocation,
+  planIgnoredSourceFolderRemoval,
+  promoteImageLocation,
+  removeImageLocationsForSource,
+  selectAvailableImageLocation,
+} from '../../../interfaces/media-locations';
+import type { IgnoredSourceFolderRemovalPlan } from '../../../interfaces/media-locations';
+import { normalizeIgnoredSubdirectories } from '../../../interfaces/source-folder-path';
+import { normalizeSourceFolderRelativePath } from '../../../interfaces/source-folder-tree';
 import {
   addTagToSelectedEntries,
   isTagInBranch,
@@ -60,6 +82,7 @@ import {
 } from '../../../node/thumbnail-count';
 import type { ThumbnailCoreStatus } from '../../../node/thumbnail-count';
 import type {
+  FolderScopeTarget,
   FolderThumbnailRegenerationStatus,
   ServerDetails,
 } from './statistics/statistics.component';
@@ -82,7 +105,13 @@ import {
 
 // Constants, etc
 import type { SupportedLanguage, RowNumbers } from '../common/app-state';
-import { AppState, DefaultImagesPerRow } from '../common/app-state';
+import {
+  AppState,
+  DefaultImagesPerRow,
+  normalizeGeneratePreviewsOnFolderAddition,
+  normalizeHideSubdirectoriesWithNoVideos,
+  normalizeScanFoldersOnAddition,
+} from '../common/app-state';
 import { Filters, filterKeyToIndex, FilterKeyNames } from '../common/filters';
 import { GLOBALS } from '../../../node/main-globals';
 import { LanguageLookup } from '../common/languages';
@@ -113,6 +142,7 @@ interface FolderThumbnailRegenerationRequest {
   failedVideos: number;
   hubFile: string;
   processedHashes: Set<string>;
+  relativePath: string;
   requestId: number;
   skippedVideos: number;
   sourceIndex: number;
@@ -464,6 +494,33 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.debounceUpdateMax();
   }
 
+  onSettingsTabKeydown(event: KeyboardEvent): void {
+    const lastTabIndex = 4;
+    let nextTabIndex: number | undefined;
+
+    if (event.key === 'ArrowRight') {
+      nextTabIndex = (this.settingTabToShow + 1) % (lastTabIndex + 1);
+    } else if (event.key === 'ArrowLeft') {
+      nextTabIndex = (this.settingTabToShow + lastTabIndex) % (lastTabIndex + 1);
+    } else if (event.key === 'Home') {
+      nextTabIndex = 0;
+    } else if (event.key === 'End') {
+      nextTabIndex = lastTabIndex;
+    }
+
+    if (nextTabIndex === undefined) {
+      return;
+    }
+
+    event.preventDefault();
+    this.settingTabToShow = nextTabIndex;
+
+    const tabList = (event.currentTarget as HTMLElement | null)?.parentElement;
+    setTimeout(() => {
+      (tabList?.querySelector(`#settings-tab-${nextTabIndex}`) as HTMLElement | null)?.focus();
+    });
+  }
+
   constructor(
     public autoTagsSaveService: AutoTagsSaveService,
     public cd: ChangeDetectorRef,
@@ -782,14 +839,47 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.electronService.ipcRenderer.on('directory-now-connected', (event, sourceIndex: number, sourcePath: string) => {
 
       // TODO -- if this error never happens, all is well; remove the `sourcePath` from this method :)
-      if (this.sourceFolderService.selectedSourceFolder[sourceIndex].path !== sourcePath) {
+      if (this.sourceFolderService.selectedSourceFolder[sourceIndex]?.path !== sourcePath) {
         console.log('WARNING HUGE ERROR HERE !!!!!! MUST NEVER HAPPEN !!!');
+        return;
       }
 
       this.sourceFolderService.sourceFolderConnected[sourceIndex] = true;
+
+      let preferredLocationChanged = false;
+      this.imageElementService.imageElements.forEach((element: ImageElement) => {
+        try {
+          const availableLocation = selectAvailableImageLocation(
+            element,
+            (candidateSourceIndex: number) => (
+              this.sourceFolderService.sourceFolderConnected[candidateSourceIndex] === true
+            ),
+          );
+          if (availableLocation && promoteImageLocation(element, availableLocation)) {
+            preferredLocationChanged = true;
+          }
+        } catch {
+          return;
+        }
+      });
+      if (preferredLocationChanged) {
+        this.imageElementService.finalArrayNeedsSaving = true;
+        this.resetFinalArrayRef();
+      }
     });
 
-    this.electronService.ipcRenderer.on('started-watching-this-dir', (event, sourceIndex: number) => {
+    this.electronService.ipcRenderer.on('started-watching-this-dir', (
+      event,
+      sourceIndex: number,
+      relativeScope = '',
+    ) => {
+      if (
+        !this.sourceFolderService.selectedSourceFolder[sourceIndex]
+        || !this.sourceFolderService.setActiveScanScope(sourceIndex, relativeScope)
+      ) {
+        console.error('Ignoring an invalid folder scan start:', sourceIndex, relativeScope);
+        return;
+      }
       this.allFinishedScanning = false;
       this.sourceFolderService.addCurrentScanning(sourceIndex);
     });
@@ -801,29 +891,92 @@ export class HomeComponent implements OnInit, AfterViewInit {
       sourceIndex: number,
       allFilesMap: Map<string, 1>,
       scannedSourcePath?: string,
+      relativeScope = '',
+      discoveredRelativeFolders: string[] = [],
     ) => {
-      this.finishFolderScan(sourceIndex);
+      let normalizedScope: string;
+      try {
+        normalizedScope = normalizeSourceFolderRelativePath(relativeScope);
+      } catch {
+        console.error('Ignoring a folder scan result with an invalid scope:', sourceIndex, relativeScope);
+        return;
+      }
+
+      if (this.sourceFolderService.getActiveScanScope(sourceIndex) !== normalizedScope) {
+        console.warn('Ignoring a stale folder scan result:', sourceIndex, normalizedScope);
+        return;
+      }
 
       const sourceFolder = this.sourceFolderService.selectedSourceFolder[sourceIndex];
       if (
         !(allFilesMap instanceof Map)
         || !sourceFolder
+        || !Array.isArray(discoveredRelativeFolders)
         || !this.folderScanPathMatches(sourceIndex, scannedSourcePath)
       ) {
         console.error('Ignoring an invalid folder scan result:', sourceIndex);
+        this.finishFolderScan(sourceIndex, normalizedScope);
         return;
       }
 
-      const newlyMissing = markMissingFolderEntries(
+      const attachmentResult = attachKnownLocationsFromSnapshot(
+        this.imageElementService.imageElements,
+        sourceIndex,
+        this.sourceFolderService.selectedSourceFolder,
+        allFilesMap,
+      );
+      const missingResult = reconcileMissingFolderEntriesInScope(
         this.imageElementService.imageElements,
         sourceIndex,
         sourceFolder.path,
+        normalizedScope,
         allFilesMap,
       );
+      this.sourceFolderService.replaceDiscoveredDirectoriesInScope(
+        sourceIndex,
+        normalizedScope,
+        discoveredRelativeFolders,
+      );
+      this.finishFolderScan(sourceIndex, normalizedScope);
 
-      if (newlyMissing > 0) {
+      if (attachmentResult.ambiguousPaths > 0) {
+        console.warn(
+          'Some overlapping media paths matched multiple catalogue entries and were not merged:',
+          attachmentResult.ambiguousPaths,
+        );
+      }
+      if (attachmentResult.changedEntries > 0 || missingResult.changedEntries > 0) {
         this.imageElementService.finalArrayNeedsSaving = true;
         this.deletePipeTrigger = !this.deletePipeTrigger;
+        this.resetFinalArrayRef();
+      }
+    });
+
+    // A persistent watcher can discover an exact path already represented by
+    // another configured source after its initial scan. Attach that one alias
+    // without rerunning metadata or thumbnail extraction.
+    this.electronService.ipcRenderer.on('known-source-location-found', (
+      event,
+      sourceIndex: number,
+      fullPath: string,
+      scannedSourcePath?: string,
+    ) => {
+      if (
+        typeof fullPath !== 'string'
+        || !this.folderScanPathMatches(sourceIndex, scannedSourcePath)
+      ) {
+        return;
+      }
+      const result = attachKnownLocationsFromSnapshot(
+        this.imageElementService.imageElements,
+        sourceIndex,
+        this.sourceFolderService.selectedSourceFolder,
+        new Map<string, 1>([[fullPath, 1]]),
+      );
+      if (result.changedEntries > 0) {
+        this.imageElementService.finalArrayNeedsSaving = true;
+        this.deletePipeTrigger = !this.deletePipeTrigger;
+        this.debounceImport();
       }
     });
 
@@ -831,9 +984,16 @@ export class HomeComponent implements OnInit, AfterViewInit {
       event,
       sourceIndex: number,
       message: string,
+      relativeScope = '',
     ) => {
       console.warn('Folder scan did not complete; catalogue entries were left unchanged:', message);
-      this.finishFolderScan(sourceIndex);
+      let normalizedScope: string;
+      try {
+        normalizedScope = normalizeSourceFolderRelativePath(relativeScope);
+      } catch {
+        return;
+      }
+      this.finishFolderScan(sourceIndex, normalizedScope);
     });
 
     this.electronService.ipcRenderer.on('folder-watch-error', (
@@ -848,26 +1008,91 @@ export class HomeComponent implements OnInit, AfterViewInit {
       );
     });
 
+    this.electronService.ipcRenderer.on('folder-scan-request-rejected', (
+      event,
+      sourceIndex: number,
+      message: string,
+    ) => {
+      console.warn('Folder scan request was rejected:', sourceIndex, message);
+      this.zone.run(() => {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.folderScanBusy'),
+        );
+      });
+    });
+
+    this.electronService.ipcRenderer.on('source-folder-directories-updated', (
+      event,
+      sourceIndex: number,
+      discoveredRelativeFolders: string[],
+    ) => {
+      if (
+        !this.sourceFolderService.selectedSourceFolder[sourceIndex]
+        || !Array.isArray(discoveredRelativeFolders)
+      ) {
+        return;
+      }
+      if (this.sourceFolderService.replaceDiscoveredDirectoriesInScope(
+        sourceIndex,
+        '',
+        discoveredRelativeFolders,
+      )) {
+        this.cd.detectChanges();
+      }
+    });
+
     // When `watch` folder and `chokidar` detects a file was deleted (can happen when renamed too!)
     // mark the element as missing without discarding its saved metadata.
     this.electronService.ipcRenderer.on('single-file-deleted', (event, sourceIndex: number, partialPath: string) => {
-      this.imageElementService.imageElements
-        // tslint:disable-next-line:triple-equals
-        .filter((element: ImageElement) => { return element.inputSource == sourceIndex; })
-        // notice the loosey-goosey comparison! this is because number  ^^  string comparison happening here!
-        .forEach((element: ImageElement) => {
-          if (
-            '\\' + partialPath === path.join(element.partialPath, element.fileName)
-            ||     partialPath === path.join(element.partialPath, element.fileName)
-          ) {
-            if (element.missing !== true && element.deleted !== true) {
-              console.log('FILE MISSING:', partialPath);
-              element.missing = true;
-              this.imageElementService.finalArrayNeedsSaving = true;
-              this.deletePipeTrigger = !this.deletePipeTrigger;
-            }
-          }
+      let normalizedDeletedPath: string;
+      let deletedPhysicalPath: string;
+      try {
+        normalizedDeletedPath = normalizeSourceFolderRelativePath(partialPath);
+        const sourceFolder = this.sourceFolderService.selectedSourceFolder[Number(sourceIndex)];
+        if (!sourceFolder?.path) {
+          throw new Error('The deleted file source is no longer configured.');
+        }
+        deletedPhysicalPath = this.normalizePhysicalPathKey(
+          path.resolve(sourceFolder.path, normalizedDeletedPath),
+        );
+      } catch {
+        console.warn('Ignoring a deleted-file notification with an invalid path.');
+        return;
+      }
+
+      let changed = false;
+      this.imageElementService.imageElements.forEach((element: ImageElement) => {
+        if (element.deleted === true) {
+          return;
+        }
+        let matchingLocations: ImageLocation[];
+        try {
+          matchingLocations = getImageLocations(element)
+            .filter((location: ImageLocation) => (
+              this.physicalPathKey(location) === deletedPhysicalPath
+            ));
+        } catch {
+          return;
+        }
+        if (matchingLocations.length === 0) {
+          return;
+        }
+        matchingLocations.forEach((matchingLocation: ImageLocation) => {
+          const didChange = markImageLocationsMissingInScope(
+            element,
+            matchingLocation.inputSource,
+            '',
+            (location: ImageLocation) => this.physicalPathKey(location) !== deletedPhysicalPath,
+          );
+          changed = didChange || changed;
         });
+      });
+
+      if (changed) {
+        console.log('FILE MISSING:', partialPath);
+        this.imageElementService.finalArrayNeedsSaving = true;
+        this.deletePipeTrigger = !this.deletePipeTrigger;
+      }
     });
 
     /**
@@ -938,6 +1163,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.appState.hubName = finalObject.hubName;
       this.appState.numOfFolders = finalObject.numOfFolders;
 
+      this.sourceFolderService.resetTransientState();
       this.sourceFolderService.selectedSourceFolder = finalObject.inputDirs;
       this.sourceFolderService.resetConnected();
 
@@ -1115,6 +1341,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
         return;
       }
 
+      if (this.attachOverlappingSourceLocation(element)) {
+        return;
+      }
+
       // A failed path is intentionally rescanned. Replace its path-only entry
       // rather than appending a duplicate, preserving any user-entered data.
       const existingFailureIndex = this.imageElementService.imageElements.findIndex((currentElement) => {
@@ -1203,7 +1433,14 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.justStarted();
   }
 
-  private finishFolderScan(sourceIndex: number): void {
+  private finishFolderScan(sourceIndex: number, expectedScope?: string): void {
+    if (
+      expectedScope !== undefined
+      && this.sourceFolderService.getActiveScanScope(sourceIndex) !== expectedScope
+    ) {
+      return;
+    }
+    this.sourceFolderService.clearActiveScanScope(sourceIndex);
     this.sourceFolderService.removeCurrentScanning(sourceIndex);
     this.allFinishedScanning = this.sourceFolderService.areAllFinishedScanning();
     if (this.allFinishedScanning) {
@@ -1219,6 +1456,94 @@ export class HomeComponent implements OnInit, AfterViewInit {
     const currentSourcePath = this.sourceFolderService.selectedSourceFolder[sourceIndex]?.path;
     return Boolean(currentSourcePath)
       && path.normalize(currentSourcePath) === path.normalize(scannedSourcePath);
+  }
+
+  /**
+   * A parent and child source can resolve to the same physical video. Keep one
+   * logical entry and attach the newly verified source location instead of
+   * duplicating user metadata. Hash equality corroborates path identity; hash
+   * equality alone is deliberately insufficient because identical copies are
+   * legitimate separate files.
+   */
+  private attachOverlappingSourceLocation(incomingElement: ImageElement): boolean {
+    let incomingLocation: ImageLocation;
+    let incomingPhysicalPath: string;
+    try {
+      incomingLocation = normalizeImageLocation(incomingElement);
+      incomingPhysicalPath = this.physicalPathKey(incomingLocation);
+    } catch {
+      return false;
+    }
+
+    const matches = this.imageElementService.imageElements.filter((candidate: ImageElement) => {
+      if (candidate.deleted === true) {
+        return false;
+      }
+      try {
+        return getImageLocations(candidate).some((location: ImageLocation) => (
+          this.physicalPathKey(location) === incomingPhysicalPath
+        ));
+      } catch {
+        return false;
+      }
+    });
+
+    if (matches.length > 1) {
+      console.warn(
+        'An overlapping import matched multiple existing entries; the incoming duplicate was suppressed.',
+        incomingPhysicalPath,
+      );
+      return true;
+    }
+    if (matches.length === 0) {
+      return false;
+    }
+
+    const target = matches[0];
+    const incomingFailed = isMetadataImportFailure(incomingElement);
+    const targetFailed = isMetadataImportFailure(target);
+
+    if (!incomingFailed && (targetFailed || target.hash !== incomingElement.hash)) {
+      const targetIndex = this.imageElementService.imageElements.indexOf(target);
+      copyRecoveredEntryMetadata(incomingElement, target);
+      incomingElement.locations = getImageLocations(target);
+      normalizeImageElementLocations(incomingElement);
+      attachImageLocation(incomingElement, incomingLocation);
+      incomingElement.tags = (incomingElement.tags || []).filter((tag: string) => (
+        tag !== IMPORT_ERROR_TAG
+      ));
+      delete incomingElement.metadataImportFailed;
+      incomingElement.index = target.index;
+      this.imageElementService.imageElements[targetIndex] = incomingElement;
+      this.imageElementService.finalArrayNeedsSaving = true;
+      this.deletePipeTrigger = !this.deletePipeTrigger;
+      this.debounceImport();
+      return true;
+    }
+
+    const changed = attachImageLocation(target, incomingLocation);
+    if (changed) {
+      this.imageElementService.finalArrayNeedsSaving = true;
+      this.deletePipeTrigger = !this.deletePipeTrigger;
+      this.debounceImport();
+    }
+    return true;
+  }
+
+  private physicalPathKey(location: ImageLocation): string {
+    const source = this.sourceFolderService.selectedSourceFolder[location.inputSource];
+    if (!source?.path) {
+      throw new Error('The media source no longer exists.');
+    }
+    const relativeFolder = normalizeSourceFolderRelativePath(location.partialPath);
+    return this.normalizePhysicalPathKey(
+      path.resolve(source.path, relativeFolder, location.fileName),
+    );
+  }
+
+  private normalizePhysicalPathKey(value: string): string {
+    const resolvedPath = path.normalize(value);
+    return process.platform === 'win32' ? resolvedPath.toLocaleLowerCase('en-US') : resolvedPath;
   }
 
   // =======================================================================================================================================
@@ -1251,7 +1576,12 @@ export class HomeComponent implements OnInit, AfterViewInit {
    */
   draggingVideoFile(event, item: ImageElement): void {
     event.preventDefault();
-    const fullPath = this.filePathService.getPathFromImageElement(item);
+    const projectedItem = this.filePathService.projectToAvailableImageLocation(item);
+    if (!projectedItem) {
+      this.modalService.openSnackbar(this.translate.instant('SETTINGS.rootFolderNotLive'));
+      return;
+    }
+    const fullPath = this.filePathService.getPathFromImageElement(projectedItem);
     const imgPath = path.join(this.appState.selectedOutputFolder, 'vha-' + this.appState.hubName, 'thumbnails', item.hash + '.jpg');
     this.electronService.ipcRenderer.send('drag-video-out-of-electron', fullPath, imgPath);
   }
@@ -1283,6 +1613,8 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * Helper method only to be used by `debounceImport()`
    */
   private resetFinalArrayRef(): void {
+    clearTimeout(this.newVideoImportTimeout);
+    this.newVideoImportTimeout = null;
     this.newVideoImportCounter = 0;
     this.imageElementService.imageElements = this.imageElementService.imageElements.slice();
     this.cd.detectChanges();
@@ -1294,13 +1626,341 @@ export class HomeComponent implements OnInit, AfterViewInit {
    */
   deleteInputSourceFiles(sourceIndex: number): void {
     this.imageElementService.imageElements.forEach((element: ImageElement) => {
-      // tslint:disable-next-line:triple-equals
-      if (element.inputSource == sourceIndex) { // TODO -- stop the loosey goosey `==` and figure out `string` vs `number`
-        element.deleted = true;
+      try {
+        const result = removeImageLocationsForSource(element, Number(sourceIndex));
+        if (!result.changed) {
+          return;
+        }
+        if (result.survivingLocationCount === 0) {
+          element.deleted = true;
+        } else {
+          delete element.deleted;
+        }
         this.imageElementService.finalArrayNeedsSaving = true;
+      } catch (error) {
+        console.warn('Unable to detach an invalid media location safely:', error);
       }
     });
     this.deletePipeTrigger = !this.deletePipeTrigger;
+  }
+
+  /**
+   * Include or ignore one non-root source subtree. Ignoring first builds a
+   * non-mutating catalogue plan so the source preference and media locations
+   * can be applied together after any required metadata warning.
+   */
+  toggleIgnoredSubdirectory(target: FolderScopeTarget): void {
+    const sourceIndex = Number(target?.sourceIndex);
+    let relativePath: string;
+    try {
+      relativePath = normalizeSourceFolderRelativePath(target?.relativePath);
+    } catch {
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.ignoredSubdirectoryUnavailable'),
+      );
+      return;
+    }
+
+    const sourceFolder = this.sourceFolderService.selectedSourceFolder[sourceIndex];
+    if (
+      !Number.isSafeInteger(sourceIndex)
+      || sourceIndex < 0
+      || relativePath === ''
+      || !sourceFolder
+      || this.folderThumbnailRegenerationStatus !== null
+      || this.sourceFolderService.currentlyScanning.get(sourceIndex) === true
+    ) {
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.ignoredSubdirectoryUnavailable'),
+      );
+      return;
+    }
+
+    let currentIgnored: string[];
+    try {
+      currentIgnored = normalizeIgnoredSubdirectories(sourceFolder.ignoredSubdirectories);
+    } catch {
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.ignoredSubdirectoryUnavailable'),
+      );
+      return;
+    }
+
+    if (currentIgnored.includes(relativePath)) {
+      const nextIgnored = normalizeIgnoredSubdirectories(
+        currentIgnored.filter((scope: string) => scope !== relativePath),
+      );
+      const expectedHubFile = this.appState.currentVhaFile;
+      const sourcePath = sourceFolder.path;
+      void this.requestIgnoredSubdirectoryUpdate(
+        sourceIndex,
+        nextIgnored,
+        this.imageElementService.imageElements,
+      ).then((result) => {
+        const currentFolder = this.sourceFolderService.selectedSourceFolder[sourceIndex];
+        if (
+          this.appState.currentVhaFile !== expectedHubFile
+          || !currentFolder
+          || currentFolder.path !== sourcePath
+        ) {
+          this.modalService.openSnackbar(
+            this.translate.instant('STATISTICS.ignoredSubdirectorySelectionChanged'),
+          );
+          return;
+        }
+        this.writeIgnoredSubdirectories(currentFolder, nextIgnored);
+        this.imageElementService.finalArrayNeedsSaving = true;
+        this.restartSourceAfterIgnoredSubdirectoryUpdate(
+          sourceIndex,
+          sourcePath,
+          result.wasWatching,
+          relativePath,
+        );
+        this.cd.detectChanges();
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.includeSubdirectoryComplete'),
+        );
+      }).catch(() => {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.ignoredSubdirectoryUnavailable'),
+        );
+      });
+      return;
+    }
+
+    let plan: IgnoredSourceFolderRemovalPlan;
+    let nextIgnored: string[];
+    try {
+      plan = planIgnoredSourceFolderRemoval(
+        this.imageElementService.imageElements,
+        sourceIndex,
+        relativePath,
+      );
+      nextIgnored = normalizeIgnoredSubdirectories([...currentIgnored, relativePath]);
+    } catch {
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.ignoredSubdirectoryUnavailable'),
+      );
+      return;
+    }
+
+    const sourcePath = sourceFolder.path;
+    const expectedHubFile = this.appState.currentVhaFile;
+    const expectedIgnored = currentIgnored.join('\0');
+    const applyPlan = async (currentPlan: IgnoredSourceFolderRemovalPlan): Promise<void> => {
+      const currentFolder = this.sourceFolderService.selectedSourceFolder[sourceIndex];
+      if (
+        this.appState.currentVhaFile !== expectedHubFile
+        || !currentFolder
+        || currentFolder.path !== sourcePath
+      ) {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.ignoredSubdirectorySelectionChanged'),
+        );
+        return;
+      }
+
+      let result: { applied: true; ignoredSubdirectories: string[]; wasWatching: boolean };
+      try {
+        result = await this.requestIgnoredSubdirectoryUpdate(
+          sourceIndex,
+          nextIgnored,
+          currentPlan.nextElements,
+        );
+      } catch {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.ignoredSubdirectoryUnavailable'),
+        );
+        return;
+      }
+
+      const folderAfterUpdate = this.sourceFolderService.selectedSourceFolder[sourceIndex];
+      if (
+        this.appState.currentVhaFile !== expectedHubFile
+        || !folderAfterUpdate
+        || folderAfterUpdate.path !== sourcePath
+      ) {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.ignoredSubdirectorySelectionChanged'),
+        );
+        return;
+      }
+
+      this.writeIgnoredSubdirectories(folderAfterUpdate, nextIgnored);
+      currentPlan.nextElements.forEach((element: ImageElement, index: number) => {
+        element.index = index;
+      });
+      this.imageElementService.imageElements = currentPlan.nextElements;
+      this.imageElementService.finalArrayNeedsSaving = true;
+      this.restartSourceAfterIgnoredSubdirectoryUpdate(
+        sourceIndex,
+        sourcePath,
+        result.wasWatching,
+      );
+      this.refreshAfterIgnoredSubdirectoryRemoval();
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.ignoredSubdirectoryComplete'),
+      );
+    };
+
+    if (plan.metadataAffectedEntryCount === 0) {
+      void applyPlan(plan);
+      return;
+    }
+
+    const folderPath = path.join(sourcePath, ...relativePath.split('/'));
+    const folderName = path.basename(folderPath) || folderPath;
+    this.modalService.openConfirmationDialog({
+      cancelLabel: this.translate.instant('SYSTEM.cancel'),
+      confirmLabel: this.translate.instant('STATISTICS.ignoreSubdirectory'),
+      facts: [
+        { label: 'Folder', value: folderPath },
+        { label: 'Source locations removed', value: plan.removedLocationCount },
+        { label: 'Catalogue entries removed', value: plan.removedEntryCount },
+        { label: 'Entries kept via another location', value: plan.retainedSharedEntryCount },
+        { label: 'Metadata-bearing entries removed', value: plan.metadataRemovedEntryCount },
+        { label: 'Metadata preserved via another location', value: plan.metadataRetainedSharedEntryCount },
+      ],
+      summary: this.translate.instant('STATISTICS.confirmIgnoreSubdirectorySummary', {
+        folderName,
+      }),
+      supportingText: `${this.translate.instant(
+        'STATISTICS.ignoredSubdirectoryMetadataWarning',
+        { count: plan.metadataAffectedEntryCount },
+      )} ${this.translate.instant('STATISTICS.confirmIgnoreSubdirectorySupportingText')}`,
+      title: this.translate.instant('STATISTICS.confirmIgnoreSubdirectoryTitle'),
+      tone: 'destructive',
+    }).subscribe((confirmed: boolean) => {
+      if (!confirmed || this.appState.currentVhaFile !== expectedHubFile) {
+        return;
+      }
+
+      const currentFolder = this.sourceFolderService.selectedSourceFolder[sourceIndex];
+      let currentPlan: IgnoredSourceFolderRemovalPlan;
+      try {
+        if (
+          !currentFolder
+          || currentFolder.path !== sourcePath
+          || this.sourceFolderService.currentlyScanning.get(sourceIndex) === true
+          || normalizeIgnoredSubdirectories(currentFolder.ignoredSubdirectories).join('\0') !== expectedIgnored
+        ) {
+          throw new Error('The source folder changed.');
+        }
+        currentPlan = planIgnoredSourceFolderRemoval(
+          this.imageElementService.imageElements,
+          sourceIndex,
+          relativePath,
+        );
+      } catch {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.ignoredSubdirectorySelectionChanged'),
+        );
+        return;
+      }
+
+      if (!this.ignoredSourceFolderPlansMatch(plan, currentPlan)) {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.ignoredSubdirectorySelectionChanged'),
+        );
+        return;
+      }
+      void applyPlan(currentPlan);
+    });
+  }
+
+  private requestIgnoredSubdirectoryUpdate(
+    sourceIndex: number,
+    ignoredSubdirectories: string[],
+    postChangeCatalogue: ImageElement[],
+  ): Promise<{ applied: true; ignoredSubdirectories: string[]; wasWatching: boolean }> {
+    return this.electronService.ipcRenderer.invoke(
+      'update-source-folder-ignored-subdirectories',
+      sourceIndex,
+      ignoredSubdirectories,
+      postChangeCatalogue,
+    ).then((result) => {
+      if (
+        result?.applied !== true
+        || typeof result.wasWatching !== 'boolean'
+        || normalizeIgnoredSubdirectories(result.ignoredSubdirectories).join('\0')
+          !== ignoredSubdirectories.join('\0')
+      ) {
+        throw new Error('The source-folder exclusion update was not acknowledged.');
+      }
+      return result;
+    });
+  }
+
+  private restartSourceAfterIgnoredSubdirectoryUpdate(
+    sourceIndex: number,
+    sourcePath: string,
+    wasWatching: boolean,
+    rescanRelativePath?: string,
+  ): void {
+    if (wasWatching) {
+      this.electronService.ipcRenderer.send(
+        'start-watching-folder',
+        sourceIndex,
+        sourcePath,
+        true,
+        this.appState.generatePreviewsOnFolderAddition,
+      );
+      return;
+    }
+    if (rescanRelativePath !== undefined) {
+      this.electronService.ipcRenderer.send(
+        'rescan-source-folder-scope',
+        sourceIndex,
+        rescanRelativePath,
+        this.appState.generatePreviewsOnFolderAddition,
+      );
+    }
+  }
+
+  private writeIgnoredSubdirectories(folder: SourceFolder, scopes: string[]): void {
+    if (scopes.length === 0) {
+      delete folder.ignoredSubdirectories;
+    } else {
+      folder.ignoredSubdirectories = scopes;
+    }
+  }
+
+  private ignoredSourceFolderPlansMatch(
+    expected: IgnoredSourceFolderRemovalPlan,
+    current: IgnoredSourceFolderRemovalPlan,
+  ): boolean {
+    return expected.affectedEntryCount === current.affectedEntryCount
+      && expected.affectedEntrySignatures.join('\0') === current.affectedEntrySignatures.join('\0')
+      && expected.metadataAffectedEntryCount === current.metadataAffectedEntryCount
+      && expected.metadataRemovedEntryCount === current.metadataRemovedEntryCount
+      && expected.metadataRetainedSharedEntryCount === current.metadataRetainedSharedEntryCount
+      && expected.removedEntryCount === current.removedEntryCount
+      && expected.removedLocationCount === current.removedLocationCount
+      && expected.retainedSharedEntryCount === current.retainedSharedEntryCount;
+  }
+
+  private refreshAfterIgnoredSubdirectoryRemoval(): void {
+    const previouslySelected = this.currentClickedItem;
+    this.deletePipeTrigger = !this.deletePipeTrigger;
+    this.manualTagsService.rebuildFromImages(this.imageElementService.imageElements);
+    this.wordFrequencyService.computeFrequencyArray(this.imageElementService.imageElements.length, 165);
+    this.ifShowDetailsViewRefreshTags();
+
+    if (previouslySelected) {
+      const replacement = this.imageElementService.imageElements.find((element: ImageElement) => (
+        element.uuid === previouslySelected.uuid
+      ));
+      if (replacement) {
+        this.currentClickedItemName = replacement.cleanName;
+        this.updateCurrentClickedItem(replacement);
+      } else {
+        this.currentClickedItem = undefined;
+        this.currentClickedItemName = '';
+      }
+    }
+
+    this.cd.detectChanges();
+    setTimeout(() => this.virtualScroller()?.refresh(), 0);
   }
 
   /**
@@ -1489,6 +2149,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
     if (this.blockActionDuringFolderThumbnailRegeneration()) {
       return;
     }
+    this.sourceFolderService.resetTransientState();
     this.sourceFolderService.selectedSourceFolder = this.wizard.selectedSourceFolder;
     this.appState.selectedOutputFolder = this.wizard.selectedOutputFolder;
     this.electronService.ipcRenderer.send('start-the-import', this.wizard);
@@ -1605,7 +2266,8 @@ export class HomeComponent implements OnInit, AfterViewInit {
    */
   public openVideo(item: ImageElement, clickedThumbnailIndex?: number): void {
 
-    if (!this.sourceFolderService.sourceFolderConnected[item.inputSource]) {
+    const location = this.filePathService.getAvailableImageLocation(item);
+    if (!location) {
       console.log('not connected!');
       this.modalService.openSnackbar(this.translate.instant('SETTINGS.rootFolderNotLive'));
 
@@ -1616,9 +2278,9 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
     this.updateCurrentClickedItem(item);
 
-    this.currentPlayingFolder = item.partialPath;
+    this.currentPlayingFolder = location.partialPath;
     this.currentClickedItemName = item.cleanName;
-    const fullPath = this.filePathService.getPathFromImageElement(item);
+    const fullPath = this.filePathService.getPathFromImageLocation(location);
     this.fullPathToCurrentFile = fullPath;
 
     if (this.appState.preferredVideoPlayer) {
@@ -1639,7 +2301,12 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * handle right-click and `Open folder`
    */
   openContainingFolderNow(): void {
-    this.fullPathToCurrentFile = this.filePathService.getPathFromImageElement(this.currentRightClickedItem);
+    const location = this.filePathService.getAvailableImageLocation(this.currentRightClickedItem);
+    if (!location) {
+      this.modalService.openSnackbar(this.translate.instant('SETTINGS.rootFolderNotLive'));
+      return;
+    }
+    this.fullPathToCurrentFile = this.filePathService.getPathFromImageLocation(location);
     this.openInExplorer();
   }
 
@@ -2228,9 +2895,18 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.toggleButtonOpposite('showTags');
     } else if (uniqueKey === 'playPlaylist') {
       const execPath: string = this.appState.preferredVideoPlayer;
+      const availablePlaylist = this.pipeSideEffectService.galleryShowing
+        .map((item: ImageElement): ImageElement | undefined => {
+          try {
+            return this.filePathService.projectToAvailableImageLocation(item);
+          } catch {
+            return undefined;
+          }
+        })
+        .filter((item: ImageElement | undefined): item is ImageElement => item !== undefined);
       this.electronService.ipcRenderer.send(
         'please-create-playlist',
-        this.pipeSideEffectService.galleryShowing,
+        availablePlaylist,
         this.sourceFolderService.selectedSourceFolder,
         execPath
       );
@@ -2663,6 +3339,15 @@ export class HomeComponent implements OnInit, AfterViewInit {
   restoreSettingsFromBefore(settingsObject: SettingsObject): void {
     if (settingsObject.appState) {
       this.appState = settingsObject.appState;
+      this.appState.scanFoldersOnAddition = normalizeScanFoldersOnAddition(
+        settingsObject.appState.scanFoldersOnAddition,
+      );
+      this.appState.generatePreviewsOnFolderAddition = normalizeGeneratePreviewsOnFolderAddition(
+        settingsObject.appState.generatePreviewsOnFolderAddition,
+      );
+      this.appState.hideSubdirectoriesWithNoVideos = normalizeHideSubdirectoriesWithNoVideos(
+        settingsObject.appState.hideSubdirectoriesWithNoVideos,
+      );
       if (!settingsObject.appState.currentZoomLevel) {  // catch error <-- old VHA apps didn't have `currentZoomLevel`
         this.appState.currentZoomLevel = 1;             // TODO -- remove whole block -- not needed any more !?!?!?!??!?! -----------------!
       }
@@ -2802,13 +3487,18 @@ export class HomeComponent implements OnInit, AfterViewInit {
       );
       return;
     }
+    const projectedItem = this.filePathService.projectToAvailableImageLocation(item);
+    if (!projectedItem) {
+      this.modalService.openSnackbar(this.translate.instant('SETTINGS.rootFolderNotLive'));
+      return;
+    }
     this.individualThumbnailRegenerationStatus = {
       cancelling: false,
       fileHash: item.hash,
-      fileName: item.fileName,
+      fileName: projectedItem.fileName,
     };
     this.startThumbnailRegenerationClock();
-    this.electronService.ipcRenderer.send('regenerate-thumbnails', item);
+    this.electronService.ipcRenderer.send('regenerate-thumbnails', projectedItem);
   }
 
   /**
@@ -2816,13 +3506,24 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * folder. The eligible set is recalculated after confirmation so a delayed
    * response cannot operate on stale catalogue entries.
    */
-  confirmRegenerateFolderThumbnails(sourceIndex: number): void {
+  confirmRegenerateFolderThumbnails(target: FolderScopeTarget): void {
     if (this.thumbnailRegenerationActive) {
       this.modalService.openSnackbar(
         this.translate.instant('RIGHTCLICK.thumbnailRegenerationBusy'),
       );
       return;
     }
+
+    let relativePath: string;
+    try {
+      relativePath = normalizeSourceFolderRelativePath(target?.relativePath || '');
+    } catch {
+      this.modalService.openSnackbar(
+        this.translate.instant('STATISTICS.folderThumbnailRegenerationUnavailable'),
+      );
+      return;
+    }
+    const sourceIndex = Number(target?.sourceIndex);
 
     const folder = this.sourceFolderService.selectedSourceFolder[sourceIndex];
     if (
@@ -2839,6 +3540,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
     const plan = planFolderThumbnailRegeneration(
       this.imageElementService.imageElements,
       sourceIndex,
+      relativePath,
     );
     if (plan.targets.length === 0) {
       this.modalService.openSnackbar(
@@ -2847,7 +3549,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
       return;
     }
 
-    const folderPath = folder.path;
+    const sourceFolderPath = folder.path;
+    const folderPath = relativePath
+      ? path.join(sourceFolderPath, ...relativePath.split('/'))
+      : sourceFolderPath;
     const folderName = path.basename(folderPath) || folderPath;
     const videoLabel = plan.videoCount === 1 ? 'video' : 'videos';
 
@@ -2879,7 +3584,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       const currentFolder = this.sourceFolderService.selectedSourceFolder[sourceIndex];
       if (
         !currentFolder
-        || currentFolder.path !== folderPath
+        || currentFolder.path !== sourceFolderPath
         || this.sourceFolderService.sourceFolderConnected[sourceIndex] !== true
       ) {
         this.modalService.openSnackbar(
@@ -2891,6 +3596,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       const currentPlan = planFolderThumbnailRegeneration(
         this.imageElementService.imageElements,
         sourceIndex,
+        relativePath,
       );
       if (!folderThumbnailRegenerationPlansMatch(plan, currentPlan)) {
         this.modalService.openSnackbar(
@@ -2910,6 +3616,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
         failedVideos: 0,
         hubFile,
         processedHashes: new Set<string>(),
+        relativePath,
         requestId,
         skippedVideos: currentPlan.skippedVideos,
         sourceIndex,
@@ -2919,6 +3626,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       };
       this.folderThumbnailRegenerationStatus = {
         completedJobs: 0,
+        relativePath,
         sourceIndex,
         totalJobs: currentPlan.targets.length,
       };
@@ -2927,6 +3635,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
         'regenerate-folder-thumbnails',
         requestId,
         sourceIndex,
+        relativePath,
         hubFile,
         currentPlan.eligibleVideos,
       );
@@ -2970,10 +3679,13 @@ export class HomeComponent implements OnInit, AfterViewInit {
   }
 
   get thumbnailRegenerationFolderName(): string {
-    const sourceIndex = this.folderThumbnailRegenerationStatus?.sourceIndex;
-    const folderPath = sourceIndex === undefined
+    const status = this.folderThumbnailRegenerationStatus;
+    const sourceFolderPath = status === null || status === undefined
       ? ''
-      : this.sourceFolderService.selectedSourceFolder[sourceIndex]?.path;
+      : this.sourceFolderService.selectedSourceFolder[status.sourceIndex]?.path;
+    const folderPath = sourceFolderPath && status?.relativePath
+      ? path.join(sourceFolderPath, ...status.relativePath.split('/'))
+      : sourceFolderPath;
     return folderPath ? path.basename(folderPath) || folderPath : '';
   }
 
@@ -3050,6 +3762,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.folderThumbnailRegenerationStatus = {
       cancelling: this.folderThumbnailRegenerationStatus?.cancelling,
       completedJobs: Math.min(progress.completed, progress.total),
+      relativePath: request.relativePath,
       sourceIndex,
       totalJobs: progress.total,
     };
@@ -3207,8 +3920,13 @@ export class HomeComponent implements OnInit, AfterViewInit {
         return;
       }
 
-      const base: string = this.sourceFolderService.selectedSourceFolder[item.inputSource].path;
-      this.electronService.ipcRenderer.send('delete-video-file', base, item, dangerously);
+      const projectedItem = this.filePathService.projectToAvailableImageLocation(item);
+      if (!projectedItem) {
+        this.modalService.openSnackbar(this.translate.instant('SETTINGS.rootFolderNotLive'));
+        return;
+      }
+      const base = this.sourceFolderService.selectedSourceFolder[projectedItem.inputSource].path;
+      this.electronService.ipcRenderer.send('delete-video-file', base, projectedItem, dangerously);
     });
   }
 

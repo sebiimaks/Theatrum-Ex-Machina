@@ -4,6 +4,7 @@ import { Pipe } from '@angular/core';
 import { SourceFolderService } from '../components/statistics/source-folder.service';
 
 import type { ImageElement } from '../../../interfaces/final-object.interface';
+import { selectAvailableImageLocation } from '../../../interfaces/media-locations';
 
 @Pipe({
   standalone: false,
@@ -23,7 +24,10 @@ export class HideOfflinePipe implements PipeTransform {
   transform(finalArray: ImageElement[], hideOffline: boolean): ImageElement[] {
 
     if (hideOffline) {
-      return finalArray.filter(element => this.sourceFolderService.sourceFolderConnected[element.inputSource]);
+      return finalArray.filter((element: ImageElement) => Boolean(selectAvailableImageLocation(
+        element,
+        (sourceIndex: number) => this.sourceFolderService.sourceFolderConnected[sourceIndex] === true,
+      )));
     } else {
       return finalArray;
     }

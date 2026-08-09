@@ -45,12 +45,39 @@ export const DefaultImagesPerRow: RowNumbers = {
   showClips: 4,
 };
 
+/**
+ * Preserve an explicitly saved preference while keeping the historical
+ * scan-on-addition behaviour for settings written before the option existed.
+ */
+export function normalizeScanFoldersOnAddition(value: unknown): boolean {
+  return typeof value === 'boolean' ? value : true;
+}
+
+/**
+ * Older settings files predate the independent preview-generation option.
+ * Preserve the historical behaviour for those users while retaining an
+ * explicitly saved choice.
+ */
+export function normalizeGeneratePreviewsOnFolderAddition(value: unknown): boolean {
+  return typeof value === 'boolean' ? value : true;
+}
+
+/**
+ * Empty source subdirectories were historically shown in the Current Hub
+ * folder tree, so legacy and malformed settings keep that presentation.
+ */
+export function normalizeHideSubdirectoriesWithNoVideos(value: unknown): boolean {
+  return typeof value === 'boolean' ? value : false;
+}
+
 export const AppState: AppStateInterface = { // AppState is saved into `settings.json` so it persists
   addtionalExtensions: '',
   currentSort: 'default',
   currentVhaFile: '',  // full path to the catalogue file -- TODO: rename to `currentVhaFilePath`
   currentView: 'showThumbnails',
   currentZoomLevel: 1,
+  generatePreviewsOnFolderAddition: true,
+  hideSubdirectoriesWithNoVideos: false,
   hubName: '',
   imgsPerRow: DefaultImagesPerRow,
   language: 'en',
@@ -58,6 +85,7 @@ export const AppState: AppStateInterface = { // AppState is saved into `settings
   numOfFolders: 0,
   port: 3000,
   preferredVideoPlayer: '',
+  scanFoldersOnAddition: true,
   selectedOutputFolder: '',
   sortTagsByFrequency: false,
   videoPlayerArgs: '',
@@ -69,6 +97,8 @@ export interface AppStateInterface {
   currentVhaFile: string;
   currentView: SupportedView;
   currentZoomLevel: number;
+  generatePreviewsOnFolderAddition: boolean;
+  hideSubdirectoriesWithNoVideos: boolean;
   hubName: string;
   imgsPerRow: RowNumbers;
   language: SupportedLanguage;
@@ -76,6 +106,7 @@ export interface AppStateInterface {
   numOfFolders: number;
   port: number;
   preferredVideoPlayer: string;
+  scanFoldersOnAddition: boolean;
   selectedOutputFolder: string;
   sortTagsByFrequency: boolean; // when `false` sort tags alphabetically
   videoPlayerArgs: string;

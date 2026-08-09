@@ -24,8 +24,10 @@ import {
   isThumbnailRegenerationActive,
   regenerateFolderThumbnails,
   regenerateThumbnails,
+  rescanSourceFolderScope,
   removeThumbnailsNotInHub,
   ThumbnailRegenerationError,
+  updateSourceFolderIgnoredSubdirectories,
 } from './main-extract-async';
 import { writeJsonAtomically } from './vha-file-persistence';
 import {
@@ -35,8 +37,13 @@ import {
   ProcessLaunch,
   requireConfiguredSourceRoot,
   resolveExistingMediaPath,
+  resolveExistingSourceSubfolder,
   resolveNewMediaPath,
 } from './local-operation-safety';
+import {
+  normalizeIgnoredSubdirectories,
+  normalizeSourceFolderRelativePath,
+} from '../interfaces/source-folder-path';
 
 let activeCustomThumbnailReplacements = 0;
 
@@ -473,11 +480,150 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
   /**
    * Stop watching a particular folder
    */
-  trustedIpcOn('start-watching-folder', (event, watchedFolderIndex: string, path2: string, persistent: boolean) => {
-    // annoyingly it's not a number :     ^^^^^^^^^^^^^^^^^^ -- because object keys are strings :(
-    console.log('start watching:', watchedFolderIndex, path2, persistent);
-    startWatcher(parseInt(watchedFolderIndex, 10), path2, persistent);
+  trustedIpcOn('start-watching-folder', (
+    event,
+    watchedFolderIndex: string | number,
+    path2: string,
+    persistent: boolean,
+    generateAutomaticPreviews: unknown = true,
+  ) => {
+    // Object keys arrive as strings, but they still must identify the exact
+    // configured root. A watch toggle must never be able to remap a source.
+    try {
+      const sourceIndex = typeof watchedFolderIndex === 'number'
+        ? watchedFolderIndex
+        : /^(0|[1-9][0-9]*)$/.test(watchedFolderIndex)
+          ? Number(watchedFolderIndex)
+          : Number.NaN;
+      if (
+        !Number.isSafeInteger(sourceIndex)
+        || sourceIndex < 0
+        || typeof persistent !== 'boolean'
+        || typeof generateAutomaticPreviews !== 'boolean'
+      ) {
+        throw new Error('The source folder watch request is invalid.');
+      }
+      const sourceFolder = GLOBALS.selectedSourceFolders[sourceIndex];
+      if (!sourceFolder) {
+        throw new Error('The source folder is not configured for this catalogue.');
+      }
+      const configuredRoot = requireConfiguredSourceRoot(path2, [sourceFolder.path]);
+      resolveExistingSourceSubfolder(configuredRoot, '');
+      console.log('start watching:', sourceIndex, configuredRoot, persistent);
+      startWatcher(sourceIndex, configuredRoot, persistent, generateAutomaticPreviews);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      event.sender.send('folder-scan-failed', Number(watchedFolderIndex), message, '');
+    }
   });
+
+  /**
+   * Register a newly selected source root in the main process, then optionally
+   * scan it. Validation happens before GLOBALS changes so invalid or missing
+   * paths cannot replace an existing catalogue source.
+   */
+  trustedIpcOn(
+    'configure-source-folder',
+    (
+      event,
+      sourceIndex: number,
+      absoluteRoot: unknown,
+      scanImmediately: unknown,
+      generateAutomaticPreviews: unknown = true,
+    ): void => {
+      let normalizedRoot: string;
+      try {
+        if (!Number.isSafeInteger(sourceIndex) || sourceIndex < 0) {
+          throw new Error('The source folder index is invalid.');
+        }
+        if (typeof scanImmediately !== 'boolean') {
+          throw new Error('The source folder scan setting is invalid.');
+        }
+        if (typeof generateAutomaticPreviews !== 'boolean') {
+          throw new Error('The folder-add preview generation setting is invalid.');
+        }
+
+        normalizedRoot = normalizeAbsolutePath(absoluteRoot, 'Source folder');
+        resolveExistingSourceSubfolder(normalizedRoot, '');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        event.sender.send('folder-scan-failed', sourceIndex, message, '');
+        return;
+      }
+
+      closeWatcher(sourceIndex);
+      const previousSourceFolder = GLOBALS.selectedSourceFolders[sourceIndex];
+      const ignoredSubdirectories = normalizeIgnoredSubdirectories(
+        previousSourceFolder?.ignoredSubdirectories,
+      );
+      GLOBALS.selectedSourceFolders[sourceIndex] = {
+        ...(ignoredSubdirectories.length > 0 ? { ignoredSubdirectories } : {}),
+        path: normalizedRoot,
+        watch: false,
+      };
+      event.sender.send('directory-now-connected', sourceIndex, normalizedRoot);
+
+      if (scanImmediately) {
+        try {
+          rescanSourceFolderScope(sourceIndex, '', generateAutomaticPreviews);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          event.sender.send('folder-scan-failed', sourceIndex, message, '');
+        }
+      }
+    },
+  );
+
+  /** Recursively rescan one validated root-relative source subtree. */
+  trustedIpcOn(
+    'rescan-source-folder-scope',
+    (
+      event,
+      sourceIndex: number,
+      relativePath: unknown,
+      generateAutomaticPreviews: unknown = true,
+    ): void => {
+      let reportedScope = '';
+      try {
+        if (typeof relativePath !== 'string') {
+          throw new Error('The source subfolder scope is invalid.');
+        }
+        if (typeof generateAutomaticPreviews !== 'boolean') {
+          throw new Error('The folder preview generation setting is invalid.');
+        }
+        reportedScope = normalizeSourceFolderRelativePath(relativePath);
+        rescanSourceFolderScope(
+          sourceIndex,
+          relativePath,
+          generateAutomaticPreviews,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === 'Another scan is already running for this source folder.') {
+          event.sender.send('folder-scan-request-rejected', sourceIndex, message);
+        } else {
+          event.sender.send('folder-scan-failed', sourceIndex, message, reportedScope);
+        }
+      }
+    },
+  );
+
+  /** Persist one source's ignored subtree list and restart/rescan it safely. */
+  trustedIpcHandle(
+    'update-source-folder-ignored-subdirectories',
+    (
+      _event,
+      sourceIndex: number,
+      ignoredSubdirectories: unknown,
+      postChangeCatalogue: ImageElement[],
+    ) => {
+      return updateSourceFolderIgnoredSubdirectories(
+        sourceIndex,
+        ignoredSubdirectories,
+        postChangeCatalogue,
+      );
+    },
+  );
 
   /**
    * extract any missing thumbnails
@@ -522,7 +668,14 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
    */
   trustedIpcOn(
     'regenerate-folder-thumbnails',
-    (event, requestId: number, sourceIndex: number, cataloguePath: string, items: ImageElement[]) => {
+    (
+      event,
+      requestId: number,
+      sourceIndex: number,
+      relativePath: string,
+      cataloguePath: string,
+      items: ImageElement[],
+    ) => {
       const sender = event.sender;
       let ownerActive = true;
       const send = (channel: string, ...args: any[]): void => {
@@ -534,6 +687,7 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
       if (
         !Number.isSafeInteger(requestId)
         || !Number.isInteger(sourceIndex)
+        || typeof relativePath !== 'string'
         || typeof cataloguePath !== 'string'
         || !Array.isArray(items)
       ) {
@@ -573,6 +727,7 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
 
       regenerateFolderThumbnails(
         sourceIndex,
+        relativePath,
         items,
         cataloguePath,
         progress => send('folder-thumbnail-regeneration-progress', requestId, sourceIndex, progress),

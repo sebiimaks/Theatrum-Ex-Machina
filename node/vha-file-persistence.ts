@@ -2,6 +2,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import type { FinalObject } from '../interfaces/final-object.interface';
+import { normalizeIgnoredSubdirectories } from '../interfaces/source-folder-path';
+import {
+  imageLocationKey,
+  normalizeImageLocation,
+} from '../interfaces/media-locations';
 
 export interface VhaFileReadResult {
   backupError?: Error;
@@ -66,6 +71,33 @@ export function parseVhaJson(raw: string | Buffer): FinalObject {
     if (isObject(image) && image.missing !== undefined && typeof image.missing !== 'boolean') {
       throw new Error('The catalogue contains an invalid missing-file state.');
     }
+    if (!isObject(image) || image.locations === undefined) {
+      return;
+    }
+    try {
+      if (!Array.isArray(image.locations) || image.locations.length === 0) {
+        throw new Error('The authoritative media locations are empty or invalid.');
+      }
+      const locations = image.locations.map(location => normalizeImageLocation(location));
+      const locationKeys = locations.map(location => imageLocationKey(location));
+      if (new Set(locationKeys).size !== locationKeys.length) {
+        throw new Error('The authoritative media locations contain duplicates.');
+      }
+      const legacyMirror = normalizeImageLocation({
+        fileName: image.fileName,
+        inputSource: image.inputSource,
+        partialPath: image.partialPath,
+      });
+      if (locationKeys[0] !== imageLocationKey(legacyMirror)) {
+        throw new Error('The preferred media location mirror is inconsistent.');
+      }
+      const allLocationsMissing = locations.every(location => location.missing === true);
+      if ((image.missing === true) !== allLocationsMissing) {
+        throw new Error('The aggregate media availability state is inconsistent.');
+      }
+    } catch {
+      throw new Error('The catalogue contains invalid media locations.');
+    }
   });
   if (!isObject(parsed.screenshotSettings)) {
     throw new Error('The catalogue does not contain valid screenshot settings.');
@@ -78,12 +110,60 @@ export function parseVhaJson(raw: string | Buffer): FinalObject {
   }
 
   if (hasCurrentInputDirectories) {
+    const configuredSourceKeys = Object.keys(parsed.inputDirs);
+    configuredSourceKeys.forEach((sourceKey: string) => {
+      if (!/^(0|[1-9]\d*)$/.test(sourceKey) || !Number.isSafeInteger(Number(sourceKey))) {
+        throw new Error('The catalogue contains an invalid video folder key.');
+      }
+    });
     Object.values(parsed.inputDirs).forEach((inputDirectory: unknown) => {
-      if (!isObject(inputDirectory) || typeof inputDirectory.path !== 'string') {
+      if (
+        !isObject(inputDirectory)
+        || typeof inputDirectory.path !== 'string'
+        || inputDirectory.path.length === 0
+        || inputDirectory.path.includes('\0')
+      ) {
         throw new Error('The catalogue contains an invalid video folder entry.');
       }
       if (inputDirectory.watch !== undefined && typeof inputDirectory.watch !== 'boolean') {
         throw new Error('The catalogue contains an invalid folder watch setting.');
+      }
+      if (inputDirectory.ignoredSubdirectories !== undefined) {
+        try {
+          inputDirectory.ignoredSubdirectories = normalizeIgnoredSubdirectories(
+            inputDirectory.ignoredSubdirectories,
+          );
+        } catch {
+          throw new Error('The catalogue contains invalid ignored subdirectories.');
+        }
+      }
+    });
+    const configuredSourceKeySet = new Set(configuredSourceKeys);
+    parsed.images.forEach((image: unknown) => {
+      if (!isObject(image)) {
+        throw new Error('The catalogue contains an invalid image entry.');
+      }
+      try {
+        if (image.locations === undefined) {
+          const legacySourceIndex = Number(image.inputSource);
+          if (
+            !Number.isSafeInteger(legacySourceIndex)
+            || legacySourceIndex < 0
+            || !configuredSourceKeySet.has(String(legacySourceIndex))
+          ) {
+            throw new Error('The legacy media source is not configured.');
+          }
+          return;
+        }
+        const locations = image.locations as unknown[];
+        locations.forEach((location: unknown) => {
+          const normalizedLocation = normalizeImageLocation(location);
+          if (!configuredSourceKeySet.has(String(normalizedLocation.inputSource))) {
+            throw new Error('The media location source is not configured.');
+          }
+        });
+      } catch {
+        throw new Error('The catalogue contains invalid media locations.');
       }
     });
   }

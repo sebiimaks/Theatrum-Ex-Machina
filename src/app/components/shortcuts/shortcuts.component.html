@@ -1,71 +1,121 @@
-<span class="shortcut-description">
-  {{ 'SHORTCUTS.hold' | translate }}<em class="shortcut-key modifier-key">Ctrl</em>
-  @if (macVersion()) {
-    {{ 'SHORTCUTS.or' | translate }}<em class="shortcut-key modifier-key">Command</em>
-  }
-  {{ 'SHORTCUTS.andClickAnyFile' | translate }}
-</span>
+<div class="shortcut-review-page">
+  <header class="shortcut-review-header">
+    <div>
+      <h2>{{ 'SETTINGS.tabShortcuts' | translate }}</h2>
+      <p>{{ 'SHORTCUTS.clickToRename' | translate }}</p>
+    </div>
+    <span class="shortcut-review-summary">{{ shortcutsInOrder.length + 2 }} commands</span>
+  </header>
 
-<span class="shortcut-description">
-  {{ 'SHORTCUTS.hold' | translate }}<em class="shortcut-key modifier-key">Shift</em>
-  {{ 'SHORTCUTS.andClickAnyFileForExplorer' | translate }}
-</span>
-
-<span class="shortcut-description">
-  {{ 'SHORTCUTS.hold' | translate }}<em class="shortcut-key modifier-key">Ctrl</em>
-  +<em class="shortcut-key modifier-key">Shift</em>
-  {{ 'SHORTCUTS.andClickToSetDefaultScreenshot' | translate }}
-</span>
-
-<span class="shortcut-description">
-  {{ 'SHORTCUTS.hold' | translate }}<em class="shortcut-key modifier-key">Ctrl</em>
-  +<em class="shortcut-key modifier-key">Space</em>
-  {{ 'SHORTCUTS.openRandom' | translate }}
-</span>
-
-<br>
-
-<span>{{ 'SHORTCUTS.hold' | translate }}<em class="shortcut-key modifier-key">Ctrl</em>
-@if (macVersion()) {
-    {{ 'SHORTCUTS.or' | translate }}<em class="shortcut-key modifier-key">Command</em>
-}
+  <p class="shortcut-review-context">
+    {{ 'SHORTCUTS.hold' | translate }}
+    <kbd class="shortcut-key modifier-key">Ctrl</kbd>
+    @if (macVersion()) {
+      {{ 'SHORTCUTS.or' | translate }}
+      <kbd class="shortcut-key modifier-key">Command</kbd>
+    }
     {{ 'SHORTCUTS.andPress' | translate }}:
-</span>
+  </p>
 
-<div class="shortcut-container">
+  <section class="shortcut-review-section">
+    <div class="shortcut-review-index">
+      <span class="shortcut-review-number" aria-hidden="true"></span>
+      <h3>Pointer and Modifier Gestures</h3>
+    </div>
 
-@for (item of shortcutsInOrder; track item) {
-  <div
-    class="shortcut-item"
-    [ngClass]="{
-        'space-after':     item === 'showClips'
-                        || item === 'fuzzySearch'
-                        || item === 'shuffleGalleryNow'
-                        || item === 'startWizard'
-                        || item === 'darkMode'
-                        || item === 'showAutoTags'
-      }"
-  >
-    <em
-      class="shortcut-key clickable"
-      (click)="changeThisShortcut(item)"
-      [ngClass]="{
-          'selected-for-change': item === shortcutToChange,
-          'empty': !shortcutService.actionToKeyMap.get(item)
-        }"
-    >{{ shortcutService.actionToKeyMap.get(item) || '-' }}</em> -
-    {{ 'SHORTCUTS.' + item | translate }}
-  </div>
-}
+    <div class="shortcut-review-rows shortcut-gesture-rows">
+      <div class="shortcut-gesture-row">
+        <div class="shortcut-gesture-keys">
+          <kbd class="shortcut-key modifier-key">Ctrl</kbd>
+          @if (macVersion()) {
+            <span>{{ 'SHORTCUTS.or' | translate }}</span>
+            <kbd class="shortcut-key modifier-key">Command</kbd>
+          }
+        </div>
+        <span>{{ 'SHORTCUTS.andClickAnyFile' | translate }}</span>
+      </div>
 
-  <!-- System reserved -->
-  <div class="shortcut-item"><em class="shortcut-key disabled">w</em> - {{ 'SHORTCUTS.quit' | translate }}</div>
-  <div class="shortcut-item space-after"><em class="shortcut-key disabled">q</em> - {{ 'SHORTCUTS.quit' | translate }}</div>
+      <div class="shortcut-gesture-row">
+        <div class="shortcut-gesture-keys">
+          <kbd class="shortcut-key modifier-key">Shift</kbd>
+        </div>
+        <span>{{ 'SHORTCUTS.andClickAnyFileForExplorer' | translate }}</span>
+      </div>
+
+      <div class="shortcut-gesture-row">
+        <div class="shortcut-gesture-keys">
+          <kbd class="shortcut-key modifier-key">Ctrl</kbd>
+          <span>+</span>
+          <kbd class="shortcut-key modifier-key">Shift</kbd>
+        </div>
+        <span>{{ 'SHORTCUTS.andClickToSetDefaultScreenshot' | translate }}</span>
+      </div>
+
+      <div class="shortcut-gesture-row">
+        <div class="shortcut-gesture-keys">
+          <kbd class="shortcut-key modifier-key">Ctrl</kbd>
+          <span>+</span>
+          <kbd class="shortcut-key modifier-key">Space</kbd>
+        </div>
+        <span>{{ 'SHORTCUTS.openRandom' | translate }}</span>
+      </div>
+    </div>
+  </section>
+
+  @for (section of shortcutSections; track section.heading) {
+    <section class="shortcut-review-section">
+      <div class="shortcut-review-index">
+        <span class="shortcut-review-number" aria-hidden="true"></span>
+        <h3>{{ section.heading }}</h3>
+      </div>
+
+      <div class="shortcut-review-rows">
+        @for (item of section.actions; track item) {
+          <div class="shortcut-review-row">
+            <button
+              type="button"
+              class="shortcut-key clickable"
+              (click)="changeThisShortcut(item)"
+              [attr.aria-pressed]="item === shortcutToChange"
+              [ngClass]="{
+                'selected-for-change': item === shortcutToChange,
+                'empty': !shortcutService.actionToKeyMap.get(item)
+              }"
+            >{{ shortcutService.actionToKeyMap.get(item) || '-' }}</button>
+            <span>{{ 'SHORTCUTS.' + item | translate }}</span>
+          </div>
+        }
+      </div>
+    </section>
+  }
+
+  <section class="shortcut-review-section">
+    <div class="shortcut-review-index">
+      <span class="shortcut-review-number" aria-hidden="true"></span>
+      <h3>Reserved</h3>
+    </div>
+
+    <div class="shortcut-review-rows">
+      <div class="shortcut-review-row">
+        <kbd class="shortcut-key disabled">w</kbd>
+        <span>{{ 'SHORTCUTS.quit' | translate }}</span>
+      </div>
+      <div class="shortcut-review-row">
+        <kbd class="shortcut-key disabled">q</kbd>
+        <span>{{ 'SHORTCUTS.quit' | translate }}</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="shortcut-review-section">
+    <div class="shortcut-review-index">
+      <span class="shortcut-review-number" aria-hidden="true"></span>
+      <h3>Shortcut Editing</h3>
+    </div>
+
+    <div class="shortcut-review-rows shortcut-review-guidance">
+      <p>{{ 'SHORTCUTS.clickToRename' | translate }}</p>
+      <p>{{ 'SHORTCUTS.clickToRemove' | translate }}</p>
+    </div>
+  </section>
 </div>
-
-<span class="shortcut-description">
-  {{ 'SHORTCUTS.clickToRename' | translate }}
-</span>
-<span class="shortcut-description">
-  {{ 'SHORTCUTS.clickToRemove' | translate }}
-</span>

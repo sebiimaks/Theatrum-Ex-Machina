@@ -169,3 +169,15 @@ export async function createImportErrorElement(filePath: string): Promise<ImageE
 export function shouldExtractThumbnails(element: ImageElement): boolean {
   return !isMetadataImportFailure(element);
 }
+
+/**
+ * The folder-add preference suppresses only automatic preview generation.
+ * Metadata import remains independent, while manual regeneration bypasses
+ * this policy entirely.
+ */
+export function shouldQueueAutomaticPreviews(
+  element: ImageElement,
+  generateAutomaticPreviews = true,
+): boolean {
+  return generateAutomaticPreviews && shouldExtractThumbnails(element);
+}

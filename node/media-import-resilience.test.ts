@@ -4,7 +4,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, test } from 'node:test';
 
-import { IMPORT_ERROR_TAG, isMetadataImportFailure } from '../interfaces/final-object.interface.ts';
+import {
+  IMPORT_ERROR_TAG,
+  NewImageElement,
+  isMetadataImportFailure,
+} from '../interfaces/final-object.interface.ts';
 import {
   LOCAL_FFPROBE_TIMEOUT_MS,
   VOLUME_FFPROBE_TIMEOUT_MS,
@@ -12,6 +16,7 @@ import {
   getFfprobeTimeoutMs,
   runProbeWithOneRetry,
   shouldExtractThumbnails,
+  shouldQueueAutomaticPreviews,
 } from './media-import-resilience.ts';
 
 const temporaryDirectories: string[] = [];
@@ -85,4 +90,15 @@ test('creates a persistent, thumbnail-free catalogue entry after probe failure',
   assert.equal(isMetadataImportFailure(first), true);
   assert.equal(shouldExtractThumbnails(first), false);
   assert.doesNotThrow(() => JSON.stringify(first));
+});
+
+test('folder-add preference suppresses automatic previews without suppressing metadata', async () => {
+  const valid = NewImageElement();
+  const failed = await createImportErrorElement(createTemporaryFile());
+
+  assert.equal(shouldExtractThumbnails(valid), true);
+  assert.equal(shouldQueueAutomaticPreviews(valid), true);
+  assert.equal(shouldQueueAutomaticPreviews(valid, true), true);
+  assert.equal(shouldQueueAutomaticPreviews(valid, false), false);
+  assert.equal(shouldQueueAutomaticPreviews(failed, true), false);
 });

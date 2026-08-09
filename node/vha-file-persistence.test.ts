@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, test } from 'node:test';
 
-import type { FinalObject } from '../interfaces/final-object.interface';
+import type { FinalObject, ImageElement } from '../interfaces/final-object.interface';
 import { NewImageElement } from '../interfaces/final-object.interface';
 import {
   parseVhaJson,
@@ -44,6 +44,33 @@ function createCatalogue(hubName: string): FinalObject {
       n: 10,
     },
     version: 3,
+  };
+}
+
+function createMultiLocationEntry(): ImageElement {
+  return {
+    ...NewImageElement(),
+    cleanName: 'Shared video',
+    dateAdded: 1_700_000_000_123,
+    fileName: 'shared.mp4',
+    hash: 'shared-hash',
+    inputSource: 0,
+    locations: [
+      {
+        fileName: 'shared.mp4',
+        inputSource: 0,
+        partialPath: '/Camera',
+      },
+      {
+        fileName: 'shared.mp4',
+        inputSource: 1,
+        partialPath: '/Library/Camera',
+      },
+    ],
+    notes: 'Preserve this note',
+    partialPath: '/Camera',
+    tags: ['camera'],
+    timesPlayed: 7,
   };
 }
 
@@ -132,6 +159,43 @@ test('keeps legacy catalogues valid without tag definitions and rejects malforme
   );
 });
 
+test('round-trips normalized ignored source subdirectories while legacy sources remain valid', async () => {
+  const directory = createTemporaryDirectory();
+  const cataloguePath = path.join(directory, 'ignored-subdirectories.scaena');
+  const catalogue = createCatalogue('Ignored Subdirectories');
+  catalogue.inputDirs[0].ignoredSubdirectories = [
+    '/Camera/Canon',
+    'Archive/Old',
+    'Camera',
+    'Archive',
+  ];
+
+  await writeCatalogue(catalogue, cataloguePath);
+  const reloaded = await readVhaFileWithBackup(cataloguePath);
+
+  assert.deepEqual(reloaded.finalObject?.inputDirs[0].ignoredSubdirectories, ['Archive', 'Camera']);
+  const legacy = createCatalogue('Legacy Source');
+  assert.equal(parseVhaJson(JSON.stringify(legacy)).inputDirs[0].ignoredSubdirectories, undefined);
+});
+
+test('rejects malformed ignored source subdirectories atomically', () => {
+  const malformedValues: unknown[] = [
+    'Camera',
+    ['/'],
+    ['Camera/../Private'],
+    [42],
+  ];
+
+  malformedValues.forEach((ignoredSubdirectories: unknown) => {
+    const catalogue = createCatalogue('Malformed Ignored Folders') as unknown as Record<string, any>;
+    catalogue.inputDirs[0].ignoredSubdirectories = ignoredSubdirectories;
+    assert.throws(
+      () => parseVhaJson(JSON.stringify(catalogue)),
+      /invalid ignored subdirectories/,
+    );
+  });
+});
+
 test('preserves temporarily missing entries and their user metadata', () => {
   const catalogue = createCatalogue('Temporarily Offline');
   const missingEntry = NewImageElement();
@@ -172,6 +236,128 @@ test('actual catalogue save and reload retains temporarily missing metadata', as
   assert.equal(reloaded.finalObject?.images[0].notes, 'Preserve through the real save path');
   assert.deepEqual(reloaded.finalObject?.images[0].tags, ['important']);
   assert.equal(reloaded.finalObject?.images[0].dateAdded, 1_700_000_000_123);
+});
+
+test('round-trips one logical video with two configured source locations', async () => {
+  const directory = createTemporaryDirectory();
+  const cataloguePath = path.join(directory, 'overlapping-sources.scaena');
+  const catalogue = createCatalogue('Overlapping Sources');
+  catalogue.inputDirs[1] = { path: '/library', watch: false };
+  catalogue.images = [createMultiLocationEntry()];
+
+  await writeCatalogue(catalogue, cataloguePath);
+  const reloaded = await readVhaFileWithBackup(cataloguePath);
+  const entry = reloaded.finalObject?.images[0];
+
+  assert.equal(reloaded.source, 'primary');
+  assert.equal(reloaded.finalObject?.images.length, 1);
+  assert.equal(entry?.notes, 'Preserve this note');
+  assert.deepEqual(entry?.tags, ['camera']);
+  assert.equal(entry?.dateAdded, 1_700_000_000_123);
+  assert.equal(entry?.locations?.length, 2);
+});
+
+test('removing the preferred source promotes a configured location without losing metadata', async () => {
+  const directory = createTemporaryDirectory();
+  const cataloguePath = path.join(directory, 'promoted-source.scaena');
+  const catalogue = createCatalogue('Promoted Source');
+  catalogue.inputDirs[1] = { path: '/library', watch: false };
+  catalogue.images = [createMultiLocationEntry()];
+  delete catalogue.inputDirs[0];
+
+  await writeCatalogue(catalogue, cataloguePath);
+  const reloaded = await readVhaFileWithBackup(cataloguePath);
+  const entry = reloaded.finalObject?.images[0];
+
+  assert.equal(entry?.inputSource, 1);
+  assert.equal(entry?.partialPath, '/Library/Camera');
+  assert.equal(entry?.notes, 'Preserve this note');
+  assert.deepEqual(entry?.tags, ['camera']);
+  assert.equal(entry?.timesPlayed, 7);
+  assert.deepEqual(entry?.locations, [{
+    fileName: 'shared.mp4',
+    inputSource: 1,
+    partialPath: '/Library/Camera',
+  }]);
+});
+
+test('filters a logical video only after its last configured source is removed', async () => {
+  const directory = createTemporaryDirectory();
+  const cataloguePath = path.join(directory, 'no-sources.scaena');
+  const catalogue = createCatalogue('No Sources');
+  catalogue.inputDirs[1] = { path: '/library', watch: false };
+  catalogue.images = [createMultiLocationEntry()];
+  catalogue.inputDirs = {};
+
+  await writeCatalogue(catalogue, cataloguePath);
+  const reloaded = await readVhaFileWithBackup(cataloguePath);
+
+  assert.deepEqual(reloaded.finalObject?.images, []);
+});
+
+test('rejects malformed authoritative source-location records atomically', () => {
+  const malformedCatalogues: FinalObject[] = [];
+  const makeCatalogue = (): FinalObject => {
+    const catalogue = createCatalogue('Malformed Locations');
+    catalogue.inputDirs[1] = { path: '/library', watch: false };
+    catalogue.images = [createMultiLocationEntry()];
+    return catalogue;
+  };
+
+  const nonArray = makeCatalogue();
+  (nonArray.images[0] as unknown as { locations: unknown }).locations = 'invalid';
+  malformedCatalogues.push(nonArray);
+
+  const empty = makeCatalogue();
+  empty.images[0].locations = [];
+  malformedCatalogues.push(empty);
+
+  const duplicate = makeCatalogue();
+  duplicate.images[0].locations?.push({
+    fileName: 'shared.mp4',
+    inputSource: 0,
+    partialPath: '/Camera',
+  });
+  malformedCatalogues.push(duplicate);
+
+  const mismatch = makeCatalogue();
+  mismatch.images[0].partialPath = '/Wrong';
+  malformedCatalogues.push(mismatch);
+
+  const unavailableAggregate = makeCatalogue();
+  unavailableAggregate.images[0].missing = true;
+  malformedCatalogues.push(unavailableAggregate);
+
+  const absentSource = makeCatalogue();
+  delete absentSource.inputDirs[1];
+  malformedCatalogues.push(absentSource);
+
+  const traversal = makeCatalogue();
+  traversal.images[0].locations[1].partialPath = '/../escape';
+  malformedCatalogues.push(traversal);
+
+  const absentLegacySource = makeCatalogue();
+  delete absentLegacySource.images[0].locations;
+  absentLegacySource.images[0].inputSource = 9;
+  malformedCatalogues.push(absentLegacySource);
+
+  malformedCatalogues.forEach((catalogue: FinalObject) => {
+    assert.throws(
+      () => parseVhaJson(JSON.stringify(catalogue)),
+      /invalid media locations/,
+    );
+  });
+});
+
+test('rejects non-canonical configured source keys', () => {
+  const catalogue = createCatalogue('Invalid Source Key') as unknown as Record<string, unknown>;
+  catalogue.inputDirs = {
+    '01': { path: '/videos', watch: false },
+  };
+  assert.throws(
+    () => parseVhaJson(JSON.stringify(catalogue)),
+    /invalid video folder key/,
+  );
 });
 
 test('rejects malformed missing-file state instead of treating it inconsistently', () => {

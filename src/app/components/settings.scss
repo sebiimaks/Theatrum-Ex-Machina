@@ -466,9 +466,51 @@ input[type="radio"]:checked:before {
   }
 }
 
+.settings-review-tabs {
+  align-items: end;
+  display: flex;
+  gap: 6px;
+  min-height: 42px;
+  padding: 0 12px;
+  top: calc(var(--app-settings-modal-top) - 42px);
+
+  button {
+    border-radius: var(--app-control-radius) var(--app-control-radius) 0 0;
+    flex: 0 0 auto;
+    margin: 0;
+    min-height: 42px;
+    padding: 10px 14px 9px;
+
+    &:focus-visible {
+      border-color: var(--app-accent);
+      outline: 2px solid var(--app-accent-soft);
+      outline-offset: -2px;
+    }
+  }
+}
+
+.settings-review-modal {
+  background: var(--app-elevated-background);
+}
+
+.shortcut-menu.settings-review-host {
+  margin: 0;
+}
+
 @media (max-width: 900px) {
   .all-settings-tabs {
     left: 40px;
     width: calc(100% - 60px);
+  }
+
+  .settings-review-tabs {
+    overflow-x: auto;
+    padding-left: 8px;
+    scrollbar-width: thin;
+
+    button {
+      padding-left: 11px;
+      padding-right: 11px;
+    }
   }
 }

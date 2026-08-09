@@ -40,12 +40,15 @@ test('uses structured data for every renderer confirmation family', () => {
   const combined = `${catalogueEditor}\n${home}\n${tagTray}`;
   const structuredCalls = combined.match(/openConfirmationDialog\(\{/g) || [];
 
-  assert.equal(structuredCalls.length, 7);
+  assert.equal(structuredCalls.length, 8);
   assert.match(catalogueEditor, /Imported records skipped/);
   assert.match(catalogueEditor, /Matches outside displayed results/);
   assert.match(catalogueEditor, /transition: \{[\s\S]*New value/);
   assert.match(home, /Eligible videos/);
   assert.match(home, /tone: dangerously \? 'destructive' : 'warning'/);
+  assert.match(home, /Metadata-bearing entries removed/);
+  assert.match(home, /currentPlan\.nextElements\.forEach\([\s\S]*element\.index = index/);
+  assert.match(home, /ipcRenderer\.invoke\([\s\S]*update-source-folder-ignored-subdirectories/);
   assert.match(tagTray, /Duplicate assignments consolidated/);
   assert.match(tagTray, /Temporarily unavailable videos/);
   assert.match(tagTray, /transition: \{[\s\S]*from: plan\.sourcePath[\s\S]*to: plan\.destinationPath/);

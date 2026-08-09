@@ -1,5 +1,10 @@
 import type { ImageElement, ScreenshotSettings } from '../interfaces/final-object.interface';
 import { isMetadataImportFailure } from '../interfaces/final-object.interface';
+import { getImageLocations, imageElementAtLocation } from '../interfaces/media-locations';
+import {
+  isSourceFolderWithinScope,
+  normalizeSourceFolderRelativePath,
+} from '../interfaces/source-folder-tree';
 
 export interface FolderThumbnailRegenerationPlan {
   candidatesByHash: Map<string, ImageElement[]>;
@@ -291,8 +296,13 @@ export function countEligibleFolderThumbnailVideos(
   sourceIndex: number,
 ): number {
   return elements.filter((element: ImageElement) => {
-    return Number(element.inputSource) === sourceIndex
-      && isEligibleFolderThumbnailVideo(element);
+    if (element.deleted || element.cleanName === '*FOLDER*') {
+      return false;
+    }
+    return getImageLocations(element).some(location => (
+      Number(location.inputSource) === sourceIndex
+      && isEligibleFolderThumbnailVideo(imageElementAtLocation(element, location))
+    ));
   }).length;
 }
 
@@ -302,11 +312,22 @@ export function buildEligibleFolderThumbnailVideoCounts(
 ): Map<number, number> {
   const counts = new Map<number, number>();
   elements.forEach((element: ImageElement) => {
-    const sourceIndex = Number(element.inputSource);
-    if (!Number.isInteger(sourceIndex) || !isEligibleFolderThumbnailVideo(element)) {
+    if (element.deleted || element.cleanName === '*FOLDER*') {
       return;
     }
-    counts.set(sourceIndex, (counts.get(sourceIndex) || 0) + 1);
+    const eligibleSources = new Set<number>();
+    getImageLocations(element).forEach(location => {
+      const sourceIndex = Number(location.inputSource);
+      if (
+        Number.isInteger(sourceIndex)
+        && isEligibleFolderThumbnailVideo(imageElementAtLocation(element, location))
+      ) {
+        eligibleSources.add(sourceIndex);
+      }
+    });
+    eligibleSources.forEach(sourceIndex => {
+      counts.set(sourceIndex, (counts.get(sourceIndex) || 0) + 1);
+    });
   });
   return counts;
 }
@@ -320,22 +341,40 @@ export function buildEligibleFolderThumbnailVideoCounts(
 export function planFolderThumbnailRegeneration(
   elements: ImageElement[],
   sourceIndex: number,
+  relativePath = '',
 ): FolderThumbnailRegenerationPlan {
-  const matchingVideos = elements.filter((element: ImageElement) => {
-    return Number(element.inputSource) === sourceIndex
-      && !element.deleted
-      && !element.missing
-      && element.cleanName !== '*FOLDER*';
-  });
-  const eligibleVideos = matchingVideos.filter((element: ImageElement) => {
-    return isEligibleFolderThumbnailVideo(element);
-  });
+  const normalizedRelativePath = normalizeSourceFolderRelativePath(relativePath);
+  const eligibleVideos: ImageElement[] = [];
   const candidatesByHash = new Map<string, ImageElement[]>();
   const videoCountsByHash = new Map<string, number>();
+  let matchingVideoCount = 0;
+  let eligibleVideoCount = 0;
 
-  eligibleVideos.forEach((element: ImageElement) => {
+  elements.forEach((element: ImageElement) => {
+    if (element.deleted || element.cleanName === '*FOLDER*') {
+      return;
+    }
+
+    const matchingLocations = getImageLocations(element).filter(location => (
+      Number(location.inputSource) === sourceIndex
+      && isSourceFolderWithinScope(location.partialPath, normalizedRelativePath)
+    ));
+    if (matchingLocations.length === 0) {
+      return;
+    }
+    matchingVideoCount++;
+
+    const eligibleCandidates = matchingLocations
+      .map(location => imageElementAtLocation(element, location))
+      .filter(candidate => isEligibleFolderThumbnailVideo(candidate));
+    if (eligibleCandidates.length === 0) {
+      return;
+    }
+
+    eligibleVideoCount++;
+    eligibleVideos.push(...eligibleCandidates);
     const candidates = candidatesByHash.get(element.hash) || [];
-    candidates.push(element);
+    candidates.push(...eligibleCandidates);
     candidatesByHash.set(element.hash, candidates);
     videoCountsByHash.set(element.hash, (videoCountsByHash.get(element.hash) || 0) + 1);
   });
@@ -351,9 +390,9 @@ export function planFolderThumbnailRegeneration(
         element.fileName,
       ].join('\u0000'))
       .sort(),
-    skippedVideos: matchingVideos.length - eligibleVideos.length,
+    skippedVideos: matchingVideoCount - eligibleVideoCount,
     targets: Array.from(candidatesByHash.values()).map(candidates => candidates[0]),
-    videoCount: eligibleVideos.length,
+    videoCount: eligibleVideoCount,
     videoCountsByHash,
   };
 }
@@ -371,6 +410,7 @@ export function folderThumbnailRegenerationPlansMatch(
     confirmed.videoCount !== current.videoCount
     || confirmed.skippedVideos !== current.skippedVideos
     || confirmed.targets.length !== current.targets.length
+    || confirmed.entrySignatures.length !== current.entrySignatures.length
   ) {
     return false;
   }

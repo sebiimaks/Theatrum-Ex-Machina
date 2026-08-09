@@ -27,7 +27,12 @@ import * as path from 'path';
 const spawn = require('child_process').spawn;
 
 const CUSTOM_THUMBNAIL_TIMEOUT_MS = 30 * 1000;
-const FORCE_KILL_DELAY_MS = 2 * 1000;
+// Two independent seeks are enough to approach the measured QD1-QD8 gain on
+// the user's network volume without returning to the former one-decoder-per-
+// frame allocation spike.
+export const FILMSTRIP_FRAME_CONCURRENCY = 2;
+const FORCE_KILL_DELAY_MS = 250;
+const FORCE_SETTLE_DELAY_MS = 1000;
 const FILMSTRIP_ASSEMBLY_RESERVE_MS = 15 * 1000;
 const FILMSTRIP_RECOVERY_BUDGET_MS = 60 * 1000;
 const MAX_FILMSTRIP_RECOVERY_FRAMES = 30;
@@ -44,6 +49,8 @@ interface ActiveCustomImage {
 }
 
 const activeCustomImages = new Map<string, ActiveCustomImage>();
+const activeMediaProcesses = new Set<any>();
+let mediaProcessCancellationGeneration = 0;
 const generatedImageVersions = new Map<string, number>();
 const imagePublicationLocks = new Map<string, Promise<void>>();
 let temporaryImageSequence = 0;
@@ -1078,6 +1085,40 @@ export function fillMissingRecoveryFrames(
   });
 }
 
+/** Run media work with a fixed upper bound regardless of the item count. */
+export async function runBoundedMediaWork<T>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+  shouldContinue: () => boolean = () => true,
+): Promise<void> {
+  if (!Number.isSafeInteger(concurrency) || concurrency <= 0) {
+    throw new Error('The media-work concurrency is invalid.');
+  }
+
+  let nextIndex = 0;
+  let failed = false;
+  let firstError: unknown;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (!failed && shouldContinue() && nextIndex < items.length) {
+        const itemIndex = nextIndex++;
+        try {
+          await worker(items[itemIndex]);
+        } catch (error) {
+          failed = true;
+          firstError = error;
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  if (failed) {
+    throw firstError;
+  }
+}
+
 export async function extractFilmstripWithRecovery(
   pathToVideo: string,
   duration: number,
@@ -1095,25 +1136,11 @@ export async function extractFilmstripWithRecovery(
   const frameWidth = Math.round(screenshotHeight * (16 / 9));
   const stripWidth = frameWidth * numberOfScreenshots;
 
-  const normalSucceeded = await generateValidatedJpeg(
-    savePath,
-    stripWidth,
-    screenshotHeight,
-    maxRunningTime,
-    'filmstrip',
-    (candidatePath: string) => generateScreenshotStripArgs(
-      pathToVideo,
-      safeDuration,
-      screenshotHeight,
-      numberOfScreenshots,
-      candidatePath,
-    ),
-  );
-  if (normalSucceeded) {
-    return true;
-  }
-
   const recoveryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'vha-filmstrip-recovery-'));
+  const cancellationGeneration = mediaProcessCancellationGeneration;
+  const extractionStillCurrent = (): boolean => (
+    cancellationGeneration === mediaProcessCancellationGeneration
+  );
   const recoveredFrames = new Map<number, string>();
   const step = safeDuration / (numberOfScreenshots + 1);
   const thumbnailIndex = Math.max(
@@ -1121,38 +1148,54 @@ export async function extractFilmstripWithRecovery(
     Math.min(numberOfScreenshots - 1, Math.round((numberOfScreenshots + 1) / 10 - 1)),
   );
   recoveredFrames.set(thumbnailIndex, thumbnailPath);
-  const recoveryDeadline = Date.now() + FILMSTRIP_RECOVERY_BUDGET_MS;
+  // The former fast path opened the source once per screenshot inside one
+  // FFmpeg process. Thirty simultaneous 4K/HEVC decoders can consume tens of
+  // gigabytes. Use a small fixed decoder pool instead, then stack only the
+  // small JPEGs. Preserve the extended timeout for slow/network media.
+  const recoveryDeadline = Date.now() + Math.max(
+    FILMSTRIP_RECOVERY_BUDGET_MS,
+    maxRunningTime,
+  );
 
   try {
     const indexesToRecover = selectRecoveryFrameIndexes(numberOfScreenshots)
       .filter((index: number) => index !== thumbnailIndex);
 
-    for (const frameIndex of indexesToRecover) {
-      const remainingFrameRecoveryTime = recoveryDeadline
-        - FILMSTRIP_ASSEMBLY_RESERVE_MS
-        - Date.now();
-      if (remainingFrameRecoveryTime <= 0) {
-        break;
-      }
+    await runBoundedMediaWork(
+      indexesToRecover,
+      FILMSTRIP_FRAME_CONCURRENCY,
+      async (frameIndex: number) => {
+        const remainingFrameRecoveryTime = recoveryDeadline
+          - FILMSTRIP_ASSEMBLY_RESERVE_MS
+          - Date.now();
+        if (remainingFrameRecoveryTime <= 0 || !extractionStillCurrent()) {
+          return;
+        }
 
-      const recoveredPath = path.join(recoveryDirectory, `frame-${frameIndex}.jpg`);
-      const recovered = await generateValidatedJpeg(
-        recoveredPath,
-        frameWidth,
-        screenshotHeight,
-        Math.min(MAX_RECOVERY_FRAME_TIMEOUT_MS, remainingFrameRecoveryTime),
-        `filmstrip frame recovery ${frameIndex + 1}`,
-        (candidatePath: string) => extractRecoveryFrameArgs(
-          pathToVideo,
+        const recoveredPath = path.join(recoveryDirectory, `frame-${frameIndex}.jpg`);
+        const recovered = await generateValidatedJpeg(
+          recoveredPath,
+          frameWidth,
           screenshotHeight,
-          (frameIndex + 1) * step,
-          candidatePath,
-          'fast',
-        ),
-      );
-      if (recovered) {
-        recoveredFrames.set(frameIndex, recoveredPath);
-      }
+          Math.min(MAX_RECOVERY_FRAME_TIMEOUT_MS, remainingFrameRecoveryTime),
+          `filmstrip frame ${frameIndex + 1}`,
+          (candidatePath: string) => extractRecoveryFrameArgs(
+            pathToVideo,
+            screenshotHeight,
+            (frameIndex + 1) * step,
+            candidatePath,
+            'fast',
+          ),
+        );
+        if (recovered && extractionStillCurrent()) {
+          recoveredFrames.set(frameIndex, recoveredPath);
+        }
+      },
+      extractionStillCurrent,
+    );
+
+    if (!extractionStillCurrent()) {
+      return false;
     }
 
     const framePaths = fillMissingRecoveryFrames(
@@ -1169,7 +1212,7 @@ export async function extractFilmstripWithRecovery(
       stripWidth,
       screenshotHeight,
       remainingAssemblyTime,
-      'recovered filmstrip assembly',
+      'filmstrip assembly',
       (candidatePath: string) => stackRecoveredFramesArgs(framePaths, candidatePath),
     );
   } finally {
@@ -1294,6 +1337,33 @@ export interface MediaProcessResult {
   timedOut: boolean;
 }
 
+/** Stop decoder processes owned by an import that has been cancelled/reset. */
+export function cancelActiveMediaProcesses(): void {
+  mediaProcessCancellationGeneration++;
+  activeMediaProcesses.forEach((mediaProcess: any) => {
+    const stillRunning = mediaProcess.exitCode === null && mediaProcess.signalCode === null;
+    if (!stillRunning) {
+      activeMediaProcesses.delete(mediaProcess);
+      return;
+    }
+    try {
+      mediaProcess.kill();
+    } catch {
+      // The normal exit/error listeners still settle the owning queue item.
+    }
+    const forceKill = setTimeout(() => {
+      if (mediaProcess.exitCode === null && mediaProcess.signalCode === null) {
+        try {
+          mediaProcess.kill('SIGKILL');
+        } catch {
+          // The process may have exited between the state check and signal.
+        }
+      }
+    }, FORCE_KILL_DELAY_MS);
+    forceKill.unref?.();
+  });
+}
+
 export function spawn_ffmpeg_and_run(
   args: string[],
   maxRunningTime: number,
@@ -1319,6 +1389,7 @@ export function spawn_ffmpeg_and_run_detailed(
     let resultSettled = false;
     let timedOut = false;
     let forceKillTimeout: NodeJS.Timeout | undefined;
+    let forceSettleTimeout: NodeJS.Timeout | undefined;
 
     const settleResult = (result: MediaProcessResult): void => {
       if (!resultSettled) {
@@ -1333,6 +1404,7 @@ export function spawn_ffmpeg_and_run_detailed(
     const ffmpeg_process = spawnMediaProcess(ffmpegPath, ['-nostdin', '-hide_banner', ...args], {
       windowsHide: true,
     });
+    activeMediaProcesses.add(ffmpeg_process);
 
     const processStillRunning = (): boolean => {
       return ffmpeg_process.exitCode === null && ffmpeg_process.signalCode === null;
@@ -1360,13 +1432,6 @@ export function spawn_ffmpeg_and_run_detailed(
           console.error(description + ' could not be stopped after timing out', error);
         }
       }
-      settleResult({
-        exitCode: null,
-        processError: false,
-        success: false,
-        timedOut: true,
-      });
-
       forceKillTimeout = setTimeout(() => {
         if (processStillRunning()) {
           try {
@@ -1377,6 +1442,19 @@ export function spawn_ffmpeg_and_run_detailed(
             }
           }
         }
+        // A real child normally emits exit immediately after SIGKILL. Keep a
+        // final bounded escape hatch for malformed test doubles or platform
+        // failures, but do not start the next queue item while a heavy child
+        // is still in its ordinary termination window.
+        forceSettleTimeout = setTimeout(() => {
+          settleResult({
+            exitCode: ffmpeg_process.exitCode,
+            processError: false,
+            success: false,
+            timedOut: true,
+          });
+        }, FORCE_SETTLE_DELAY_MS);
+        forceSettleTimeout.unref?.();
       }, FORCE_KILL_DELAY_MS);
       forceKillTimeout.unref?.();
     }, maxRunningTime);
@@ -1401,6 +1479,10 @@ export function spawn_ffmpeg_and_run_detailed(
       if (!timedOut && forceKillTimeout) {
         clearTimeout(forceKillTimeout);
       }
+      if (timedOut && processStillRunning()) {
+        return;
+      }
+      activeMediaProcesses.delete(ffmpeg_process);
       settleResult({
         exitCode: ffmpeg_process.exitCode,
         processError: true,
@@ -1409,9 +1491,13 @@ export function spawn_ffmpeg_and_run_detailed(
       });
     });
     ffmpeg_process.on('exit', (code: number | null) => {
+      activeMediaProcesses.delete(ffmpeg_process);
       clearTimeout(killProcessTimeout);
       if (forceKillTimeout) {
         clearTimeout(forceKillTimeout);
+      }
+      if (forceSettleTimeout) {
+        clearTimeout(forceSettleTimeout);
       }
       // const t1: number = performance.now();
       // console.log(description + ' ' + Math.round(t1 - t0) + ' < ' + maxRunningTime);
@@ -1423,9 +1509,21 @@ export function spawn_ffmpeg_and_run_detailed(
       });
     });
     ffmpeg_process.on('close', () => {
+      activeMediaProcesses.delete(ffmpeg_process);
       clearTimeout(killProcessTimeout);
       if (forceKillTimeout) {
         clearTimeout(forceKillTimeout);
+      }
+      if (forceSettleTimeout) {
+        clearTimeout(forceSettleTimeout);
+      }
+      if (!resultSettled) {
+        settleResult({
+          exitCode: ffmpeg_process.exitCode,
+          processError: false,
+          success: ffmpeg_process.exitCode === 0 && !timedOut,
+          timedOut,
+        });
       }
     });
 

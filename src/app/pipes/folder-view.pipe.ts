@@ -190,7 +190,10 @@ export class FolderViewPipe implements PipeTransform {
         }
 
         if (pathToElementsMap.has(keyForMap)) {
-          pathToElementsMap.set(keyForMap, [...pathToElementsMap.get(keyForMap), element]);
+          // Append in place. Rebuilding the whole group for every item makes a
+          // large folder quadratic and can allocate tens of gigabytes during a
+          // rescan before the old intermediate arrays are collected.
+          pathToElementsMap.get(keyForMap).push(element);
         } else {
           pathToElementsMap.set(keyForMap, [element]);
         }

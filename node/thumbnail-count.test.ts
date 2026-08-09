@@ -226,18 +226,21 @@ test('plans one folder and collapses duplicate preview hashes', () => {
   const first = {
     ...NewImageElement(),
     cleanName: 'First',
+    fileName: 'first.mp4',
     hash: 'shared-hash',
     inputSource: 2,
   };
   const duplicate = {
     ...NewImageElement(),
     cleanName: 'Duplicate',
+    fileName: 'duplicate.mp4',
     hash: 'shared-hash',
     inputSource: 2,
   };
   const otherFolder = {
     ...NewImageElement(),
     cleanName: 'Other folder',
+    fileName: 'other.mp4',
     hash: 'other-hash',
     inputSource: 3,
   };
@@ -246,34 +249,231 @@ test('plans one folder and collapses duplicate preview hashes', () => {
 
   assert.equal(plan.videoCount, 2);
   assert.equal(plan.skippedVideos, 0);
-  assert.deepEqual(plan.targets, [first]);
+  assert.equal(plan.targets[0].fileName, first.fileName);
+  assert.equal(plan.targets[0].inputSource, first.inputSource);
   assert.equal(plan.videoCountsByHash.get('shared-hash'), 2);
+});
+
+test('scopes folder regeneration to an exact folder and its descendants', () => {
+  const direct = {
+    ...NewImageElement(),
+    cleanName: 'Canon direct',
+    fileName: 'direct.mp4',
+    hash: 'canon-direct',
+    inputSource: 2,
+    partialPath: '/Cameras/Canon',
+  };
+  const descendant = {
+    ...NewImageElement(),
+    cleanName: 'Canon manual',
+    fileName: 'manual.mp4',
+    hash: 'canon-manual',
+    inputSource: 2,
+    partialPath: '/Cameras/Canon/Manuals',
+  };
+  const sibling = {
+    ...NewImageElement(),
+    cleanName: 'Nikon sibling',
+    fileName: 'nikon.mp4',
+    hash: 'nikon-sibling',
+    inputSource: 2,
+    partialPath: '/Cameras/Nikon',
+  };
+  const namePrefix = {
+    ...NewImageElement(),
+    cleanName: 'Canonet prefix',
+    fileName: 'canonet.mp4',
+    hash: 'canonet-prefix',
+    inputSource: 2,
+    partialPath: '/Cameras/Canonet',
+  };
+  const otherSource = {
+    ...NewImageElement(),
+    cleanName: 'Other source',
+    fileName: 'other.mp4',
+    hash: 'other-source',
+    inputSource: 3,
+    partialPath: '/Cameras/Canon',
+  };
+
+  const plan = planFolderThumbnailRegeneration([
+    direct,
+    descendant,
+    sibling,
+    namePrefix,
+    otherSource,
+  ], 2, 'Cameras/Canon');
+
+  assert.equal(plan.videoCount, 2);
+  assert.deepEqual(plan.targets, [direct, descendant]);
+  assert.deepEqual(plan.eligibleVideos, [direct, descendant]);
+});
+
+test('keeps the source root as the default regeneration scope', () => {
+  const firstBranch = {
+    ...NewImageElement(),
+    cleanName: 'First branch',
+    fileName: 'first.mp4',
+    hash: 'first-branch',
+    inputSource: 5,
+    partialPath: '/Cameras/Canon',
+  };
+  const secondBranch = {
+    ...NewImageElement(),
+    cleanName: 'Second branch',
+    fileName: 'second.mp4',
+    hash: 'second-branch',
+    inputSource: 5,
+    partialPath: '/Lenses/Nikon',
+  };
+
+  const implicitRoot = planFolderThumbnailRegeneration([firstBranch, secondBranch], 5);
+  const explicitRoot = planFolderThumbnailRegeneration([firstBranch, secondBranch], 5, '');
+
+  assert.deepEqual(implicitRoot.targets, [firstBranch, secondBranch]);
+  assert.deepEqual(explicitRoot.entrySignatures, implicitRoot.entrySignatures);
+});
+
+test('rejects traversal in thumbnail-regeneration folder scopes and catalogue paths', () => {
+  const valid = {
+    ...NewImageElement(),
+    cleanName: 'Valid',
+    fileName: 'valid.mp4',
+    hash: 'valid-hash',
+    inputSource: 2,
+    partialPath: '/Cameras/Canon',
+  };
+  const malformed = {
+    ...NewImageElement(),
+    cleanName: 'Malformed',
+    fileName: 'malformed.mp4',
+    hash: 'malformed-hash',
+    inputSource: 2,
+    partialPath: '/Cameras/../Private',
+  };
+
+  assert.throws(
+    () => planFolderThumbnailRegeneration([valid], 2, 'Cameras/../Private'),
+    /cannot leave its configured root/,
+  );
+  assert.throws(
+    () => planFolderThumbnailRegeneration([malformed], 2, 'Cameras'),
+    /cannot leave its configured root/,
+  );
 });
 
 test('does not let a matching hash in another folder hide this folder candidate', () => {
   const otherFolder = {
     ...NewImageElement(),
     cleanName: 'Other folder first',
+    fileName: 'other.mp4',
     hash: 'shared-hash',
     inputSource: 1,
   };
   const selectedFolder = {
     ...NewImageElement(),
     cleanName: 'Selected folder',
+    fileName: 'selected.mp4',
     hash: 'shared-hash',
     inputSource: 2,
   };
 
   const plan = planFolderThumbnailRegeneration([otherFolder, selectedFolder], 2);
 
-  assert.deepEqual(plan.targets, [selectedFolder]);
-  assert.deepEqual(plan.candidatesByHash.get('shared-hash'), [selectedFolder]);
+  assert.equal(plan.targets[0].fileName, selectedFolder.fileName);
+  assert.equal(plan.targets[0].inputSource, selectedFolder.inputSource);
+  assert.equal(plan.candidatesByHash.get('shared-hash')?.[0].fileName, selectedFolder.fileName);
+});
+
+test('projects associated locations into the selected thumbnail scope', () => {
+  const shared = {
+    ...NewImageElement(),
+    cleanName: 'Shared logical video',
+    fileName: 'shared.mp4',
+    hash: 'shared-hash',
+    inputSource: 2,
+    locations: [
+      {
+        fileName: 'shared.mp4',
+        inputSource: 2,
+        missing: true,
+        partialPath: '/Existing/Canon',
+      },
+      {
+        fileName: 'shared.mp4',
+        inputSource: 7,
+        partialPath: '/Library/Existing/Canon',
+      },
+      {
+        fileName: 'shared.mp4',
+        inputSource: 7,
+        partialPath: '/Library/Mirror/Canon',
+      },
+    ],
+    partialPath: '/Existing/Canon',
+  };
+
+  const unavailableChild = planFolderThumbnailRegeneration(
+    [shared],
+    2,
+    '/Existing',
+  );
+  assert.equal(unavailableChild.videoCount, 0);
+  assert.equal(unavailableChild.skippedVideos, 1);
+
+  const availableParent = planFolderThumbnailRegeneration(
+    [shared],
+    7,
+    '/Library',
+  );
+  assert.equal(availableParent.videoCount, 1, 'locations do not duplicate the logical count');
+  assert.equal(availableParent.skippedVideos, 0);
+  assert.equal(availableParent.eligibleVideos.length, 2);
+  assert.equal(availableParent.candidatesByHash.get('shared-hash')?.length, 2);
+  assert.equal(availableParent.targets[0].inputSource, 7);
+  assert.equal(availableParent.targets[0].partialPath, '/Library/Existing/Canon');
+  assert.equal(availableParent.videoCountsByHash.get('shared-hash'), 1);
+
+  assert.equal(countEligibleFolderThumbnailVideos([shared], 2), 0);
+  assert.equal(countEligibleFolderThumbnailVideos([shared], 7), 1);
+  const counts = buildEligibleFolderThumbnailVideoCounts([shared]);
+  assert.equal(counts.get(2) || 0, 0);
+  assert.equal(counts.get(7), 1);
+});
+
+test('folder regeneration plan comparison notices added fallback locations', () => {
+  const entry = {
+    ...NewImageElement(),
+    cleanName: 'Shared logical video',
+    fileName: 'shared.mp4',
+    hash: 'shared-hash',
+    inputSource: 7,
+    locations: [
+      {
+        fileName: 'shared.mp4',
+        inputSource: 7,
+        partialPath: '/Library/Primary',
+      },
+    ],
+    partialPath: '/Library/Primary',
+  };
+  const confirmed = planFolderThumbnailRegeneration([entry], 7, '/Library');
+
+  entry.locations.push({
+    fileName: 'shared.mp4',
+    inputSource: 7,
+    partialPath: '/Library/Fallback',
+  });
+  const changed = planFolderThumbnailRegeneration([entry], 7, '/Library');
+
+  assert.equal(folderThumbnailRegenerationPlansMatch(confirmed, changed), false);
 });
 
 test('accepts legacy string-valued source indices', () => {
   const legacy = {
     ...NewImageElement(),
     cleanName: 'Legacy',
+    fileName: 'legacy.mp4',
     hash: 'legacy-hash',
     inputSource: <any>'4',
   };
@@ -281,13 +481,15 @@ test('accepts legacy string-valued source indices', () => {
   const plan = planFolderThumbnailRegeneration([legacy], 4);
 
   assert.equal(plan.videoCount, 1);
-  assert.deepEqual(plan.targets, [legacy]);
+  assert.equal(plan.targets[0].fileName, legacy.fileName);
+  assert.equal(plan.targets[0].inputSource, 4);
 });
 
 test('excludes deleted, import-error, placeholder, and invalid-hash entries', () => {
   const eligible = {
     ...NewImageElement(),
     cleanName: 'Eligible',
+    fileName: 'eligible.mp4',
     hash: 'eligible-hash',
     inputSource: 1,
   };
@@ -301,6 +503,7 @@ test('excludes deleted, import-error, placeholder, and invalid-hash entries', ()
   const importError = {
     ...NewImageElement(),
     cleanName: 'Import error',
+    fileName: 'error.mp4',
     hash: 'error-hash',
     inputSource: 1,
     metadataImportFailed: true,
@@ -308,6 +511,7 @@ test('excludes deleted, import-error, placeholder, and invalid-hash entries', ()
   const taggedImportError = {
     ...NewImageElement(),
     cleanName: 'Tagged import error',
+    fileName: 'tagged-error.mp4',
     hash: 'tagged-error-hash',
     inputSource: 1,
     tags: ['import_error'],
@@ -315,6 +519,7 @@ test('excludes deleted, import-error, placeholder, and invalid-hash entries', ()
   const invalidHash = {
     ...NewImageElement(),
     cleanName: 'Invalid hash',
+    fileName: 'invalid.mp4',
     hash: '../invalid',
     inputSource: 1,
   };
@@ -336,7 +541,8 @@ test('excludes deleted, import-error, placeholder, and invalid-hash entries', ()
 
   assert.equal(plan.videoCount, 1);
   assert.equal(plan.skippedVideos, 3);
-  assert.deepEqual(plan.targets, [eligible]);
+  assert.equal(plan.targets[0].fileName, eligible.fileName);
+  assert.equal(plan.targets[0].hash, eligible.hash);
 });
 
 test('filters before deduplicating so an ineligible duplicate cannot hide an eligible item', () => {
@@ -350,6 +556,7 @@ test('filters before deduplicating so an ineligible duplicate cannot hide an eli
   const eligible = {
     ...NewImageElement(),
     cleanName: 'Available',
+    fileName: 'available.mp4',
     hash: 'same-hash',
     inputSource: 4,
   };
@@ -357,13 +564,15 @@ test('filters before deduplicating so an ineligible duplicate cannot hide an eli
   const plan = planFolderThumbnailRegeneration([ineligible, eligible], 4);
 
   assert.equal(plan.videoCount, 1);
-  assert.deepEqual(plan.targets, [eligible]);
+  assert.equal(plan.targets[0].fileName, eligible.fileName);
+  assert.equal(plan.targets[0].hash, eligible.hash);
 });
 
 test('eligible folder counts react to in-place catalogue changes', () => {
   const entry = {
     ...NewImageElement(),
     cleanName: 'Mutable',
+    fileName: 'mutable.mp4',
     hash: 'mutable-hash',
     inputSource: 4,
   };

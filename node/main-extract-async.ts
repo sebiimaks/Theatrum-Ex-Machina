@@ -5,6 +5,7 @@ const { nativeImage, powerSaveBlocker } = require('electron');
 const async = require('async');
 const chokidar = require('chokidar');
 import * as path from 'path';
+import type { Dirent, PathLike } from 'fs';
 import type { FSWatcher } from 'chokidar'; // probably the correct type for chokidar.watch() object
 const fs = require('fs');
 import { fdir } from 'fdir';
@@ -14,16 +15,20 @@ import { GLOBALS } from './main-globals';
 import type {
   ImageElement,
   ImageElementPlus,
+  InputSources,
   ScreenshotSettings,
 } from '../interfaces/final-object.interface';
+import { isMetadataImportFailure } from '../interfaces/final-object.interface';
+import { getImageLocations } from '../interfaces/media-locations';
 import { acceptableFiles } from './main-filenames';
-import { extractAll, isExpectedJpeg } from './main-extract';
+import { cancelActiveMediaProcesses, extractAll, isExpectedJpeg } from './main-extract';
 import type { SystemThumbnailCreator } from './main-extract';
 import { sendCurrentProgress, insertTemporaryFieldsSingle, extractMetadataAsync, cleanUpFileName } from './main-support';
 import {
   createImportErrorElement,
   runProbeWithOneRetry,
   shouldExtractThumbnails,
+  shouldQueueAutomaticPreviews,
 } from './media-import-resilience';
 import {
   isActiveThumbnailRegenerationJob,
@@ -32,23 +37,36 @@ import {
 } from './thumbnail-count';
 import type { ThumbnailCoreStatus } from './thumbnail-count';
 import { runSequentialBatch } from './sequential-batch';
-import { resolveExistingMediaPath } from './local-operation-safety';
+import {
+  resolveExistingMediaPath,
+  resolveExistingSourceSubfolder,
+} from './local-operation-safety';
 import {
   beginPreviewTransaction,
   markPreviewTransactionCommitted,
 } from './thumbnail-transaction';
 import {
+  buildKnownSuccessfulMediaPathCounts,
   FolderScanCoordinator,
   forgetMissingKnownPaths,
+  forgetMissingKnownPathsInScope,
+  physicalMediaPathKey,
 } from '../interfaces/folder-rescan';
 import type {
   FolderFileSnapshot,
   FolderScanSession,
 } from '../interfaces/folder-rescan';
+import {
+  configuredSourceRootsEqual,
+  normalizeIgnoredSubdirectories,
+  normalizeSourceFolderRelativePath,
+  sourceFolderPathIsIgnored,
+} from '../interfaces/source-folder-path';
 
 export interface TempMetadataQueueObject {
   dateAdded: number;
   fullPath: string;
+  generateAutomaticPreviews?: boolean;
   inputSource: number;
   name: string;
   partialPath: string;
@@ -95,6 +113,7 @@ interface ThumbnailRegenerationState {
 }
 
 const thumbnailRegenerationStates: Map<string, ThumbnailRegenerationState> = new Map();
+const automaticThumbnailHashesQueued: Set<string> = new Set();
 const lingeringThumbnailInstallations: Set<string> = new Set();
 let pendingSystemThumbnail: Promise<Buffer> | undefined;
 const SYSTEM_THUMBNAIL_SINGLE_FLIGHT_LEASE_MS = 30 * 1000;
@@ -185,11 +204,103 @@ let numberOfThumbsDeleted = 0;
 // Track known catalogue paths per source so nested or duplicate source folders
 // cannot suppress one another during a rescan.
 let knownPathsBySource: Map<number, Set<string>> = new Map();
+let knownSuccessfulPhysicalPathCounts: Map<string, number> = new Map();
 let failedMetadataPaths: Set<string> = new Set();
 let pendingMetadataPaths: Set<string> = new Set();
 
 const watcherMap: Map<number, FSWatcher> = new Map();
 const folderScanCoordinator = new FolderScanCoordinator();
+const activeCrawlerScans = new Map<number, FolderScanSession>();
+const activeCrawlerAbortControllers = new Map<number, AbortController>();
+const MAX_SOURCE_SCAN_MEDIA_FILES = 50_000;
+const MAX_PENDING_SOURCE_DIRECTORIES = 25_000;
+const SOURCE_SCAN_DIRECTORY_CONCURRENCY = 4;
+const METADATA_EXTRACTION_CONCURRENCY = 2;
+
+interface BoundedReaddirTask {
+  callback: (error: NodeJS.ErrnoException | null, entries?: Dirent[]) => void;
+  directoryPath: PathLike;
+  options: { withFileTypes: true };
+}
+
+/** Keep broad/network source scans from issuing unbounded parallel readdir calls. */
+export function createBoundedCrawlerFileSystem(
+  concurrency = SOURCE_SCAN_DIRECTORY_CONCURRENCY,
+  maxPending = MAX_PENDING_SOURCE_DIRECTORIES,
+  signal?: AbortSignal,
+): any {
+  if (!Number.isSafeInteger(concurrency) || concurrency <= 0) {
+    throw new Error('The source scanner concurrency is invalid.');
+  }
+  const pending: BoundedReaddirTask[] = [];
+  let active = 0;
+  let requestedDirectories = 0;
+
+  const scanError = (message: string, code: string): NodeJS.ErrnoException => {
+    const error = new Error(message) as NodeJS.ErrnoException;
+    error.code = code;
+    return error;
+  };
+
+  const failPending = (error: NodeJS.ErrnoException): void => {
+    pending.splice(0).forEach((task: BoundedReaddirTask) => {
+      queueMicrotask(() => task.callback(error));
+    });
+  };
+
+  const runNext = (): void => {
+    if (signal?.aborted) {
+      failPending(scanError('The source scan was cancelled.', 'ABORT_ERR'));
+      return;
+    }
+    while (active < concurrency && pending.length > 0) {
+      const task = pending.shift();
+      if (!task) {
+        return;
+      }
+      active++;
+      fs.readdir(task.directoryPath, task.options, (
+        error: NodeJS.ErrnoException | null,
+        entries: Dirent[],
+      ) => {
+        active--;
+        task.callback(error, entries);
+        runNext();
+      });
+    }
+  };
+
+  return {
+    readdir: (
+      directoryPath: PathLike,
+      options: { withFileTypes: true },
+      callback: (error: NodeJS.ErrnoException | null, entries?: Dirent[]) => void,
+    ): void => {
+      if (signal?.aborted) {
+        queueMicrotask(() => callback(scanError('The source scan was cancelled.', 'ABORT_ERR')));
+        return;
+      }
+      // This is a total-operation ceiling, not merely a queue-length ceiling.
+      // A broad tree can otherwise drain and refill the bounded queue forever,
+      // eventually retaining an enormous result set in the crawler.
+      if (requestedDirectories >= maxPending) {
+        queueMicrotask(() => callback(scanError(
+          'The source contains too many folders to scan safely in one operation.',
+          'ERR_SOURCE_SCAN_LIMIT',
+        )));
+        return;
+      }
+      requestedDirectories++;
+      pending.push({ callback, directoryPath, options });
+      runNext();
+    },
+    readdirSync: fs.readdirSync.bind(fs),
+    realpath: fs.realpath.bind(fs),
+    realpathSync: fs.realpathSync.bind(fs),
+    stat: fs.stat.bind(fs),
+    statSync: fs.statSync.bind(fs),
+  };
+}
 
 function knownPathsForSource(inputSource: number): Set<string> {
   let sourcePaths = knownPathsBySource.get(inputSource);
@@ -198,6 +309,31 @@ function knownPathsForSource(inputSource: number): Set<string> {
     knownPathsBySource.set(inputSource, sourcePaths);
   }
   return sourcePaths;
+}
+
+/** Match one catalogue-relative path against the current source exclusions. */
+function sourcePathIsCurrentlyIgnored(inputSource: number, relativePath: unknown): boolean {
+  const sourceFolder = GLOBALS.selectedSourceFolders[inputSource];
+  return Boolean(sourceFolder) && sourceFolderPathIsIgnored(
+    relativePath,
+    sourceFolder.ignoredSubdirectories,
+  );
+}
+
+/** Resolve an absolute path to one configured source without prefix matching. */
+function sourceRelativePathForAbsolutePath(
+  sourceRoot: string,
+  absolutePath: string,
+): string | undefined {
+  const relativePath = path.relative(path.resolve(sourceRoot), path.resolve(absolutePath));
+  if (
+    relativePath === '..'
+    || relativePath.startsWith('..' + path.sep)
+    || path.isAbsolute(relativePath)
+  ) {
+    return undefined;
+  }
+  return normalizeSourceFolderRelativePath(relativePath);
 }
 
 function knownPathCount(): number {
@@ -224,7 +360,12 @@ resetAllQueues();
 export function resetAllQueues(): void {
 
   allowSleep();
+  cancelActiveMediaProcesses();
   initialScanQueueGeneration++;
+  activeCrawlerAbortControllers.forEach((controller: AbortController) => controller.abort());
+  activeCrawlerAbortControllers.clear();
+  activeCrawlerScans.clear();
+  folderScanCoordinator.reset();
   activeInitialScanQueueTokens.clear();
   cancelThumbnailRegeneration();
 
@@ -244,10 +385,10 @@ export function resetAllQueues(): void {
   metaExtractionStartTime = 0;
   pendingMetadataPaths = new Set();
   failedMetadataPaths = new Set();
+  automaticThumbnailHashesQueued.clear();
   importCompletionSent = false;
 
-  metadataQueue = async.queue(metadataQueueRunner, 1); // 1 is the number of parallel worker functions
-                                                       // ^--- experiment with numbers to see what is fastest (try 8)
+  metadataQueue = async.queue(metadataQueueRunner, METADATA_EXTRACTION_CONCURRENCY);
 
   metadataQueue.drain(() => {
 
@@ -295,7 +436,10 @@ function finishImport(): void {
 }
 
 function enqueueMetadata(file: TempMetadataQueueObject): void {
-  if (pendingMetadataPaths.has(file.fullPath)) {
+  if (
+    pendingMetadataPaths.has(file.fullPath)
+    || sourcePathIsCurrentlyIgnored(file.inputSource, file.partialPath)
+  ) {
     return;
   }
   pendingMetadataPaths.add(file.fullPath);
@@ -361,13 +505,19 @@ function reportFolderScanFailure(
   session: FolderScanSession,
   inputDir: string,
   error: unknown,
+  relativeScope = '',
 ): void {
   if (!folderScanCoordinator.fail(session)) {
     return;
   }
   const message = error instanceof Error ? error.message : String(error);
   console.error('Folder scan failed:', inputDir, error);
-  GLOBALS.angularApp.sender.send('folder-scan-failed', session.inputSource, message);
+  GLOBALS.angularApp.sender.send(
+    'folder-scan-failed',
+    session.inputSource,
+    message,
+    relativeScope,
+  );
 }
 
 /**
@@ -383,6 +533,14 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
     element.thumbnailRegenerationJobId,
     regenerationState.jobId,
   ));
+  if (
+    !hasRegenerationMarker
+    && sourcePathIsCurrentlyIgnored(element.inputSource, element.partialPath)
+  ) {
+    automaticThumbnailHashesQueued.delete(element.hash);
+    done();
+    return;
+  }
   if (hasRegenerationMarker && !isRegenerationJob) {
     done();
     return;
@@ -407,6 +565,9 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
       return;
     }
     runnerFinished = true;
+    if (!isRegenerationJob) {
+      automaticThumbnailHashesQueued.delete(element.hash);
+    }
     if (isRegenerationJob && regenerationState.cancelRunner === finishRunner) {
       regenerationState.cancelRunner = undefined;
     }
@@ -660,9 +821,20 @@ async function commitRegeneratedPreviewFiles(
  * Send element back to Angular; if any screenshots missing, queue it for extraction
  * @param imageElement
  */
-function sendNewVideoMetadata(imageElement: ImageElementPlus, scannedSourcePath?: string): void {
+function sendNewVideoMetadata(
+  imageElement: ImageElementPlus,
+  scannedSourcePath?: string,
+  generateAutomaticPreviews = true,
+): void {
 
   knownPathsForSource(Number(imageElement.inputSource)).add(imageElement.fullPath);
+
+  if (!isMetadataImportFailure(imageElement)) {
+    const physicalPath = physicalMediaPathKey(imageElement.fullPath);
+    if (!knownSuccessfulPhysicalPathCounts.has(physicalPath)) {
+      knownSuccessfulPhysicalPathCounts.set(physicalPath, 1);
+    }
+  }
 
   if (shouldExtractThumbnails(imageElement)) {
     failedMetadataPaths.delete(imageElement.fullPath);
@@ -675,10 +847,14 @@ function sendNewVideoMetadata(imageElement: ImageElementPlus, scannedSourcePath?
   const elementForAngular = insertTemporaryFieldsSingle(imageElement);
   GLOBALS.angularApp.sender.send('new-video-meta', elementForAngular, scannedSourcePath);
 
-  if (shouldExtractThumbnails(imageElement)) {
+  if (
+    shouldQueueAutomaticPreviews(imageElement, generateAutomaticPreviews)
+    && !automaticThumbnailHashesQueued.has(imageElement.hash)
+  ) {
     if (thumbExtractionStartTime === 0) {
       thumbExtractionStartTime = performance.now();
     }
+    automaticThumbnailHashesQueued.add(imageElement.hash);
     thumbQueue.push(imageElement);
   }
 }
@@ -691,7 +867,8 @@ function sendNewVideoMetadata(imageElement: ImageElementPlus, scannedSourcePath?
 export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
 
   const scanStillCurrent = (): boolean => (
-    !file.scanSession || folderScanCoordinator.isCurrent(file.scanSession)
+    (!file.scanSession || folderScanCoordinator.isCurrent(file.scanSession))
+    && !sourcePathIsCurrentlyIgnored(file.inputSource, file.partialPath)
   );
 
   if (!scanStillCurrent()) {
@@ -733,7 +910,13 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
       imageElement.fullPath = file.fullPath; // insert this converting `ImageElement` to `ImageElementPlus`
       imageElement.inputSource = file.inputSource;
       imageElement.partialPath = file.partialPath;
-      sendNewVideoMetadata(imageElement, file.scanSession?.sourcePath);
+      sendNewVideoMetadata(
+        imageElement,
+        file.scanSession?.sourcePath,
+        file.generateAutomaticPreviews
+          ?? file.scanSession?.generateAutomaticPreviews
+          ?? true,
+      );
     })
     .catch((error) => {
       // If the file vanished or the share disconnected completely, skip this
@@ -748,32 +931,98 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
 }
 
 /**
- * Use `fdir` to quickly generate file list and add it to `metadataQueue`
- * @param inputDir    -- full path to the input folder
- * @param inputSource -- the number corresponding to the `inputSource` in ImageElement -- must be set!
+ * Recursively enumerate one root-relative scope while keeping every imported
+ * item's `partialPath` relative to the configured source root. Discovered
+ * directories are presentation metadata only and never become source roots.
  */
-function superFastSystemScan(inputDir: string, inputSource: number): void {
+function scanConfiguredFolderScope(
+  configuredRoot: string,
+  scanRoot: string,
+  inputSource: number,
+  relativeScope: string,
+  generateAutomaticPreviews = true,
+): void {
+  if (activeCrawlerScans.has(inputSource)) {
+    GLOBALS.angularApp.sender.send(
+      'folder-scan-request-rejected',
+      inputSource,
+      'Another scan is already running for this source folder.',
+    );
+    return;
+  }
 
-  const scanSession = folderScanCoordinator.begin(inputSource, inputDir);
-  GLOBALS.angularApp.sender.send('started-watching-this-dir', inputSource);
-  const releaseScanQueues = pauseQueuesForInitialScan(inputDir);
+  const sourceFolder = GLOBALS.selectedSourceFolders[inputSource];
+  if (!sourceFolder || !configuredSourceRootsEqual(sourceFolder.path, configuredRoot)) {
+    throw new Error('The source folder is not configured for this catalogue.');
+  }
+  const ignoredSubdirectories = normalizeIgnoredSubdirectories(
+    sourceFolder.ignoredSubdirectories,
+  );
+  if (sourceFolderPathIsIgnored(relativeScope, ignoredSubdirectories)) {
+    throw new Error('This source subfolder is ignored. Include it before rescanning.');
+  }
 
+  const scanSession = folderScanCoordinator.begin(
+    inputSource,
+    configuredRoot,
+    generateAutomaticPreviews,
+  );
+  const scanAbortController = new AbortController();
+  activeCrawlerScans.set(inputSource, scanSession);
+  activeCrawlerAbortControllers.set(inputSource, scanAbortController);
+  preventSleep();
+  GLOBALS.angularApp.sender.send('started-watching-this-dir', inputSource, relativeScope);
+  const releaseScanQueues = pauseQueuesForInitialScan(scanRoot);
+  const finishCrawlerScan = (): void => {
+    if (activeCrawlerScans.get(inputSource) === scanSession) {
+      activeCrawlerScans.delete(inputSource);
+    }
+    if (activeCrawlerAbortControllers.get(inputSource) === scanAbortController) {
+      activeCrawlerAbortControllers.delete(inputSource);
+    }
+    finishInitialFolderScan(releaseScanQueues);
+  };
+
+  const allAcceptableFiles: string[] = [...acceptableFiles, ...GLOBALS.additionalExtensions];
   let crawler;
   try {
-    crawler = new fdir()
-      .exclude((dir: string) => dir.startsWith('vha-')) // .exclude `dir` is the folder name, not full path
+    crawler = new fdir({
+      fs: createBoundedCrawlerFileSystem(
+        SOURCE_SCAN_DIRECTORY_CONCURRENCY,
+        MAX_PENDING_SOURCE_DIRECTORIES,
+        scanAbortController.signal,
+      ),
+    })
+      .exclude((dir: string, dirPath: string) => (
+        dir.startsWith('vha-')
+        || sourceFolderPathIsIgnored(
+          path.relative(configuredRoot, dirPath.replace(/[\\/]+$/, '')),
+          ignoredSubdirectories,
+        )
+      ))
+      // Do not retain unrelated files from a broad parent folder. Directories
+      // remain so the Current Hub tree can still show empty subfolders.
+      .filter((entryPath: string, isDirectory: boolean) => (
+        isDirectory
+        || allAcceptableFiles.includes(path.extname(entryPath).slice(1).toLowerCase())
+      ))
       .withFullPaths()
-      .crawl(inputDir);
+      .withDirs()
+      .withAbortSignal(scanAbortController.signal)
+      // A partial network-volume traversal must fail rather than becoming an
+      // authoritative snapshot that marks preserved catalogue entries absent.
+      .withErrors()
+      .crawl(scanRoot);
   } catch (error) {
-    console.error('Unable to begin folder scan:', inputDir, error);
-    reportFolderScanFailure(scanSession, inputDir, error);
-    finishInitialFolderScan(releaseScanQueues);
+    console.error('Unable to begin folder scan:', scanRoot, error);
+    reportFolderScanFailure(scanSession, scanRoot, error, relativeScope);
+    finishCrawlerScan();
     return;
   }
 
   const t0 = performance.now(); // LOGGING
 
-  crawler.withPromise().then((files: string[]) => {
+  crawler.withPromise().then((entries: string[]) => {
 
     if (!folderScanCoordinator.isCurrent(scanSession)) {
       return;
@@ -781,13 +1030,26 @@ function superFastSystemScan(inputDir: string, inputSource: number): void {
 
     // LOGGING =====================================================================================
     logPerformance('scan took ', t0);
-    console.log('Found ', files.length, ' files in given directory');
+    console.log('Found ', entries.length, ' filesystem entries in given directory');
     // =============================================================================================
 
-    const allAcceptableFiles: string[] = [...acceptableFiles, ...GLOBALS.additionalExtensions];
-    const acceptablePaths: string[] = [];
+    let acceptablePathCount = 0;
+    const discoveredRelativeFolders = new Set<string>();
 
-    files.forEach((fullPath: string) => {
+    entries.forEach((fullPath: string) => {
+      if (/[\\/]$/.test(fullPath)) {
+        const directoryPath = fullPath.replace(/[\\/]+$/, '');
+        const relativeDirectory = normalizeSourceFolderRelativePath(
+          path.relative(configuredRoot, directoryPath),
+        );
+        if (
+          relativeDirectory !== ''
+          && !sourceFolderPathIsIgnored(relativeDirectory, ignoredSubdirectories)
+        ) {
+          discoveredRelativeFolders.add(relativeDirectory);
+        }
+        return;
+      }
 
       const parsed = path.parse(fullPath);
 
@@ -795,31 +1057,58 @@ function superFastSystemScan(inputDir: string, inputSource: number): void {
         return;
       }
 
-      acceptablePaths.push(fullPath);
-      folderScanCoordinator.record(scanSession, fullPath);
+      const relativeFolder = path.relative(configuredRoot, parsed.dir);
+      if (sourceFolderPathIsIgnored(relativeFolder, ignoredSubdirectories)) {
+        return;
+      }
+      const containedPath = resolveExistingMediaPath(
+        configuredRoot,
+        relativeFolder,
+        parsed.base,
+      );
+      acceptablePathCount++;
+      folderScanCoordinator.record(scanSession, containedPath);
     });
 
-    const scanSnapshot: FolderFileSnapshot | undefined = folderScanCoordinator.complete(scanSession);
+    if (acceptablePathCount >= MAX_SOURCE_SCAN_MEDIA_FILES) {
+      throw new Error(
+        `The source contains at least ${MAX_SOURCE_SCAN_MEDIA_FILES.toLocaleString('en-US')} media files. `
+        + 'Choose a narrower folder so the catalogue scan can remain within safe memory limits.',
+      );
+    }
+
+    const scanSnapshot: FolderFileSnapshot | undefined = folderScanCoordinator
+      .completeAndReleaseSnapshot(scanSession);
     if (!scanSnapshot) {
       return;
     }
 
     const knownPaths = knownPathsForSource(inputSource);
-    forgetMissingKnownPaths(
+    forgetMissingKnownPathsInScope(
       knownPaths,
       scanSnapshot,
       failedMetadataPaths,
       pendingMetadataPaths,
+      configuredRoot,
+      relativeScope,
     );
 
-    acceptablePaths.forEach((fullPath: string) => {
+    scanSnapshot.forEach((_present: 1, fullPath: string) => {
       if (knownPaths.has(fullPath) && !failedMetadataPaths.has(fullPath)) {
+        return;
+      }
+
+      // An exact physical path already represented by one successful logical
+      // entry is an overlapping source alias, not a new video. The renderer
+      // attaches the new location from the completed snapshot in one batch.
+      if (knownSuccessfulPhysicalPathCounts.get(physicalMediaPathKey(fullPath)) === 1) {
+        knownPaths.add(fullPath);
         return;
       }
 
       const parsed = path.parse(fullPath);
 
-      const partial: string = path.relative(inputDir, parsed.dir).replace(/\\/g, '/');
+      const partial: string = path.relative(configuredRoot, parsed.dir).replace(/\\/g, '/');
 
       const newItem: TempMetadataQueueObject = {
         dateAdded: Date.now(),
@@ -834,11 +1123,80 @@ function superFastSystemScan(inputDir: string, inputSource: number): void {
 
     });
 
-    GLOBALS.angularApp.sender.send('all-files-found-in-dir', inputSource, scanSnapshot, inputDir);
+    GLOBALS.angularApp.sender.send(
+      'all-files-found-in-dir',
+      inputSource,
+      scanSnapshot,
+      configuredRoot,
+      relativeScope,
+      Array.from(discoveredRelativeFolders).sort(),
+    );
   }).catch((error: Error) => {
-    reportFolderScanFailure(scanSession, inputDir, error);
-  }).finally(() => finishInitialFolderScan(releaseScanQueues));
+    reportFolderScanFailure(scanSession, scanRoot, error, relativeScope);
+  }).finally(finishCrawlerScan);
 
+}
+
+/** Use `fdir` to scan a complete configured source without watching it. */
+function superFastSystemScan(
+  inputDir: string,
+  inputSource: number,
+  generateAutomaticPreviews = true,
+): void {
+  let scanRoot: string;
+  try {
+    scanRoot = resolveExistingSourceSubfolder(inputDir, '');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    GLOBALS.angularApp.sender.send('folder-scan-failed', inputSource, message, '');
+    return;
+  }
+  scanConfiguredFolderScope(
+    inputDir,
+    scanRoot,
+    inputSource,
+    '',
+    generateAutomaticPreviews,
+  );
+}
+
+/**
+ * Scan one configured source subtree without changing the source root or its
+ * watcher configuration. A watched source already covers every descendant,
+ * so a second manual crawler is deliberately rejected.
+ */
+export function rescanSourceFolderScope(
+  inputSource: number,
+  requestedScope: string,
+  generateAutomaticPreviews = true,
+): void {
+  if (!Number.isSafeInteger(inputSource) || inputSource < 0) {
+    throw new Error('The source folder index is invalid.');
+  }
+  if (watcherMap.has(inputSource)) {
+    throw new Error('This source folder is already being watched recursively.');
+  }
+  if (activeCrawlerScans.has(inputSource)) {
+    throw new Error('Another scan is already running for this source folder.');
+  }
+
+  const sourceFolder = GLOBALS.selectedSourceFolders[inputSource];
+  if (!sourceFolder || typeof sourceFolder.path !== 'string') {
+    throw new Error('The source folder is not configured for this catalogue.');
+  }
+
+  // Resolve the renderer-supplied value before normalizing it. In particular,
+  // this preserves the safety helper's rejection of leading path separators
+  // instead of accidentally turning an absolute path into a relative one.
+  const scanRoot = resolveExistingSourceSubfolder(sourceFolder.path, requestedScope);
+  const relativeScope = normalizeSourceFolderRelativePath(requestedScope);
+  scanConfiguredFolderScope(
+    sourceFolder.path,
+    scanRoot,
+    inputSource,
+    relativeScope,
+    generateAutomaticPreviews,
+  );
 }
 
 /**
@@ -847,11 +1205,16 @@ function superFastSystemScan(inputDir: string, inputSource: number): void {
  * @param inputSource -- the number corresponding to the `inputSource` in ImageElement -- must be set!
  * @param persistent  -- whether to continue watching after the initial scan
  */
-export function startFileSystemWatching(inputDir: string, inputSource: number, persistent: boolean): void {
+export function startFileSystemWatching(
+  inputDir: string,
+  inputSource: number,
+  persistent: boolean,
+  generateAutomaticPreviews = true,
+): void {
 
   // only run `chokidar` if `persistent`
   if (!persistent) {
-    superFastSystemScan(inputDir, inputSource);
+    superFastSystemScan(inputDir, inputSource, generateAutomaticPreviews);
     return;
   }
 
@@ -862,12 +1225,61 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
 
   console.log('starting watcher ', inputSource, typeof(inputSource), inputDir);
 
-  const scanSession = folderScanCoordinator.begin(inputSource, inputDir);
-  GLOBALS.angularApp.sender.send('started-watching-this-dir', inputSource);
+  const sourceFolder = GLOBALS.selectedSourceFolders[inputSource];
+  if (!sourceFolder || !configuredSourceRootsEqual(sourceFolder.path, inputDir)) {
+    throw new Error('The source folder is not configured for this catalogue.');
+  }
+  const ignoredSubdirectories = normalizeIgnoredSubdirectories(
+    sourceFolder.ignoredSubdirectories,
+  );
+  const scanSession = folderScanCoordinator.begin(
+    inputSource,
+    inputDir,
+    generateAutomaticPreviews,
+  );
+  GLOBALS.angularApp.sender.send('started-watching-this-dir', inputSource, '');
 
   // WARNING - there are other ways to have a network address that are not accounted here !!!
   const isNetworkAddress: boolean =    inputDir.startsWith('//')
                                     || inputDir.startsWith('\\\\');
+
+  const allAcceptableFiles: string[] = [...acceptableFiles, ...GLOBALS.additionalExtensions];
+  const generatedOutputRoot = physicalMediaPathKey(path.join(
+    GLOBALS.selectedOutputFolder,
+    'vha-' + GLOBALS.hubName,
+  ));
+  const ignoredWatcherPath = (
+    candidatePath: string,
+    stats?: { isFile: () => boolean },
+  ): boolean => {
+    const resolvedCandidate = path.isAbsolute(candidatePath)
+      ? path.resolve(candidatePath)
+      : path.resolve(inputDir, candidatePath);
+    const relativeCandidate = sourceRelativePathForAbsolutePath(inputDir, resolvedCandidate);
+    if (relativeCandidate === undefined) {
+      return true;
+    }
+    if (sourceFolderPathIsIgnored(relativeCandidate, ignoredSubdirectories)) {
+      return true;
+    }
+    const absoluteCandidate = physicalMediaPathKey(resolvedCandidate);
+    const relativeToGeneratedOutput = path.relative(generatedOutputRoot, absoluteCandidate);
+    if (
+      relativeToGeneratedOutput === ''
+      || (
+        relativeToGeneratedOutput !== '..'
+        && !relativeToGeneratedOutput.startsWith('..' + path.sep)
+        && !path.isAbsolute(relativeToGeneratedOutput)
+      )
+    ) {
+      return true;
+    }
+    if (stats?.isFile()) {
+      const extension = path.extname(absoluteCandidate).slice(1).toLowerCase();
+      return !allAcceptableFiles.includes(extension);
+    }
+    return false;
+  };
 
   const watcherConfig = {
     awaitWriteFinish: {
@@ -876,19 +1288,77 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
     },
     cwd: inputDir,
     disableGlobbing: true,
-    ignored: 'vha-*', // WARNING - dangerously ignores any path that includes `vha-` anywhere!!!
+    // Chokidar 4 no longer treats string globs as patterns. Use an exact
+    // descendant test so generated preview clips can never import themselves.
+    ignored: ignoredWatcherPath,
+    followSymlinks: false,
     persistent: true, // NOTE: if `!persistent` we use `superFastSystemScan()` instead !!!
     usePolling: isNetworkAddress ? true : false,
   };
 
   const watcher: FSWatcher = chokidar.watch(inputDir, watcherConfig);
-
-  const allAcceptableFiles: string[] = [...acceptableFiles, ...GLOBALS.additionalExtensions];
+  watcherMap.set(inputSource, watcher);
 
   const releaseScanQueues = pauseQueuesForInitialScan(inputDir);
+  const discoveredRelativeFolders = new Set<string>();
   let initialScanReady = false;
+  let initialScanFailed = false;
+  const sendDirectoryDiscoveryUpdate = (): void => {
+    GLOBALS.angularApp.sender.send(
+      'source-folder-directories-updated',
+      inputSource,
+      Array.from(discoveredRelativeFolders).sort(),
+    );
+  };
 
   watcher
+    .on('addDir', (folderPath: string) => {
+      if (!folderScanCoordinator.isCurrent(scanSession)) {
+        return;
+      }
+
+      try {
+        const relativeFolder = normalizeSourceFolderRelativePath(
+          path.isAbsolute(folderPath) ? path.relative(inputDir, folderPath) : folderPath,
+        );
+        if (relativeFolder !== '') {
+          const directoryWasNew = !discoveredRelativeFolders.has(relativeFolder);
+          discoveredRelativeFolders.add(relativeFolder);
+          if (initialScanReady && directoryWasNew) {
+            sendDirectoryDiscoveryUpdate();
+          }
+        }
+      } catch (error) {
+        console.warn('Ignored an invalid discovered source subfolder:', folderPath, error);
+      }
+    })
+    .on('unlinkDir', (folderPath: string) => {
+      if (!folderScanCoordinator.isCurrent(scanSession)) {
+        return;
+      }
+
+      try {
+        const relativeFolder = normalizeSourceFolderRelativePath(
+          path.isAbsolute(folderPath) ? path.relative(inputDir, folderPath) : folderPath,
+        );
+        if (relativeFolder === '') {
+          return;
+        }
+
+        let directoriesChanged = false;
+        Array.from(discoveredRelativeFolders).forEach((knownFolder: string) => {
+          if (knownFolder === relativeFolder || knownFolder.startsWith(relativeFolder + '/')) {
+            discoveredRelativeFolders.delete(knownFolder);
+            directoriesChanged = true;
+          }
+        });
+        if (initialScanReady && directoriesChanged) {
+          sendDirectoryDiscoveryUpdate();
+        }
+      } catch (error) {
+        console.warn('Ignored an invalid removed source subfolder:', folderPath, error);
+      }
+    })
     .on('add', (filePath: string) => {
 
       if (!folderScanCoordinator.isCurrent(scanSession)) {
@@ -904,7 +1374,13 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
       const subPath = ('/' + filePath.replace(/\\/g, '/')).replace('//', '/');
       const partialPath = subPath.substring(0, subPath.lastIndexOf('/'));
       const fileName = subPath.substring(subPath.lastIndexOf('/') + 1);
-      const fullPath = path.join(inputDir, partialPath, fileName);
+      let fullPath: string;
+      try {
+        fullPath = resolveExistingMediaPath(inputDir, partialPath, fileName);
+      } catch (error) {
+        console.warn('Ignored media outside the configured source folder:', filePath, error);
+        return;
+      }
 
       folderScanCoordinator.record(scanSession, fullPath);
 
@@ -912,9 +1388,25 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
         return;
       }
 
+      if (knownSuccessfulPhysicalPathCounts.get(physicalMediaPathKey(fullPath)) === 1) {
+        knownPathsForSource(inputSource).add(fullPath);
+        if (initialScanReady) {
+          GLOBALS.angularApp.sender.send(
+            'known-source-location-found',
+            inputSource,
+            fullPath,
+            inputDir,
+          );
+        }
+        return;
+      }
+
       const newItem: TempMetadataQueueObject = {
         dateAdded: Date.now(),
         fullPath: fullPath,
+        // This preference governs only the explicit scan/restart. Files added
+        // later by a live watcher retain the ordinary automatic behavior.
+        generateAutomaticPreviews: initialScanReady ? true : generateAutomaticPreviews,
         inputSource: inputSource,
         name: fileName,
         partialPath: partialPath,
@@ -930,7 +1422,13 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
       const subPath = ('/' + filePath.replace(/\\/g, '/')).replace('//', '/');
       const partialPath = subPath.substring(0, subPath.lastIndexOf('/'));
       const fileName = subPath.substring(subPath.lastIndexOf('/') + 1);
-      const fullPath = path.join(inputDir, partialPath, fileName);
+      let fullPath: string;
+      try {
+        fullPath = resolveExistingMediaPath(inputDir, partialPath, fileName);
+      } catch (error) {
+        console.warn('Ignored changed media outside the configured source folder:', filePath, error);
+        return;
+      }
 
       if (!failedMetadataPaths.has(fullPath)) {
         return;
@@ -939,6 +1437,7 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
       enqueueMetadata({
         dateAdded: Date.now(),
         fullPath,
+        generateAutomaticPreviews: true,
         inputSource,
         name: fileName,
         partialPath,
@@ -955,6 +1454,7 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
       const fullPath = path.join(basePath, partialFilePath);
       folderScanCoordinator.remove(scanSession, fullPath);
       knownPathsForSource(inputSource).delete(fullPath);
+      knownSuccessfulPhysicalPathCounts.delete(physicalMediaPathKey(fullPath));
       failedMetadataPaths.delete(fullPath);
       pendingMetadataPaths.delete(fullPath);
       // note: there is no need to watch for `unlinkDir` since `unlink` fires for every file anyway!
@@ -970,7 +1470,14 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
           failedMetadataPaths,
           pendingMetadataPaths,
         );
-        GLOBALS.angularApp.sender.send('all-files-found-in-dir', inputSource, scanSnapshot, inputDir);
+        GLOBALS.angularApp.sender.send(
+          'all-files-found-in-dir',
+          inputSource,
+          scanSnapshot,
+          inputDir,
+          '',
+          Array.from(discoveredRelativeFolders).sort(),
+        );
       }
       finishInitialFolderScan(releaseScanQueues);
 
@@ -985,8 +1492,18 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
     })
     .on('error', (error: Error) => {
       if (!initialScanReady) {
-        reportFolderScanFailure(scanSession, inputDir, error);
+        if (initialScanFailed) {
+          return;
+        }
+        initialScanFailed = true;
+        reportFolderScanFailure(scanSession, inputDir, error, '');
         finishInitialFolderScan(releaseScanQueues);
+        if (watcherMap.get(inputSource) === watcher) {
+          watcherMap.delete(inputSource);
+        }
+        watcher.close().catch((closeError: Error) => {
+          console.warn('Unable to close a failed source-folder watcher:', inputDir, closeError);
+        });
         return;
       }
 
@@ -998,7 +1515,6 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
       );
     });
 
-  watcherMap.set(inputSource, watcher);
 }
 
 /**
@@ -1006,6 +1522,43 @@ export function startFileSystemWatching(inputDir: string, inputSource: number, p
  * reset the known per-source catalogue paths
  * @param finalArray
  */
+export function buildKnownCataloguePathsBySource(
+  finalArray: ImageElement[],
+  inputSources: InputSources,
+): Map<number, Set<string>> {
+  const result = new Map<number, Set<string>>();
+  finalArray.forEach((element: ImageElement) => {
+    try {
+      getImageLocations(element).forEach((location) => {
+        const sourceFolder = inputSources[location.inputSource];
+        if (
+          !sourceFolder?.path
+          || location.missing === true
+          || sourceFolderPathIsIgnored(
+            location.partialPath,
+            sourceFolder.ignoredSubdirectories,
+          )
+        ) {
+          return;
+        }
+        let sourcePaths = result.get(location.inputSource);
+        if (!sourcePaths) {
+          sourcePaths = new Set<string>();
+          result.set(location.inputSource, sourcePaths);
+        }
+        sourcePaths.add(path.join(
+          sourceFolder.path,
+          location.partialPath,
+          location.fileName,
+        ));
+      });
+    } catch (error) {
+      console.warn('Ignored invalid media locations while restoring folder watchers:', error);
+    }
+  });
+  return result;
+}
+
 export function resetWatchers(finalArray: ImageElement[]): void {
 
   // close every old watcher
@@ -1013,25 +1566,151 @@ export function resetWatchers(finalArray: ImageElement[]): void {
     closeWatcher(key);
   });
 
-  knownPathsBySource = new Map();
+  knownPathsBySource = buildKnownCataloguePathsBySource(
+    finalArray,
+    GLOBALS.selectedSourceFolders,
+  );
+  knownSuccessfulPhysicalPathCounts = buildKnownSuccessfulMediaPathCounts(
+    finalArray,
+    GLOBALS.selectedSourceFolders,
+  );
   failedMetadataPaths = new Set();
   pendingMetadataPaths = new Set();
+  activeCrawlerScans.clear();
   folderScanCoordinator.reset();
 
   finalArray.forEach((element: ImageElement) => {
-    const fullPath: string = path.join(
-      GLOBALS.selectedSourceFolders[element.inputSource].path,
-      element.partialPath,
-      element.fileName
-    );
-
-    if (element.missing !== true) {
-      knownPathsForSource(Number(element.inputSource)).add(fullPath);
+    if (shouldExtractThumbnails(element)) {
+      return;
     }
-    if (!shouldExtractThumbnails(element)) {
-      failedMetadataPaths.add(fullPath);
+    try {
+      getImageLocations(element).forEach((location) => {
+        const sourceFolder = GLOBALS.selectedSourceFolders[location.inputSource];
+        if (
+          sourceFolder?.path
+          && !sourceFolderPathIsIgnored(
+            location.partialPath,
+            sourceFolder.ignoredSubdirectories,
+          )
+        ) {
+          failedMetadataPaths.add(path.join(
+            sourceFolder.path,
+            location.partialPath,
+            location.fileName,
+          ));
+        }
+      });
+    } catch (error) {
+      console.warn('Ignored invalid media locations while restoring failed imports:', error);
     }
   });
+}
+
+/** Remove queued work that became excluded before its worker could start. */
+function removeQueuedWorkInIgnoredScopes(inputSource: number): void {
+  if (metadataQueue && typeof metadataQueue.remove === 'function') {
+    metadataQueue.remove((task: { data?: TempMetadataQueueObject }): boolean => {
+      const queued = task?.data;
+      if (
+        !queued
+        || queued.inputSource !== inputSource
+        || !sourcePathIsCurrentlyIgnored(inputSource, queued.partialPath)
+      ) {
+        return false;
+      }
+      pendingMetadataPaths.delete(queued.fullPath);
+      return true;
+    });
+  }
+
+  if (thumbQueue && typeof thumbQueue.remove === 'function') {
+    thumbQueue.remove((task: { data?: ThumbnailQueueElement }): boolean => {
+      const queued = task?.data;
+      if (
+        !queued
+        || queued.thumbnailRegenerationJobId !== undefined
+        || queued.inputSource !== inputSource
+        || !sourcePathIsCurrentlyIgnored(inputSource, queued.partialPath)
+      ) {
+        return false;
+      }
+      automaticThumbnailHashesQueued.delete(queued.hash);
+      return true;
+    });
+  }
+}
+
+/**
+ * Apply one renderer-confirmed exclusion update, refresh path identity caches,
+ * and safely restart only the affected source when needed.
+ */
+export function updateSourceFolderIgnoredSubdirectories(
+  inputSource: number,
+  ignoredSubdirectoriesValue: unknown,
+  finalArray: ImageElement[],
+): {
+  applied: true;
+  ignoredSubdirectories: string[];
+  wasWatching: boolean;
+} {
+  if (!Number.isSafeInteger(inputSource) || inputSource < 0) {
+    throw new Error('The source folder index is invalid.');
+  }
+  if (!Array.isArray(finalArray)) {
+    throw new Error('The updated catalogue is invalid.');
+  }
+  const sourceFolder = GLOBALS.selectedSourceFolders[inputSource];
+  if (!sourceFolder || typeof sourceFolder.path !== 'string') {
+    throw new Error('The source folder is not configured for this catalogue.');
+  }
+  const ignoredSubdirectories = normalizeIgnoredSubdirectories(
+    ignoredSubdirectoriesValue,
+  );
+  const sourcePath = sourceFolder.path;
+  const shouldWatch = sourceFolder.watch === true;
+  finalArray.forEach((element: ImageElement) => getImageLocations(element));
+  const nextSourceFolders: InputSources = {
+    ...GLOBALS.selectedSourceFolders,
+    [inputSource]: {
+      ...(ignoredSubdirectories.length > 0 ? { ignoredSubdirectories } : {}),
+      path: sourcePath,
+      watch: shouldWatch,
+    },
+  };
+  const nextKnownPaths = buildKnownCataloguePathsBySource(finalArray, nextSourceFolders);
+  const nextSuccessfulPathCounts = buildKnownSuccessfulMediaPathCounts(
+    finalArray,
+    nextSourceFolders,
+  );
+
+  closeWatcher(inputSource);
+  GLOBALS.selectedSourceFolders = nextSourceFolders;
+
+  removeQueuedWorkInIgnoredScopes(inputSource);
+  knownPathsBySource = nextKnownPaths;
+  knownSuccessfulPhysicalPathCounts = nextSuccessfulPathCounts;
+
+  // A running worker rechecks the live ignore list before it publishes
+  // metadata. Remove stale retry markers as well so excluded paths cannot be
+  // requeued by later watcher events.
+  const removeIgnoredAbsolutePath = (absolutePath: string): boolean => {
+    const relativePath = sourceRelativePathForAbsolutePath(sourcePath, absolutePath);
+    return relativePath !== undefined
+      && sourceFolderPathIsIgnored(relativePath, ignoredSubdirectories);
+  };
+  failedMetadataPaths = new Set(
+    Array.from(failedMetadataPaths).filter(pathValue => !removeIgnoredAbsolutePath(pathValue)),
+  );
+  pendingMetadataPaths = new Set(
+    Array.from(pendingMetadataPaths).filter(pathValue => !removeIgnoredAbsolutePath(pathValue)),
+  );
+
+  importCompletionSent = false;
+  return {
+    applied: true,
+    ignoredSubdirectories,
+    wasWatching: shouldWatch,
+  };
 }
 
 /**
@@ -1041,7 +1720,10 @@ export function resetWatchers(finalArray: ImageElement[]): void {
  */
 export function closeWatcher(inputSource: number): void {
   console.log('stop watching', inputSource);
+  activeCrawlerAbortControllers.get(inputSource)?.abort();
+  activeCrawlerAbortControllers.delete(inputSource);
   folderScanCoordinator.invalidate(inputSource);
+  activeCrawlerScans.delete(inputSource);
   const watcher = watcherMap.get(inputSource);
   watcherMap.delete(inputSource);
   if (watcher) {
@@ -1058,21 +1740,35 @@ export function closeWatcher(inputSource: number): void {
  * @param inputSource
  * @param folderPath
  */
-export function startWatcher(inputSource: number, folderPath: string, persistent: boolean): void {
+export function startWatcher(
+  inputSource: number,
+  folderPath: string,
+  persistent: boolean,
+  generateAutomaticPreviews = true,
+): void {
   console.log('start watching !!!!', inputSource, typeof(inputSource), folderPath, persistent);
 
   if (watcherMap.has(inputSource)) {
     closeWatcher(inputSource);
   }
 
+  const ignoredSubdirectories = normalizeIgnoredSubdirectories(
+    GLOBALS.selectedSourceFolders[inputSource]?.ignoredSubdirectories,
+  );
   GLOBALS.selectedSourceFolders[inputSource] = {
+    ...(ignoredSubdirectories.length > 0 ? { ignoredSubdirectories } : {}),
     path: folderPath,
     watch: persistent,
   };
 
   importCompletionSent = false;
   preventSleep();
-  startFileSystemWatching(folderPath, inputSource, persistent);
+  startFileSystemWatching(
+    folderPath,
+    inputSource,
+    persistent,
+    generateAutomaticPreviews,
+  );
 }
 
 async function requireNonEmptyFile(filePath: string): Promise<void> {
@@ -1306,6 +2002,7 @@ function withFolderThumbnailCancellation<T>(operation: Promise<T>, jobId: number
  */
 export async function regenerateFolderThumbnails(
   sourceIndex: number,
+  relativePath: string,
   elements: ImageElement[],
   cataloguePath: string,
   onProgress?: (progress: FolderThumbnailRegenerationProgress) => void,
@@ -1322,6 +2019,7 @@ export async function regenerateFolderThumbnails(
   }
 
   const sourceFolder = GLOBALS.selectedSourceFolders[sourceIndex];
+  const normalizedRelativePath = normalizeSourceFolderRelativePath(relativePath);
   if (
     !Number.isInteger(sourceIndex)
     || !sourceFolder
@@ -1332,7 +2030,15 @@ export async function regenerateFolderThumbnails(
     throw new Error('The selected source folder is not available.');
   }
 
-  const plan = planFolderThumbnailRegeneration(elements, sourceIndex);
+  const sourceScopePath = resolveExistingSourceSubfolder(
+    sourceFolder.path,
+    normalizedRelativePath,
+  );
+  const plan = planFolderThumbnailRegeneration(
+    elements,
+    sourceIndex,
+    normalizedRelativePath,
+  );
   if (plan.targets.length === 0) {
     return {
       cancelled: false,
@@ -1365,7 +2071,7 @@ export async function regenerateFolderThumbnails(
   const regenerateFirstAvailableCandidate = async (candidates: ImageElement[]): Promise<number> => {
     try {
       await withFolderThumbnailCancellation(
-        fs.promises.access(sourcePath, fs.constants.R_OK),
+        fs.promises.access(sourceScopePath, fs.constants.R_OK),
         jobId,
       );
     } catch (error) {
