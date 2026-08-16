@@ -11,9 +11,11 @@ interface FolderProperties {
   byteSize: number;        //                 corresponds to ImageElement `fileSize`
   dateAdded?: number;      // latest known addition among videos in this folder
   duration: number;        // in seconds,     corresponds to ImageElement `duration`
+  lastPlayed: number;      // latest playback among videos in this folder
   mtime: number;           //                 corresponds to ImageElement `mtime`
   birthtime: number;       //                 corresponds to ImageElement `birthtime`
   starAverage: StarRating; // averaged weight of stars rounded to nearest `StarRating`
+  timesPlayed: number;     // highest playback count among videos in this folder
   uuid: string             // so that @for can `track` uniquely
 }
 
@@ -35,13 +37,17 @@ export class FolderViewPipe implements PipeTransform {
     let starAverage = 0;
     let totalStars = 0;
     let lastUpdated = 0;
+    let lastPlayed = 0;
+    let timesPlayed = 0;
     let firstCreated: number = Number.MAX_SAFE_INTEGER;
 
-    const uuid = files[0].uuid;
+    const uuid = `folder:${files[0].uuid}`;
 
     files.forEach((element: ImageElement) => {
       totalFileSize += element.fileSize;
       totalDuration += element.duration;
+      lastPlayed = Math.max(lastPlayed, Number(element.lastPlayed) || 0);
+      timesPlayed = Math.max(timesPlayed, Number(element.timesPlayed) || 0);
       if (element.mtime > lastUpdated) {
         lastUpdated = element.mtime;
       }
@@ -61,9 +67,11 @@ export class FolderViewPipe implements PipeTransform {
       byteSize: totalFileSize,
       dateAdded: latestDateAdded(files.map((element: ImageElement) => element.dateAdded)),
       duration: totalDuration,
+      lastPlayed: lastPlayed,
       mtime: lastUpdated,
       birthtime: firstCreated,
       starAverage: starString,
+      timesPlayed: timesPlayed,
       uuid: uuid,
     };
   }
@@ -232,10 +240,12 @@ export class FolderViewPipe implements PipeTransform {
           folderWithStuff.fileSizeDisplay = value.length.toString(); // indicates the number of files in the folder!
           folderWithStuff.hash            = this.extractFourPreviewHashes(value);
           folderWithStuff.index           = -1; // always show at the top (but after the `UP` folder) in the default view
+          folderWithStuff.lastPlayed      = folderProperties.lastPlayed;
           folderWithStuff.mtime           = folderProperties.mtime;
           folderWithStuff.birthtime       = folderProperties.birthtime;
           folderWithStuff.partialPath     = (prefixPath || '/') + key; // must set this for the folder click to register!
           folderWithStuff.stars           = folderProperties.starAverage;
+          folderWithStuff.timesPlayed     = folderProperties.timesPlayed;
           folderWithStuff.uuid            = folderProperties.uuid;
 
           arrWithFolders.push(folderWithStuff);

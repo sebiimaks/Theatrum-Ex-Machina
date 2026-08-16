@@ -8,7 +8,7 @@ import * as path from 'path';
 const fs = require('fs');
 const electron = require('electron');
 const { nativeTheme } = require('electron');
-import { app, protocol, BrowserWindow, screen, dialog, systemPreferences, ipcMain } from 'electron';
+import { app, BrowserWindow, screen, dialog, systemPreferences, ipcMain } from 'electron';
 const windowStateKeeper = require('electron-window-state');
 
 // Methods
@@ -296,19 +296,8 @@ try {
     }
   });
 
-
-  // TODO: `registerFileProtocol` may be deprecated:
-  // https://www.electronjs.org/blog/electron-33-0#behavior-changed-custom-protocol-url-handling-on-windows
-
-  app.whenReady().then(() => {
-    protocol.registerFileProtocol('file', (request, callback) => {
-      const pathname = request.url.replace('file:///', '');
-      callback(pathname);
-    });
-  });
-
 } catch {
-  // Ignore file protocol registration errors and continue starting the app.
+  // Ignore startup registration errors and continue starting the app.
 }
 
 if (GLOBALS.macVersion) {

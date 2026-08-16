@@ -56,3 +56,42 @@ test('recycled detail rows do not steal focus through their tag input', () => {
 
   assert.equal(component.includes('nativeElement.focus()'), false);
 });
+
+test('the Details tray forwards thumbnail right-clicks to the context menu', () => {
+  const template = readFileSync(
+    join(__dirname, '../src/app/components/home.component.html'),
+    'utf8',
+  );
+  const detailsTrayStart = template.indexOf("@if (settingsButtons['showDetailsTray'].toggled)");
+
+  assert.notEqual(detailsTrayStart, -1);
+  assert.match(
+    template.slice(detailsTrayStart),
+    /<app-thumbnail\s+[\s\S]*?\(rightClick\)="rightMouseClicked\(\$event\.mouseEvent, \$event\.item\)"/,
+  );
+});
+
+test('synthetic folder rows carry playback sort metadata and a distinct identity', () => {
+  const pipe = readFileSync(
+    join(__dirname, '../src/app/pipes/folder-view.pipe.ts'),
+    'utf8',
+  );
+
+  assert.match(
+    pipe,
+    /lastPlayed\s*=\s*Math\.max\(lastPlayed, Number\(element\.lastPlayed\) \|\| 0\)/,
+  );
+  assert.match(
+    pipe,
+    /timesPlayed\s*=\s*Math\.max\(timesPlayed, Number\(element\.timesPlayed\) \|\| 0\)/,
+  );
+  assert.match(pipe, /folderWithStuff\.lastPlayed\s*=\s*folderProperties\.lastPlayed/);
+  assert.match(pipe, /folderWithStuff\.timesPlayed\s*=\s*folderProperties\.timesPlayed/);
+  assert.match(pipe, /const uuid = `folder:\$\{files\[0\]\.uuid\}`/);
+});
+
+test('the app does not override Electron built-in file protocol handling', () => {
+  const mainProcess = readFileSync(join(__dirname, '../main.ts'), 'utf8');
+
+  assert.equal(mainProcess.includes("registerFileProtocol('file'"), false);
+});

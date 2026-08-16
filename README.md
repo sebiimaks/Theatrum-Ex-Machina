@@ -16,6 +16,11 @@ Changes under Unreleased are present on the production branch but have not yet b
 ## Unreleased
 
 <details>
+<summary><strong>Selectively incorporate applicable upstream fixes</strong></summary>
+<p>Removed the obsolete override of Electron's built-in <code>file:</code> protocol while retaining normal catalogue, media, and preview loading. The Details tray thumbnail now exposes the existing video context menu, and synthetic Folder View entries carry Last Played and Times Played values from their contained videos so those sorting modes also work at folder level. Folder rows now use a distinct namespaced identity to avoid colliding with the first video they contain, with regression coverage for each adapted change.</p>
+</details>
+
+<details>
 <summary><strong>Restore and streamline Main Settings zoom controls</strong></summary>
 <p>Restored the missing decrease and increase controls in Main Settings as compact, theme-aware circular buttons with visible symbols, hover and keyboard-focus feedback, and accessible labels. Removed the repeated zoom and language labels from their content rows, then left-aligned the zoom controls and a proportionately sized language selector beneath their existing section headings.</p>
 </details>

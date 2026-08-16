@@ -1417,6 +1417,7 @@
     >
     @if (currentClickedItem) {
       <app-thumbnail
+        (rightClick)="rightMouseClicked($event.mouseEvent, $event.item)"
         (videoClick)="handleClick($event, currentClickedItem)"
         (sheetClick)="this.openThumbnailSheet(currentClickedItem)"
 
