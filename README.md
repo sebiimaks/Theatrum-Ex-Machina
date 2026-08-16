@@ -5,7 +5,7 @@
 **All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
 
 - Current fork version: `v3.3.0-tem.3`
-- Change summary updated: 09/08/2026
+- Change summary updated: 16/08/2026
 
 # Fork Changelog
 
@@ -14,6 +14,11 @@ This changelog covers material fork-specific changes made after the upstream bas
 Changes under Unreleased are present on the production branch but have not yet been assigned to a tagged release.
 
 ## Unreleased
+
+<details>
+<summary><strong>Restore and streamline Main Settings zoom controls</strong></summary>
+<p>Restored the missing decrease and increase controls in Main Settings as compact, theme-aware circular buttons with visible symbols, hover and keyboard-focus feedback, and accessible labels. Removed the repeated zoom and language labels from their content rows, then left-aligned the zoom controls and a proportionately sized language selector beneath their existing section headings.</p>
+</details>
 
 <details>
 <summary><strong>Improve Current Hub folder management and extraction safety</strong></summary>

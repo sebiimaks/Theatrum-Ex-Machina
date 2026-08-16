@@ -43,6 +43,13 @@ test('keeps setting actions, toolbar visibility, and Main Settings controls wire
   assert.match(template, /\(click\)="decreaseZoomLevel\.emit\(\)"/);
   assert.match(template, /\(click\)="resetZoomLevel\.emit\(\)"/);
   assert.match(template, /\(click\)="increaseZoomLevel\.emit\(\)"/);
+  assert.match(template, /aria-label="Decrease zoom"[\s\S]*class="zoom-icon-button"/);
+  assert.match(template, /class="zoom-control-symbol" aria-hidden="true">−<\/span>/);
+  assert.match(template, /aria-label="Increase zoom"[\s\S]*class="zoom-icon-button"/);
+  assert.match(template, /class="zoom-control-symbol" aria-hidden="true">\+<\/span>/);
+  assert.equal((template.match(/'SETTINGS\.changeAppZoom'/g) || []).length, 1);
+  assert.equal((template.match(/'SETTINGS\.changeLanguage'/g) || []).length, 1);
+  assert.equal((template.match(/settings-ledger__detail-row--controls-only/g) || []).length, 2);
   assert.match(template, /\(change\)="changeLanguage\.emit\(langSelect\.value\)"/);
   assert.match(template, /openExternalLink\(\$event, 'https:\/\/github\.com\/sebiimaks\/Theatrum-Ex-Machina'\)/);
 });

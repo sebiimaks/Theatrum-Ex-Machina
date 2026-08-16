@@ -151,18 +151,19 @@
           <h3>{{ 'SETTINGS.changeAppZoom' | translate }}</h3>
         </div>
         <div class="settings-ledger__section-content">
-          <div class="settings-ledger__detail-row">
-            <span class="settings-ledger__detail-label">{{ 'SETTINGS.changeAppZoom' | translate }}</span>
+          <div class="settings-ledger__detail-row settings-ledger__detail-row--controls-only">
             <div class="zoom-buttons">
             <button
               (click)="decreaseZoomLevel.emit()"
+              aria-label="Decrease zoom"
               class="zoom-icon-button"
+              title="Decrease zoom"
               [ngClass]="{
                 defaultSettingsButton: !settingsButtons['flatIcons'].toggled,
                 flatSettingsButton: settingsButtons['flatIcons'].toggled
               }"
             >
-              <app-icon [icon]="'icon-minus'" />
+              <span class="zoom-control-symbol" aria-hidden="true">−</span>
             </button>
             <button
               (click)="resetZoomLevel.emit()"
@@ -176,13 +177,15 @@
             </button>
             <button
               (click)="increaseZoomLevel.emit()"
+              aria-label="Increase zoom"
               class="zoom-icon-button"
+              title="Increase zoom"
               [ngClass]="{
                 defaultSettingsButton: !settingsButtons['flatIcons'].toggled,
                 flatSettingsButton: settingsButtons['flatIcons'].toggled
               }"
             >
-              <app-icon [icon]="'icon-plus'" />
+              <span class="zoom-control-symbol" aria-hidden="true">+</span>
             </button>
             </div>
           </div>
@@ -195,8 +198,7 @@
           <h3>{{ 'SETTINGS.changeLanguage' | translate }}</h3>
         </div>
         <div class="settings-ledger__section-content">
-          <label class="settings-ledger__detail-row settings-ledger__detail-row--input" for="settings-language">
-            <span class="settings-ledger__detail-label">{{ 'SETTINGS.changeLanguage' | translate }}</span>
+          <label class="settings-ledger__detail-row settings-ledger__detail-row--controls-only" for="settings-language">
             <select
               #langSelect
               id="settings-language"
