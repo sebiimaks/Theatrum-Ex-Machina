@@ -16,6 +16,16 @@ This changelog covers material fork-specific changes made after the upstream bas
 `v1.0.0` begins the independent Theatrum Ex Machina version line. Earlier entries preserve the fork's pre-1.0 development history.
 
 <details open>
+<summary><strong>Unreleased</strong></summary>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/f19ae57"><code>f19ae57</code></a> — <strong>Harden packaged dependency attribution and licensing</strong></summary>
+<p>Added a deterministic, version-specific notice inventory for every dependency present in the packaged application or compiled renderer, with audited historical notices for packages whose published archives omit complete attribution. Packaged builds now expose renderer, Electron, Chromium, and runtime notices in a readable legal directory, while release verification fails if packaged dependencies and tracked notices differ. FFmpeg and x264 distribution guidance now reflects the published binary workflow and its matching corresponding-source requirement.</p>
+</details>
+
+</details>
+
+<details>
 <summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v1.0.0">v1.0.0</a> — 16 August 2026</strong></summary>
 
 <details>
