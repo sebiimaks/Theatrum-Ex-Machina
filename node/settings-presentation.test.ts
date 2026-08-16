@@ -149,3 +149,90 @@ test('keeps every shortcut and its modifier guidance in the review ledger', () =
   assert.match(component, /event\.preventDefault\(\)/);
   assert.match(component, /document\.activeElement/);
 });
+
+test('presents the wizard as a responsive settings-style ledger', () => {
+  const template = source('src/app/components/wizard/wizard.component.html');
+  const styles = source('src/app/components/wizard/wizard.component.scss');
+
+  assert.equal((template.match(/<section class="wizard-ledger__section/g) || []).length, 2);
+  assert.equal((template.match(/<article class="wizard-step-card/g) || []).length, 6);
+  assert.match(template, /class="wizard-ledger__index"/);
+  assert.match(template, /class="wizard-ledger__section-content/);
+  assert.match(template, /type="button"[\s\S]*class="close-wizard"/);
+  assert.doesNotMatch(template, /\sstyle="/);
+  assert.doesNotMatch(template, /<br\s*\/?\s*>/i);
+
+  assert.match(styles, /\.wizard-ledger__section\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*140px minmax\(0, 1fr\)/);
+  assert.match(styles, /\.wizard-step-card\s*\{[^}]*background:\s*var\(--app-elevated-background\)[^}]*border:\s*1px solid var\(--app-border-subtle\)[^}]*border-radius:\s*var\(--app-panel-radius\)/);
+  assert.match(styles, /@media \(max-width: 900px\)[\s\S]*\.wizard-ledger__section[\s\S]*grid-template-columns:\s*1fr/);
+  assert.match(styles, /@media \(max-width: 620px\)[\s\S]*\.wizard-options-grid[\s\S]*grid-template-columns:\s*1fr/);
+  assert.doesNotMatch(styles, /\bfloat\s*:/);
+});
+
+test('keeps every wizard action and option wired after the ledger restyle', () => {
+  const template = source('src/app/components/wizard/wizard.component.html');
+  const requiredBindings = [
+    /hideWizard\.emit\(\)/,
+    /loadFromFile\.emit\(\)/,
+    /openFromHistory\.emit\(i\)/,
+    /removeHistoryItem\(\$event, i\)/,
+    /clearRecentlyViewedHistory\.emit\(\)/,
+    /\[\(ngModel\)\]="wizard\.futureHubName"/,
+    /validateHubName\(\$event\)/,
+    /selectSourceDirectory\.emit\(\)/,
+    /selectOutputDirectory\.emit\(\)/,
+    /setScreensPerVideo\(true\)/,
+    /setScreensPerVideo\(false\)/,
+    /selectNumOfScreens\(/,
+    /selectScreenshotSize\(/,
+    /\[\(ngModel\)\]="wizard\.extractClips"/,
+    /selectNumOfClipSnippets\(/,
+    /selectLengthOfClipSnippets\(/,
+    /selectClipSize\(/,
+    /importFresh\.emit\(\)/,
+  ];
+
+  requiredBindings.forEach((binding) => assert.match(template, binding));
+  assert.equal((template.match(/type="radio"/g) || []).length, 2);
+  assert.match(template, /'current-step':/);
+  assert.match(template, /'fulfilled':/);
+});
+
+test('keeps wizard theme assets, readable paths, and narrow-window layout', () => {
+  const template = source('src/app/components/wizard/wizard.component.html');
+  const styles = source('src/app/components/wizard/wizard.component.scss');
+
+  assert.match(template, /\[class\.wizard-dark\]="darkMode\(\)"/);
+  assert.match(template, /\[src\]="darkMode\(\) \? '\.\/assets\/logo-dark\.png' : '\.\/assets\/logo-light\.png'"/);
+  assert.match(styles, /\.wizard\.wizard-dark\s*\{[^}]*color-scheme:\s*dark/);
+  assert.match(styles, /\.path\s*\{[^}]*overflow-wrap:\s*anywhere/);
+});
+
+test('keeps the 1.0.0 release identity and fork attribution aligned', () => {
+  const packageJson = JSON.parse(source('package.json'));
+  const packageLock = JSON.parse(source('package-lock.json'));
+  const builder = JSON.parse(source('electron-builder.json'));
+  const globals = source('node/main-globals.ts');
+  const template = source('src/app/components/settings/settings.component.html');
+  const expectedAttribution = 'Theatrum Ex Machina is a personal fork of Video Hub App. '
+    + 'Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. '
+    + 'Use at your own risk.';
+
+  assert.equal(packageJson.version, '1.0.0');
+  assert.equal(packageLock.version, packageJson.version);
+  assert.equal(packageLock.packages[''].version, packageJson.version);
+  assert.match(globals, /version:\s*'1\.0\.0'/);
+  assert.ok(template.includes(`<strong>${expectedAttribution}</strong>`));
+  assert.equal(builder.linux.synopsis, 'Personal fork of Video Hub App');
+  assert.ok(builder.linux.description.includes(expectedAttribution));
+
+  for (const currentDescription of [
+    packageJson.description,
+    builder.linux.synopsis,
+    builder.linux.description,
+    template,
+  ]) {
+    assert.doesNotMatch(currentDescription, /unsupported personal fork/i);
+    assert.doesNotMatch(currentDescription, /Video Hub App 3/);
+  }
+});

@@ -1,8 +1,8 @@
 {
   "name": "theatrum-ex-machina",
   "productName": "Theatrum Ex Machina",
-  "version": "3.3.0-tem.3",
-  "description": "Theatrum Ex Machina - an unsupported personal fork of Video Hub App 3 for browsing, searching, previewing, and managing videos",
+  "version": "1.0.0",
+  "description": "Theatrum Ex Machina - a personal fork of Video Hub App for browsing, searching, previewing, and managing videos",
   "homepage": "https://github.com/sebiimaks/Theatrum-Ex-Machina",
   "repository": {
     "type": "git",

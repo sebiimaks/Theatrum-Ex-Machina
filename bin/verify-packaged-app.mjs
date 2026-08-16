@@ -153,6 +153,16 @@ for (const requiredResource of requiredResources) {
 }
 
 const infoPlist = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', infoPlistPath]));
+assert.equal(
+  infoPlist.CFBundleShortVersionString,
+  packageVersion,
+  'The packaged app display version does not match package.json.',
+);
+assert.equal(
+  infoPlist.CFBundleVersion,
+  packageVersion,
+  'The packaged app build version does not match package.json.',
+);
 assert.equal(infoPlist.CFBundleIconFile, 'icon.icns', 'The packaged app does not use the reviewed icon bundle.');
 assert.equal(
   sha256(packagedIconPath),

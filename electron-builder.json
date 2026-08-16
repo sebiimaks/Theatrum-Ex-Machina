@@ -76,8 +76,8 @@
   "linux": {
     "icon": "src/assets/icons/png",
     "category": "AudioVideo",
-    "synopsis": "Unsupported personal fork of Video Hub App 3",
-    "description": "Browse, search, preview, and manage video collections. Theatrum Ex Machina is an unsupported personal fork of Video Hub App 3. Fork changes were made utilising LLMs. Use at your own risk.",
+    "synopsis": "Personal fork of Video Hub App",
+    "description": "Browse, search, preview, and manage video collections. Theatrum Ex Machina is a personal fork of Video Hub App. Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use at your own risk.",
     "maintainer": "sebiimaks <github.sadness446@passmail.net>",
     "vendor": "sebiimaks",
     "desktop": {

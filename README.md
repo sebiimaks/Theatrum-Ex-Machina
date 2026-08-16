@@ -1,19 +1,24 @@
 # Theatrum Ex Machina
 
-**Theatrum Ex Machina** is an unsupported personal fork of [Video Hub App 3](http://www.videohubapp.com/), maintained at [sebiimaks/Theatrum-Ex-Machina](https://github.com/sebiimaks/Theatrum-Ex-Machina). Its name and logo are fork-specific branding and are not associated with or endorsed by the original developer.
+**Theatrum Ex Machina** is a personal fork of [Video Hub App](http://www.videohubapp.com/), maintained at [sebiimaks/Theatrum-Ex-Machina](https://github.com/sebiimaks/Theatrum-Ex-Machina). Its name and logo are fork-specific branding and are not associated with or endorsed by the original developer.
 
-**All changes in this fork were made utilising LLMs. Use this software at your own risk.** This fork is not supported or endorsed by the original developer.
+**Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
-- Current fork version: `v3.3.0-tem.3`
+- Current fork version: `v1.0.0`
 - Change summary updated: 16/08/2026
 
 # Fork Changelog
 
 This changelog covers material fork-specific changes made after the upstream baseline at [`dcb3229`](https://github.com/whyboris/Video-Hub-App/commit/dcb3229). Documentation-only, CI-only, release-bookkeeping, and temporary workflow commits are intentionally omitted. Select a commit to expand its details.
 
-Changes under Unreleased are present on the production branch but have not yet been assigned to a tagged release.
+`v1.0.0` begins the independent Theatrum Ex Machina version line. Earlier entries preserve the fork's pre-1.0 development history.
 
-## Unreleased
+## [v1.0.0](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v1.0.0) — 16 August 2026
+
+<details>
+<summary><strong>Align the opening wizard with Settings</strong></summary>
+<p>Restyled the opening wizard with the same numbered review-ledger structure, typography, borders, spacing, and controls as Settings. Opening an existing catalogue and creating a new one now have clearer visual grouping while retaining the existing workflow, saved-theme behaviour, and responsive layout.</p>
+</details>
 
 <details>
 <summary><strong>Selectively incorporate applicable upstream fixes</strong></summary>
