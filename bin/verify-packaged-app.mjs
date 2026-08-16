@@ -12,9 +12,10 @@ import { collectRuntimePackagePaths } from './runtime-dependencies.mjs';
 const appPath = process.argv[2];
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(scriptDirectory, '..');
-const packageVersion = JSON.parse(
+const projectPackageJson = JSON.parse(
   fs.readFileSync(path.join(projectDirectory, 'package.json'), 'utf8'),
-).version;
+);
+const packageVersion = projectPackageJson.version;
 const packageLock = JSON.parse(
   fs.readFileSync(path.join(projectDirectory, 'package-lock.json'), 'utf8'),
 );
@@ -42,6 +43,16 @@ const packagedThemeIconPaths = {
 };
 const ffmpegPath = path.join(resourcesPath, 'media-tools', 'ffmpeg');
 const ffprobePath = path.join(resourcesPath, 'media-tools', 'ffprobe');
+const packagedRuntimeNoticesPath = path.join(
+  resourcesPath,
+  'licenses',
+  'THIRD_PARTY_NOTICES.txt',
+);
+const packagedRendererNoticesPath = path.join(
+  resourcesPath,
+  'licenses',
+  'RENDERER-THIRD-PARTY-NOTICES.txt',
+);
 const requiredResources = [
   infoPlistPath,
   packagedIconPath,
@@ -53,7 +64,8 @@ const requiredResources = [
   path.join(resourcesPath, 'licenses', 'FFMPEG-LICENSE.md'),
   path.join(resourcesPath, 'licenses', 'X264-LICENSE.txt'),
   path.join(resourcesPath, 'licenses', 'MEDIA-TOOLS.md'),
-  path.join(resourcesPath, 'licenses', 'THIRD_PARTY_NOTICES.txt'),
+  packagedRuntimeNoticesPath,
+  packagedRendererNoticesPath,
   path.join(resourcesPath, 'licenses', 'ELECTRON-LICENSE.txt'),
   path.join(resourcesPath, 'licenses', 'LICENSES.chromium.html'),
   path.join(resourcesPath, 'media-tools', 'BUILD-MANIFEST.txt'),
@@ -245,10 +257,108 @@ assert.equal(
   'The removed opaque FFmpeg downloader must not be packaged.',
 );
 
-const thirdPartyNotices = fs.readFileSync(
-  path.join(resourcesPath, 'licenses', 'THIRD_PARTY_NOTICES.txt'),
+const thirdPartyNotices = fs.readFileSync(packagedRuntimeNoticesPath, 'utf8');
+assert.equal(
+  thirdPartyNotices,
+  fs.readFileSync(path.join(projectDirectory, 'legal', 'THIRD_PARTY_NOTICES.txt'), 'utf8'),
+  'The packaged runtime notices differ from the reviewed tracked notice file.',
+);
+const rendererThirdPartyNotices = fs.readFileSync(packagedRendererNoticesPath, 'utf8');
+const localRendererThirdPartyNotices = fs.readFileSync(
+  path.join(projectDirectory, 'dist', '3rdpartylicenses.txt'),
   'utf8',
 );
+assert.equal(
+  rendererThirdPartyNotices,
+  localRendererThirdPartyNotices,
+  'The externally packaged renderer notices differ from the production bundle notices.',
+);
+
+const expectedRendererNoticeHeadings = [
+  '@angular/animations',
+  '@angular/cdk',
+  '@angular/common',
+  '@angular/core',
+  '@angular/forms',
+  '@angular/material',
+  '@angular/platform-browser',
+  '@angular/router',
+  '@iharbeck/ngx-virtual-scroller',
+  '@ngx-translate/core',
+  '@tweenjs/tween.js',
+  'fuse.js',
+  'inherits',
+  'natural-orderby',
+  'path',
+  'reflect-metadata',
+  'rxjs',
+  'util',
+  'zone.js',
+];
+const rendererNoticeLines = new Set(rendererThirdPartyNotices.split(/\r?\n/u));
+for (const packageName of expectedRendererNoticeHeadings) {
+  assert.ok(
+    rendererNoticeLines.has(packageName),
+    `Renderer third-party notices are missing ${packageName}.`,
+  );
+}
+
+const bundledRendererPackages = [
+  '@angular/animations',
+  '@angular/cdk',
+  '@angular/common',
+  '@angular/core',
+  '@angular/forms',
+  '@angular/material',
+  '@angular/platform-browser',
+  '@angular/platform-browser-dynamic',
+  '@angular/router',
+  '@tweenjs/tween.js',
+  'rxjs',
+  'zone.js',
+];
+const bundledRendererPackageIdentities = new Set();
+for (const packageName of bundledRendererPackages) {
+  const version = projectPackageJson.devDependencies[packageName];
+  assert.ok(version, `Missing expected renderer dependency declaration: ${packageName}`);
+  const identity = `${packageName}@${version}`;
+  bundledRendererPackageIdentities.add(identity);
+  assert.ok(
+    thirdPartyNotices.includes(`\n${identity}\n`),
+    `Tracked shipped-package notices are missing ${identity}.`,
+  );
+}
+
+function runtimeNoticeSection(identity) {
+  const identityMarker = `\n${identity}\n`;
+  const identityStart = thirdPartyNotices.indexOf(identityMarker);
+  assert.notEqual(identityStart, -1, `Runtime notice section is missing ${identity}.`);
+  const separator = `\n${'='.repeat(80)}\n`;
+  const headerEnd = thirdPartyNotices.indexOf(separator, identityStart + identityMarker.length);
+  assert.notEqual(headerEnd, -1, `Runtime notice header is malformed for ${identity}.`);
+  const sectionEnd = thirdPartyNotices.indexOf(separator, headerEnd + separator.length);
+  return thirdPartyNotices.slice(
+    identityStart,
+    sectionEnd === -1 ? thirdPartyNotices.length : sectionEnd,
+  );
+}
+
+const requiredExactAttributions = new Map([
+  ['@iharbeck/ngx-virtual-scroller@19.0.1', 'Copyright (c) 2016 Rinto Jose (rintoj)'],
+  ['an-qrcode@1.0.7', 'Copyright (c) 2019 - present Naim Malek (naimmalek.github.io)'],
+  ['assert-plus@1.0.0', 'Copyright (c) 2012 Mark Cavage'],
+  ['emoji-regex@8.0.0', 'Copyright Mathias Bynens <https://mathiasbynens.be/>'],
+  ['ignore@3.3.10', 'Copyright (c) 2013 Kael Zhang <i@kael.me>, contributors'],
+  ['ip@2.0.1', 'Copyright Fedor Indutny, 2012.'],
+  ['punycode@2.3.1', 'Copyright Mathias Bynens <https://mathiasbynens.be/>'],
+  ['slash@1.0.0', 'Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com)'],
+]);
+for (const [identity, copyrightNotice] of requiredExactAttributions) {
+  assert.ok(
+    runtimeNoticeSection(identity).includes(copyrightNotice),
+    `The packaged notice for ${identity} is missing its reviewed copyright attribution.`,
+  );
+}
 const packagedPackageIdentities = new Set();
 for (const archivedFile of archivedFiles) {
   if (!archivedFile.startsWith('/node_modules/') || !archivedFile.endsWith('/package.json')) {
@@ -267,6 +377,20 @@ for (const packageIdentity of packagedPackageIdentities) {
     `Packaged dependency is missing from THIRD_PARTY_NOTICES.txt: ${packageIdentity}`,
   );
 }
+const noticePackageIdentities = new Set(
+  [...thirdPartyNotices.matchAll(/^={80}\n([^\n]+)\nDeclared license:/gmu)].map(
+    (match) => match[1],
+  ),
+);
+const expectedNoticePackageIdentities = new Set([
+  ...packagedPackageIdentities,
+  ...bundledRendererPackageIdentities,
+]);
+assert.deepEqual(
+  [...noticePackageIdentities].sort(),
+  [...expectedNoticePackageIdentities].sort(),
+  'THIRD_PARTY_NOTICES.txt must exactly match packaged and bundled-renderer dependencies.',
+);
 
 fs.accessSync(ffmpegPath, fs.constants.X_OK);
 fs.accessSync(ffprobePath, fs.constants.X_OK);

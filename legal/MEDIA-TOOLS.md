@@ -4,7 +4,9 @@ Theatrum Ex Machina includes separate `ffmpeg` and `ffprobe` command-line execut
 
 These executables are licensed under the GNU General Public License, version 2 or any later version. They are not relicensed under the MIT License that applies to Theatrum Ex Machina itself.
 
-Public GitHub releases of this fork are source-only and do not distribute these executables. Local package builds generate the exact source archives, verified checksums, build manifest, license texts, and complete build script as a corresponding `theatrum-ex-machina-media-source` archive beside the application package. If an application binary is distributed in future, its matching source archive must accompany it at the same download location.
+Release builds that distribute these executables must provide their exact corresponding source at the same download location. The release process creates a version-matched `theatrum-ex-machina-media-source-v<version>.tar.xz` archive containing the FFmpeg and x264 source archives, verified checksums, build manifest, licence texts, and complete build script. The matching source archive and checksum manifest are published beside each application binary on the same GitHub release page.
+
+Anyone redistributing an application binary must preserve the applicable notices and provide the matching corresponding-source archive with equivalent access. A source archive from a different application or media-tool version is not a substitute.
 
 Fork releases and source snapshots are available at:
 

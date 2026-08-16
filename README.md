@@ -11,34 +11,38 @@
 
 # Fork Changelog
 
-This changelog covers material fork-specific changes made after the upstream baseline at [`dcb3229`](https://github.com/whyboris/Video-Hub-App/commit/dcb3229). Documentation-only, CI-only, release-bookkeeping, and temporary workflow commits are intentionally omitted. Select a commit to expand its details.
+This changelog covers material fork-specific changes made after the upstream baseline at [`dcb3229`](https://github.com/whyboris/Video-Hub-App/commit/dcb3229). Documentation-only, CI-only, release-bookkeeping, and temporary workflow commits are intentionally omitted. Select a release, then a commit, to expand its details.
 
 `v1.0.0` begins the independent Theatrum Ex Machina version line. Earlier entries preserve the fork's pre-1.0 development history.
 
-## [v1.0.0](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v1.0.0) — 16 August 2026
+<details open>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v1.0.0">v1.0.0</a> — 16 August 2026</strong></summary>
 
 <details>
-<summary><strong>Align the opening wizard with Settings</strong></summary>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/cf87ade"><code>cf87ade</code></a> — <strong>Align the opening wizard with Settings</strong></summary>
 <p>Restyled the opening wizard with the same numbered review-ledger structure, typography, borders, spacing, and controls as Settings. Opening an existing catalogue and creating a new one now have clearer visual grouping while retaining the existing workflow, saved-theme behaviour, and responsive layout.</p>
 </details>
 
 <details>
-<summary><strong>Selectively incorporate applicable upstream fixes</strong></summary>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/ec5f0da"><code>ec5f0da</code></a> — <strong>Selectively incorporate applicable upstream fixes</strong></summary>
 <p>Removed the obsolete override of Electron's built-in <code>file:</code> protocol while retaining normal catalogue, media, and preview loading. The Details tray thumbnail now exposes the existing video context menu, and synthetic Folder View entries carry Last Played and Times Played values from their contained videos so those sorting modes also work at folder level. Folder rows now use a distinct namespaced identity to avoid colliding with the first video they contain, with regression coverage for each adapted change.</p>
 </details>
 
 <details>
-<summary><strong>Restore and streamline Main Settings zoom controls</strong></summary>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/c7be038"><code>c7be038</code></a> — <strong>Restore and streamline Main Settings zoom controls</strong></summary>
 <p>Restored the missing decrease and increase controls in Main Settings as compact, theme-aware circular buttons with visible symbols, hover and keyboard-focus feedback, and accessible labels. Removed the repeated zoom and language labels from their content rows, then left-aligned the zoom controls and a proportionately sized language selector beneath their existing section headings.</p>
 </details>
 
 <details>
-<summary><strong>Improve Current Hub folder management and extraction safety</strong></summary>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/765bd3f"><code>765bd3f</code></a> — <strong>Improve Current Hub folder management and extraction safety</strong></summary>
 <p>Restyled every settings tab as a structured review ledger and reorganised Current Hub around clearer catalogue, video-location, server, and summary sections. Configured roots now expose expandable subdirectory trees with independent rescanning and thumbnail regeneration, optional empty-folder hiding, persistent per-subdirectory ignore controls, and separate choices for scanning and preview generation when adding or rescanning folders. Ignoring a subtree excludes it from future scans and removes only its catalogue associations; entries reachable through another configured location retain their metadata, while metadata-bearing removals receive a structured confirmation.</p>
 <p>Overlapping parent and child source folders now resolve to one logical catalogue entry with multiple durable locations, preserving tags, notes, ratings, play history, Date Added, and availability when either source is removed or temporarily offline. Rescan snapshots, watcher restoration, playback paths, folder statistics, and thumbnail planning understand those alternate locations. Extraction was also hardened for broad and network-hosted folders with bounded directory traversal, deduplicated work, controlled decoder concurrency, cancellable media processes, sequentially assembled filmstrips, scan safety limits, and batched interface refreshes. These changes prevent the previous memory and allocation spikes while retaining practical throughput on capped network storage.</p>
 </details>
 
-## [v3.3.0-tem.3](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.3) — 7 August 2026
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.3">v3.3.0-tem.3</a> — 7 August 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/371e976"><code>371e976</code></a> — <strong>Add persistent hierarchical tagging</strong></summary>
@@ -55,7 +59,10 @@ This changelog covers material fork-specific changes made after the upstream bas
 <p>Reworked renderer confirmation dialogs into a consistent progressive-disclosure layout with concise summaries, before-and-after transitions, supporting safety guidance, expandable impact details, and action-specific warning or destructive styling. Metadata changes, thumbnail regeneration, file deletion, and hierarchy operations now present their scope more clearly before execution.</p>
 </details>
 
-## [v3.3.0-tem.2](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.2) — 4 August 2026
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.2">v3.3.0-tem.2</a> — 4 August 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/4053cbc"><code>4053cbc</code></a> — <strong>Add safe Catalogue Editor metadata transfer</strong></summary>
@@ -87,7 +94,10 @@ This changelog covers material fork-specific changes made after the upstream bas
 <p>Applied the Frosted Graphite design across the title bar, toolbar, sidebar, gallery, trays, settings, wizard, Catalogue Editor, video details, dialogs, and context menus. Typography, spacing, semantic colours, controls, focus states, and light and dark mode treatment are now more consistent while preserving existing workflows. Catalogue Editor search rows also gained case-insensitive Contains and Does Not Contain operators that combine cumulatively and handle missing fields correctly.</p>
 </details>
 
-## [v3.3.0-tem.1](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.1) — 1 August 2026
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-tem.1">v3.3.0-tem.1</a> — 1 August 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/2f091e6"><code>2f091e6</code></a> — <strong>Rebrand the application as Theatrum Ex Machina</strong></summary>
@@ -114,7 +124,10 @@ This changelog covers material fork-specific changes made after the upstream bas
 <p>Regenerated previews now use the current hub extraction settings instead of stale per-video metadata. Completion belongs to the exact queued job, successful counts are synchronised across matching catalogue entries, invalid default screenshots are cleared, and failed or cancelled work leaves catalogue metadata unchanged.</p>
 </details>
 
-## [v3.3.0-sin.8](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.8) — 24 July 2026
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.8">v3.3.0-sin.8</a> — 24 July 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/0e48891"><code>0e48891</code></a> — <strong>Improve Catalogue Editor entry contrast</strong></summary>
@@ -136,21 +149,30 @@ This changelog covers material fork-specific changes made after the upstream bas
 <p>Imports now tolerate damaged, incomplete, slow, or temporarily unavailable media, particularly on mounted and network storage. Probing receives longer timeouts and one settling retry; persistent failures create a thumbnail-free entry tagged <code>import_error</code> and continue importing the remaining files instead of stopping the entire operation. Failure placeholders remain usable across the supported views.</p>
 </details>
 
-## [v3.3.0-sin.7](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.7) — 22 July 2026
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.7">v3.3.0-sin.7</a> — 22 July 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/822e274"><code>822e274</code></a> — <strong>Harden local operations and media-tool packaging</strong></summary>
 <p>Privileged requests are accepted only from the active application window, while paths, links, renames, deletions, and custom-player launches are validated without assembling shell commands. Shutdown waits for catalogue and settings saves. The application uses locally built FFmpeg and FFprobe binaries with matching source, licence notices, architecture and linkage checks, and extraction verification included with the package.</p>
 </details>
 
-## [v3.3.0-sin.6](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.6) — 21 July 2026
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.6">v3.3.0-sin.6</a> — 21 July 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/dfbf7d0"><code>dfbf7d0</code></a> — <strong>Harden catalogue saves and recovery</strong></summary>
 <p>Catalogue and settings writes are validated, atomic, and serialised. New data is written to a temporary file, forced to disk, read back, and then moved into place while the previous valid catalogue remains available as a backup. Opening malformed, empty, unreadable, missing, or disconnected catalogues now produces controlled recovery options instead of crashing, and save failures prevent unsafe hub switching, editor closure, or shutdown.</p>
 </details>
 
-## [v3.3.0-sin.5](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.5) — 20 July 2026
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.5">v3.3.0-sin.5</a> — 20 July 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/0a5e92c"><code>0a5e92c</code></a> — <strong>Add Catalogue Editor tag workflows</strong></summary>
@@ -167,7 +189,10 @@ This changelog covers material fork-specific changes made after the upstream bas
 <p>Moved Video Details notes into a dedicated right-side area so they no longer overlap the path and restyled local zoom controls for consistency. Search-sidebar filter chips now choose black or white foreground text from their background colour, keeping video-name, tag, folder-name, and fuzzy-search values readable in dark mode.</p>
 </details>
 
-## [v3.3.0-sin.4](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.4) — 19 July 2026
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.4">v3.3.0-sin.4</a> — 19 July 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/217b6d9"><code>217b6d9</code></a> — <strong>Apply a fork-specific application identity</strong></summary>
@@ -179,7 +204,10 @@ This changelog covers material fork-specific changes made after the upstream bas
 <p>Changed Linux packaging to use the project's PNG icon set rather than the macOS <code>.icns</code> file, supplying Debian with the expected formats and sizes for a correctly presented installed application.</p>
 </details>
 
-## [v3.3.0-sin.3](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.3) — 19 July 2026
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.3">v3.3.0-sin.3</a> — 19 July 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/22eba40"><code>22eba40</code></a> — <strong>Standardise fork settings and interface wording</strong></summary>
@@ -191,7 +219,10 @@ This changelog covers material fork-specific changes made after the upstream bas
 <p>Raised the top toolbar to 40 pixels and enlarged its controls and icons, with related offsets adjusted to retain alignment. Dark-mode backgrounds, borders, text, forms, tabs, the Tags tray, sidebar, statistics, and active states gained stronger contrast for improved readability and targeting on high-resolution displays.</p>
 </details>
 
-## [v3.3.0-sin.2](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.2) — 18 July 2026
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.2">v3.3.0-sin.2</a> — 18 July 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/6deb525"><code>6deb525</code></a> — <strong>Exclude development files from application packages</strong></summary>
@@ -203,7 +234,10 @@ This changelog covers material fork-specific changes made after the upstream bas
 <p>Added a confirmation dialog before moving a selected video to the trash or deleting it permanently. The prompt names the file, and permanent deletion receives a stronger irreversible-action warning before the main process receives the request.</p>
 </details>
 
-## [v3.3.0-sin.1](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.1) — 18 July 2026
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v3.3.0-sin.1">v3.3.0-sin.1</a> — 18 July 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/8c50f99"><code>8c50f99</code></a> — <strong>Extend extraction timeouts and reset play counts</strong></summary>
@@ -215,9 +249,11 @@ This changelog covers material fork-specific changes made after the upstream bas
 <p>Added an in-app editor for searching and correcting catalogue metadata including names, paths, tags, ratings, year, play count, default screenshot, and notes. Entries can be marked deleted or restored, active and deleted counts remain visible, and edits can be saved to the open catalogue without restarting the application.</p>
 </details>
 
+</details>
+
 ## Distribution and Local Builds
 
-GitHub releases for this fork are source-only. Each version tag provides the source archives generated by GitHub; prebuilt application packages are not attached to releases. Locally built applications do not include automatic update checking.
+Each GitHub tag provides source archives generated by GitHub. When a release also includes a prebuilt application, the same release must include the exact matching media-source archive, checksum manifest, and the licence and build materials required by the packaged FFmpeg and x264 executables. Packaged applications include the project MIT licence, version-pinned Node/runtime notices, production renderer notices, Electron's MIT licence, Chromium's third-party credits, and the media-program notices. Locally built applications do not include automatic update checking.
 
 Before building, install the project's development prerequisites and review `LICENSE`, the generated third-party notices, and the media-tool licensing documentation.
 
@@ -229,8 +265,12 @@ On an Apple Silicon Mac, run `npm run electron:mac:release`. The command builds 
 
 ~~Debian packages must be built natively on Debian 13 AMD64; cross-building them on macOS is not supported. Run `npm run electron` after installing the required development tools and preparing the platform-specific media binaries. The resulting Debian package and matching media-source archive should be distributed together with all required licence materials if they are shared outside the local system.~~
 
-## Original and Supported App
+## Licensing and Attribution
 
-This fork exists because the original application is useful and well designed. For the supported Video Hub App, documentation, and official releases, visit [videohubapp.com](http://www.videohubapp.com/) or the [whyboris/Video-Hub-App repository](https://github.com/whyboris/Video-Hub-App).
+This fork exists because the original application is useful and well designed. For the supported Video Hub App, documentation, and official releases, visit [videohubapp.com](http://www.videohubapp.com/) or the [whyboris/Video-Hub-App repository](https://github.com/whyboris/Video-Hub-App). Please support the original developer, [whyboris](https://github.com/whyboris).
 
-Please support the original developer, [whyboris](https://github.com/whyboris).
+Theatrum Ex Machina is a personal fork of Video Hub App, copyright © 2022 Boris Yakubchik. The application and fork modifications are distributed under the [MIT License](./LICENSE).
+
+Third-party software retains its own copyright and licence terms. Required notices for software distributed with the application are provided in [Third-party notices](./legal/THIRD_PARTY_NOTICES.txt) and in each packaged build.
+
+Packaged `ffmpeg` and `ffprobe` executables include FFmpeg and x264 components under GPL-2.0-or-later. See the [FFmpeg and x264 notice](./legal/MEDIA-TOOLS.md) for licensing, corresponding-source, and redistribution information. Matching source is supplied alongside each binary release.

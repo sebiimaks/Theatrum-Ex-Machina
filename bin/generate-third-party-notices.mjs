@@ -5,7 +5,30 @@ import { fileURLToPath } from 'node:url';
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(scriptDirectory, '..');
 const outputDirectory = path.join(projectDirectory, 'build', 'media-legal');
+const trackedNoticePath = path.join(projectDirectory, 'legal', 'THIRD_PARTY_NOTICES.txt');
 const packageLock = JSON.parse(fs.readFileSync(path.join(projectDirectory, 'package-lock.json'), 'utf8'));
+const bundledRendererPackagePaths = new Set([
+  'node_modules/@angular/animations',
+  'node_modules/@angular/cdk',
+  'node_modules/@angular/common',
+  'node_modules/@angular/core',
+  'node_modules/@angular/forms',
+  'node_modules/@angular/material',
+  'node_modules/@angular/platform-browser',
+  'node_modules/@angular/platform-browser-dynamic',
+  'node_modules/@angular/router',
+  'node_modules/@tweenjs/tween.js',
+  'node_modules/rxjs',
+  'node_modules/zone.js',
+]);
+const shippedPackagePaths = new Set([
+  ...Object.entries(packageLock.packages)
+    .filter(([packagePath, lockEntry]) => {
+      return packagePath.startsWith('node_modules/') && lockEntry.dev !== true;
+    })
+    .map(([packagePath]) => packagePath),
+  ...bundledRendererPackagePaths,
+]);
 
 const licenseCandidates = [
   'LICENSE',
@@ -15,36 +38,70 @@ const licenseCandidates = [
   'LICENCE.md',
   'LICENCE.txt',
   'COPYING',
+  'LICENSE-MIT',
+  'LICENSE-MIT.txt',
+  'license',
+  'license.md',
+  'license.txt',
 ];
 
-const standardMitTerms = `MIT License
+const licenseOverrides = new Map([
+  ['@iharbeck/ngx-virtual-scroller@19.0.1', {
+    file: '@iharbeck__ngx-virtual-scroller-19.0.1.txt',
+    source: 'https://github.com/iharbeck/ngx-virtual-scroller/tree/v19.0.1',
+  }],
+  ['an-qrcode@1.0.7', {
+    file: 'an-qrcode-1.0.7.txt',
+    source: 'https://github.com/naimmalek/an-qrcode/tree/1.0.7',
+  }],
+  ['assert-plus@1.0.0', {
+    file: 'assert-plus-1.0.0.txt',
+    source: 'https://github.com/TritonDataCenter/node-assert-plus/tree/v1.0.0',
+  }],
+  ['ignore@3.3.10', {
+    file: 'ignore-3.3.10.txt',
+    source: 'https://github.com/kaelzhang/node-ignore/blob/3.3.10/LICENSE-MIT',
+  }],
+  ['ip@2.0.1', {
+    file: 'ip-2.0.1.txt',
+    source: 'https://github.com/indutny/node-ip/tree/v2.0.1',
+  }],
+  ['slash@1.0.0', {
+    file: 'slash-1.0.0.txt',
+    source: 'https://github.com/sindresorhus/slash/blob/v1.0.0/license',
+  }],
+]);
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+function copyrightBearingMitNotice(licenseText) {
+  return /^\s*(?:copyright(?:\s*\(c\))?|\(c\)|©)\s+.+$/imu.test(licenseText);
+}
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+function declaredLicenseIncludesMit(declaredLicense) {
+  return /(?:^|[()\s])MIT(?:$|[()\s])/u.test(String(declaredLicense));
+}
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.`;
+function normalizeNoticeText(value) {
+  return value.replace(/\r\n?/gu, '\n').trim();
+}
 
-function authorDisplay(author) {
-  if (typeof author === 'string') {
-    return author;
+function licenseOverride(identity) {
+  const override = licenseOverrides.get(identity);
+  if (!override) {
+    return null;
   }
-  if (author && typeof author === 'object') {
-    return [author.name, author.email, author.url].filter(Boolean).join(' | ');
+  const overridePath = path.join(
+    projectDirectory,
+    'legal',
+    'npm-license-overrides',
+    override.file,
+  );
+  if (!fs.existsSync(overridePath) || !fs.statSync(overridePath).isFile()) {
+    throw new Error(`Audited licence override is missing for ${identity}: ${overridePath}`);
   }
-  return 'See the distributed package metadata and source files for attribution.';
+  return {
+    licenseText: normalizeNoticeText(fs.readFileSync(overridePath, 'utf8')),
+    noticeSource: `audited exact-version override (${override.source})`,
+  };
 }
 
 function firstLicenseFile(packageDirectory) {
@@ -60,9 +117,10 @@ function firstLicenseFile(packageDirectory) {
 const runtimePackages = new Map();
 const missingLicenses = [];
 
-for (const [relativePackageDirectory, lockEntry] of Object.entries(packageLock.packages)) {
-  if (!relativePackageDirectory.startsWith('node_modules/') || lockEntry.dev) {
-    continue;
+for (const relativePackageDirectory of shippedPackagePaths) {
+  const lockEntry = packageLock.packages[relativePackageDirectory];
+  if (!lockEntry) {
+    throw new Error(`Locked shipped package is missing: ${relativePackageDirectory}`);
   }
 
   const packageDirectory = path.join(projectDirectory, relativePackageDirectory);
@@ -72,33 +130,45 @@ for (const [relativePackageDirectory, lockEntry] of Object.entries(packageLock.p
   }
 
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+  if (lockEntry.version && packageJson.version !== lockEntry.version) {
+    throw new Error(
+      `Installed package version does not match package-lock.json: ${packageJson.name}`
+      + ` (installed ${packageJson.version}, locked ${lockEntry.version})`,
+    );
+  }
+  if (lockEntry.name && packageJson.name !== lockEntry.name) {
+    throw new Error(
+      `Installed package name does not match package-lock.json: ${relativePackageDirectory}`,
+    );
+  }
   const identity = `${packageJson.name}@${packageJson.version}`;
   if (runtimePackages.has(identity)) {
     continue;
   }
 
-  const licensePath = firstLicenseFile(packageDirectory);
   const declaredLicense = packageJson.license || lockEntry.license || 'not declared';
-  if (!licensePath && declaredLicense !== 'MIT') {
+  const licensePath = firstLicenseFile(packageDirectory);
+  const override = licenseOverride(identity);
+  if (!licensePath && !override) {
     missingLicenses.push(`${identity} (${declaredLicense})`);
     continue;
   }
 
-  const licenseText = licensePath
-    ? fs.readFileSync(licensePath, 'utf8').trim()
-    : [
-        'The installed package declares the MIT License but does not ship a separate',
-        'license file. Its package metadata and source remain included in the',
-        'application archive. Recorded author metadata:',
-        authorDisplay(packageJson.author),
-        '',
-        standardMitTerms,
-      ].join('\n');
+  const licenseText = override
+    ? override.licenseText
+    : normalizeNoticeText(fs.readFileSync(licensePath, 'utf8'));
+  if (declaredLicenseIncludesMit(declaredLicense) && !copyrightBearingMitNotice(licenseText)) {
+    missingLicenses.push(`${identity} (MIT notice has no explicit copyright attribution)`);
+    continue;
+  }
 
   runtimePackages.set(identity, {
     identity,
     declaredLicense,
     licenseText,
+    noticeSource: override
+      ? override.noticeSource
+      : `installed package file ${path.basename(licensePath)}`,
   });
 }
 
@@ -114,6 +184,7 @@ const sections = orderedPackages.map((entry) => [
   '='.repeat(80),
   entry.identity,
   `Declared license: ${entry.declaredLicense}`,
+  `Notice source: ${entry.noticeSource}`,
   '='.repeat(80),
   entry.licenseText,
 ].join('\n'));
@@ -121,16 +192,19 @@ const sections = orderedPackages.map((entry) => [
 const notices = [
   'Theatrum Ex Machina - third-party runtime notices',
   '',
-  'This file is generated from the exact production dependency lock and installed',
-  'package license files. Theatrum Ex Machina itself remains licensed under the MIT',
-  'License in the application root. FFmpeg and x264 notices are supplied separately.',
+  'This file is generated from the exact production dependency lock, bundled renderer',
+  'package list, and installed package licence files. Theatrum Ex Machina itself',
+  'remains licensed under the MIT License in the application root. FFmpeg and x264',
+  'notices are supplied separately.',
   '',
   ...sections,
   '',
 ].join('\n');
 
 fs.mkdirSync(outputDirectory, { recursive: true });
-fs.writeFileSync(path.join(outputDirectory, 'THIRD_PARTY_NOTICES.txt'), notices, 'utf8');
+fs.mkdirSync(path.dirname(trackedNoticePath), { recursive: true });
+fs.writeFileSync(trackedNoticePath, notices, 'utf8');
+fs.copyFileSync(trackedNoticePath, path.join(outputDirectory, 'THIRD_PARTY_NOTICES.txt'));
 fs.copyFileSync(
   path.join(projectDirectory, 'node_modules', 'electron', 'LICENSE'),
   path.join(outputDirectory, 'ELECTRON-LICENSE.txt'),
@@ -144,4 +218,4 @@ fs.copyFileSync(
   path.join(outputDirectory, 'MEDIA-TOOLS.md'),
 );
 
-console.log(`Generated notices for ${orderedPackages.length} runtime packages.`);
+console.log(`Generated notices for ${orderedPackages.length} shipped packages.`);

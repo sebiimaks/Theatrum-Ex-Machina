@@ -33,6 +33,10 @@
       "to": "licenses"
     },
     {
+      "from": "dist/3rdpartylicenses.txt",
+      "to": "licenses/RENDERER-THIRD-PARTY-NOTICES.txt"
+    },
+    {
       "from": "src/assets/icons/mac/touch-bar",
       "to": "assets"
     },
