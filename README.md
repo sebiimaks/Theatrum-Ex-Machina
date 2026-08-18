@@ -7,7 +7,7 @@
 **Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
 - Current fork version: `v1.0.0`
-- Change summary updated: 16/08/2026
+- Change summary updated: 18/08/2026
 
 # Fork Changelog
 
@@ -21,6 +21,11 @@ This changelog covers material fork-specific changes made after the upstream bas
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/f19ae57"><code>f19ae57</code></a> — <strong>Harden packaged dependency attribution and licensing</strong></summary>
 <p>Added a deterministic, version-specific notice inventory for every dependency present in the packaged application or compiled renderer, with audited historical notices for packages whose published archives omit complete attribution. Packaged builds now expose renderer, Electron, Chromium, and runtime notices in a readable legal directory, while release verification fails if packaged dependencies and tracked notices differ. FFmpeg and x264 distribution guidance now reflects the published binary workflow and its matching corresponding-source requirement.</p>
+</details>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/0c39dbe"><code>0c39dbe</code></a> — <strong>Remove the unused local server</strong></summary>
+<p>Removed the unused local web server and remote-control feature, including its Current Hub controls, IPC and saved settings, bundled resources, translations, and server-only runtime dependencies. Packaging checks now prevent retired server files or dependencies from re-entering builds, reducing unused code and maintenance surface without changing local catalogue workflows.</p>
 </details>
 
 </details>
