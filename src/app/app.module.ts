@@ -9,7 +9,6 @@ import { NgModule } from '@angular/core';
 import { AppRoutingModule } from './app-routing.module';
 
 // External
-import { AnQrcodeModule } from 'an-qrcode';
 import { MatDialogModule } from '@angular/material/dialog';
 import { MatSnackBarModule } from '@angular/material/snack-bar';
 import { TranslateModule } from '@ngx-translate/core';
@@ -201,7 +200,6 @@ import { YearPipe } from './pipes/year.pipe';
     YearPipe,
   ],
   imports: [
-    // AnQrcodeModule, // TODO: enable and fix later!
     AppRoutingModule,
     BrowserAnimationsModule,
     BrowserModule,

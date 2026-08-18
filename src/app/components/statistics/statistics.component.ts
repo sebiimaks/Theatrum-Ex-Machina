@@ -24,12 +24,6 @@ import type { SourceFolderTreeNode } from '../../../../interfaces/source-folder-
 
 import { metaAppear, breadcrumbWordAppear } from '../../common/animations';
 
-export interface ServerDetails {
-  port: number;
-  wifi: string;
-  host: string;
-}
-
 export interface FolderThumbnailRegenerationStatus {
   cancelling?: boolean;
   completedJobs: number;
@@ -62,7 +56,6 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
   readonly cancelFolderThumbnailRegeneration = output<void>();
   readonly finalArrayNeedsSaving = output<any>();
   readonly regenerateFolderThumbnails = output<FolderScopeTarget>();
-  readonly startServerOnPort = output<number>();
   readonly toggleIgnoredSubdirectory = output<FolderScopeTarget>();
 
   readonly appState = input<AppStateInterface>();
@@ -78,7 +71,6 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
   readonly inputFolderChosen = input<Observable<string>>();
   readonly numberScreenshotsDeleted = input<Observable<number>>();
   readonly oldFolderReconnected = input<Observable<{ source: number; path: string; }>>();
-  readonly serverDetails = input<Observable<any>>();
 
   eventSubscriptionMap: Map<string, Subscription> = new Map();
 
@@ -102,10 +94,6 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
 
   removeFoldersMode = false;
 
-  selectedPort = 3000;
-  serverInfo: ServerDetails;
-  serverRunning = false;
-
   objectKeys = Object.keys; // to use in template
   private expandedFolderScopes = new Set<string>();
   private folderTrees = new Map<number, SourceFolderTreeNode>();
@@ -124,24 +112,6 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
     console.log('booting up!');
     this.computeAverages();
 
-    const appState = this.appState();
-    console.log('port from settings:', appState.port);
-
-    this.selectedPort = appState.port ? appState.port : 3000;
-
-    // IPC subscriptions - come in as BehaviorSubject.asObservable()
-
-    this.eventSubscriptionMap.set('serverDetails', this.serverDetails().subscribe((serverDetails: ServerDetails) => {
-      console.log('STATS RECEIVED:');
-      console.log(serverDetails);
-      if (serverDetails) {
-        this.serverRunning = true;
-        this.serverInfo = serverDetails;
-      } else {
-        this.serverRunning = false;
-      }
-      this.cd.detectChanges();
-    }));
 
     this.eventSubscriptionMap.set('inputFolder', this.inputFolderChosen().subscribe((folderPath: string) => {
       if (folderPath) { // first emit from subscription is `undefined`
@@ -578,33 +548,6 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
     }, 3000); // apparently nothing breaks if the component is closed before timeout finishes :)
   }
 
-  startServer() {
-    if (this.serverRunning) {
-      this.startServerOnPort.emit(0); // hack to *STOP* the server
-    } else {
-      this.startServerOnPort.emit(this.selectedPort);
-    }
-  }
-
-  /**
-   * Check port any time it changes
-   */
-  validatePort(port: string) {
-    console.log('port', port);
-    console.log(typeof(port));
-    const parsed: number = parseInt(port, 10);
-    console.log(parsed);
-    if (!Number.isInteger(parsed)) {
-      this.selectedPort = 3000;
-    } else if (parsed > 65535) {
-      this.selectedPort = 3000;
-    } else if (parsed < 2) {
-      this.selectedPort = 3000;
-    } else {
-      this.selectedPort = parsed;
-    }
-    this.appState().port = this.selectedPort;
-  }
 
   /**
    * Unsubscribe from all the electron ipc events

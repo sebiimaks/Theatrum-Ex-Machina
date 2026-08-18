@@ -419,14 +419,7 @@
     "videoFolder": "Burada bulunan videolar:",
     "videoLengths": "Video uzunlukları",
     "watchFolder": "izleme klasörü",
-    "watchFolderHelpText": "Klasör içeriği değiştiğinde hub'ı otomatik olarak güncelle",
-    "server": "Sunucu",
-    "serverMoreInfo": "Bilgisayarınızın telefonunuzla aynı WiFi ağına bağlı olduğundan emin olun. Bu adresi telefonunuzda açın.",
-    "serverOnPort": "limanda",
-    "serverOr": "veya",
-    "serverRunning": "Sunucunuz çalışıyor",
-    "serverStart": "Sunucuyu başlat",
-    "serverStop": "Sunucuyu durdur"
+    "watchFolderHelpText": "Klasör içeriği değiştiğinde hub'ı otomatik olarak güncelle"
   },
   "SYSTEM": {
     "cancel": "İptal",

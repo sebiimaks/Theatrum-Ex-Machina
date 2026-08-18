@@ -13,7 +13,6 @@ const windowStateKeeper = require('electron-window-state');
 
 // Methods
 import { createTouchBar } from './node/main-touch-bar';
-import { setUpIpcForServer } from './node/server';
 import { setUpIpcMessages } from './node/main-ipc';
 import { sendFinalObjectToAngular, setUpDirectoryWatchers, upgradeToVersion3, writeVhaFileToDisk, parseAdditionalExtensions } from './node/main-support';
 import { readVhaFileWithBackup, recoverVhaFileFromBackup } from './node/vha-file-persistence';
@@ -490,7 +489,6 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
 
 setUpIpcMessages(ipcMain, win, pathToAppData, systemMessages);
 
-setUpIpcForServer(ipcMain);
 
 /**
  * Once Angular loads it sends over the `ready` status

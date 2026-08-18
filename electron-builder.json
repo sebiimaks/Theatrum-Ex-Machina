@@ -10,6 +10,7 @@
     "main.js",
     "node/**/*.js",
     "interfaces/**/*.js",
+    "!node/server.js",
     "i18n/*.json",
     {
       "from": "build/runtime-dependencies/node_modules",
@@ -39,10 +40,6 @@
     {
       "from": "src/assets/icons/mac/touch-bar",
       "to": "assets"
-    },
-    {
-      "from": "remote",
-      "to": "remote"
     },
     {
       "from": "src/assets/logo.png",

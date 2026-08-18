@@ -350,88 +350,11 @@
     </div>
   </section>
 
-  <!-- SERVER STUFF -->
-
-  <section class="ledger-section server-ledger-section">
-    <div class="ledger-index">
-      <span class="ledger-number">03</span>
-      <h3>{{ 'STATISTICS.server' | translate }}</h3>
-    </div>
-
-    <div class="ledger-content server-content">
-      <span class="edit-mode-container server-section">
-
-    <button
-      class="wizard-button start-import"
-      (click)="startServer()"
-      [ngClass]="{ 'edit-mode-active': serverRunning }"
-    >
-      @if (serverRunning) {
-        {{ 'STATISTICS.serverStop' | translate }}
-      } @else {
-        {{ 'STATISTICS.serverStart' | translate }}
-      }
-    </button>
-
-  @if (!serverRunning) {
-    <span [ngClass]="{ 'disabled': serverRunning }">
-      {{ 'STATISTICS.serverOnPort' | translate }}
-    </span>
-  }
-  @if (!serverRunning) {
-    <input
-      #portSelectInput
-      (change)="validatePort(portSelectInput.value)"
-      type="number"
-      [(ngModel)]="selectedPort"
-      min="1"
-      max="65535"
-      class="port-select"
-    >
-  }
-
-  @if (serverRunning) {
-    <span>
-      {{ 'STATISTICS.serverRunning' | translate }}
-    </span>
-  }
-  @if (serverRunning) {
-    <span class="more-info">
-      i
-    </span>
-  }
-
-    <div class="manual-tag-tray-label-info" style="line-height: 24px">
-      {{ 'STATISTICS.serverMoreInfo' | translate }}
-    </div>
-
-  @if (serverRunning) {
-    <div class="server-location">
-      <div class="ip-text-container">
-        <span class="ip-address">
-          <span class="gray">http://</span>{{ serverInfo.wifi }}:{{ serverInfo.port }}
-        </span>
-        <br>
-        <span class="or">{{ 'STATISTICS.serverOr' | translate }}</span>
-        <span class="ip-address">
-          <span class="gray">http://</span>{{ serverInfo.host.toLowerCase() }}:{{ serverInfo.port }}
-        </span>
-      </div>
-
-      <qrcode class="qrcode" [level]="1" [qrvalue]="'http://' + serverInfo.wifi + ':' + serverInfo.port" />
-    </div>
-  }
-
-      </span>
-    </div>
-  </section>
-
-
   <!-- STATISTICS FOR THE HUB  -->
 
   <section class="ledger-section summary-section">
     <div class="ledger-index">
-      <span class="ledger-number">04</span>
+      <span class="ledger-number">03</span>
       <h3>Catalogue Summary</h3>
     </div>
 

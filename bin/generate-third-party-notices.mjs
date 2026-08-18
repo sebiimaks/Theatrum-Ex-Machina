@@ -50,10 +50,6 @@ const licenseOverrides = new Map([
     file: '@iharbeck__ngx-virtual-scroller-19.0.1.txt',
     source: 'https://github.com/iharbeck/ngx-virtual-scroller/tree/v19.0.1',
   }],
-  ['an-qrcode@1.0.7', {
-    file: 'an-qrcode-1.0.7.txt',
-    source: 'https://github.com/naimmalek/an-qrcode/tree/1.0.7',
-  }],
   ['assert-plus@1.0.0', {
     file: 'assert-plus-1.0.0.txt',
     source: 'https://github.com/TritonDataCenter/node-assert-plus/tree/v1.0.0',
@@ -61,10 +57,6 @@ const licenseOverrides = new Map([
   ['ignore@3.3.10', {
     file: 'ignore-3.3.10.txt',
     source: 'https://github.com/kaelzhang/node-ignore/blob/3.3.10/LICENSE-MIT',
-  }],
-  ['ip@2.0.1', {
-    file: 'ip-2.0.1.txt',
-    source: 'https://github.com/indutny/node-ip/tree/v2.0.1',
   }],
   ['slash@1.0.0', {
     file: 'slash-1.0.0.txt',

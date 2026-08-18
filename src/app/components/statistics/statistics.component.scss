@@ -60,14 +60,6 @@
   font-weight: bold;
 }
 
-.sources {
-  margin-bottom: 20px;
-}
-
-.sources:not(.server-title) {
-  margin-bottom: 28px;
-  margin-top: 30px;
-}
 
 .hub-name {
   font-size: 20px;
@@ -281,81 +273,6 @@
   }
 }
 
-.server-section {
-  min-height: 100px;
-}
-
-.port-select {
-  background-color: var(--app-control-background);
-  border: 1px solid var(--app-border-strong);
-  border-radius: var(--app-control-radius);
-  color: var(--app-text-primary);
-  cursor: pointer;
-  font-family: var(--app-font-mono);
-  margin-left: 12px;
-  outline: none;
-  width: 56px;
-}
-
-.ip-address {
-  font-family: var(--app-font-mono);
-}
-
-.server-location {
-  color: var(--app-accent-text);
-  display: flex;
-  font-size: 20px;
-  justify-content: center;
-  line-height: 34px;
-}
-
-.more-info {
-  margin-left: 8px;
-}
-
-.server-title {
-  margin-bottom: 10px;
-}
-
-.or {
-  color: var(--app-text-primary);
-  font-size: 14px;
-  margin-right: 14px;
-}
-
-.manual-tag-tray-label-info { // copied from `tag-tray.component.scss`
-  background-color: var(--app-elevated-background);
-  border: 1px solid var(--app-border-strong);
-  border-radius: var(--app-panel-radius);
-  box-shadow: var(--app-shadow-elevated);
-  color: var(--app-text-primary);
-  font-size: 12px;
-  left: calc(50% - 100px); // changed after copy/paste
-  opacity: 0;
-  padding: 5px 10px;
-  pointer-events: none;
-  position: absolute; // changed after copy/paste
-  text-align: left;
-  width: 200px;
-  z-index: 30;
-}
-
-.more-info:hover + .manual-tag-tray-label-info {
-  opacity: 1;
-}
-
-.gray {
-  color: var(--app-text-secondary);
-}
-
-.ip-text-container {
-  padding-left: 175px;
-}
-
-.qrcode {
-  transform: translate(22px, -53px);
-}
-
 :host-context(.settings-modal-dark) {
   ::ng-deep .input-folder .folder-path-final-segment {
     color: var(--app-text-primary);
@@ -372,15 +289,6 @@
 
   .table-container .stats-table tr td:first-child:not(.span-both) {
     color: var(--app-text-secondary);
-  }
-
-  .or {
-    color: var(--app-text-primary);
-  }
-
-  .port-select {
-    background-color: var(--app-control-background);
-    color: var(--app-text-primary);
   }
 
   .regenerate-folder-thumbnails {
@@ -778,38 +686,6 @@
   margin: 0;
 }
 
-.server-content {
-  padding: 15px 18px 18px;
-}
-
-.server-section {
-  min-height: 68px;
-  position: relative;
-}
-
-.server-section .manual-tag-tray-label-info {
-  left: 106px;
-  top: 44px;
-}
-
-.server-location {
-  align-items: center;
-  flex: 1 0 100%;
-  font-size: 15px;
-  justify-content: flex-start;
-  line-height: 28px;
-  margin-top: 8px;
-}
-
-.ip-text-container {
-  padding-left: 0;
-}
-
-.qrcode {
-  margin-left: 18px;
-  transform: none;
-}
-
 .summary-content {
   padding: 14px 16px 18px;
 }
@@ -967,12 +843,4 @@
     flex: 1 1 160px;
   }
 
-  .server-location {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .qrcode {
-    margin: 10px 0 0;
-  }
 }

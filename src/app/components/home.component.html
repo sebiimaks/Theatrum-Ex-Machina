@@ -283,7 +283,6 @@
         (deleteInputSourceFiles)="deleteInputSourceFiles($event)"
         (finalArrayNeedsSaving)="imageElementService.finalArrayNeedsSaving = true"
         (regenerateFolderThumbnails)="confirmRegenerateFolderThumbnails($event)"
-        (startServerOnPort)="startServer($event)"
         (toggleIgnoredSubdirectory)="toggleIgnoredSubdirectory($event)"
 
         [appState]="appState"
@@ -298,7 +297,6 @@
         [inputFolderChosen]="inputSorceChosenBehaviorSubject.asObservable()"
         [numberScreenshotsDeleted]="numberScreenshotsDeletedBehaviorSubject.asObservable()"
         [oldFolderReconnected]="oldFolderReconnectedBehaviorSubject.asObservable()"
-        [serverDetails]="serverDetailsBehaviorSubject.asObservable()"
        />
     </div>
   }

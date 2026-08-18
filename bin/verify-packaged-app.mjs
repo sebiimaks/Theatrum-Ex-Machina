@@ -256,6 +256,23 @@ assert.equal(
   false,
   'The removed opaque FFmpeg downloader must not be packaged.',
 );
+assert.equal(
+  archivedFileSet.has('/node/server.js'),
+  false,
+  'The removed local server implementation must not be packaged.',
+);
+for (const packageName of ['an-qrcode', 'body-parser', 'express', 'ip', 'ws']) {
+  assert.equal(
+    archivedFiles.some((entry) => entry.startsWith(`/node_modules/${packageName}/`)),
+    false,
+    `Removed server dependency must not be packaged: ${packageName}`,
+  );
+}
+assert.equal(
+  fs.existsSync(path.join(resourcesPath, 'remote')),
+  false,
+  'Removed remote-control resources must not be packaged.',
+);
 
 const thirdPartyNotices = fs.readFileSync(packagedRuntimeNoticesPath, 'utf8');
 assert.equal(
@@ -345,11 +362,9 @@ function runtimeNoticeSection(identity) {
 
 const requiredExactAttributions = new Map([
   ['@iharbeck/ngx-virtual-scroller@19.0.1', 'Copyright (c) 2016 Rinto Jose (rintoj)'],
-  ['an-qrcode@1.0.7', 'Copyright (c) 2019 - present Naim Malek (naimmalek.github.io)'],
   ['assert-plus@1.0.0', 'Copyright (c) 2012 Mark Cavage'],
   ['emoji-regex@8.0.0', 'Copyright Mathias Bynens <https://mathiasbynens.be/>'],
   ['ignore@3.3.10', 'Copyright (c) 2013 Kael Zhang <i@kael.me>, contributors'],
-  ['ip@2.0.1', 'Copyright Fedor Indutny, 2012.'],
   ['punycode@2.3.1', 'Copyright Mathias Bynens <https://mathiasbynens.be/>'],
   ['slash@1.0.0', 'Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com)'],
 ]);

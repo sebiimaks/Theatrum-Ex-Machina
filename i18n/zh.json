@@ -420,14 +420,7 @@
     "videoFolder": "视频位于此处：",
     "videoLengths": "视频时长",
     "watchFolder": "监视文件夹",
-    "watchFolderHelpText": "文件夹内容更改时自动更新枢纽",
-    "server": "服务器",
-    "serverMoreInfo": "确保您的电脑连接到与手机相同的WiFi。在手机上打开此地址。",
-    "serverOnPort": "端口",
-    "serverOr": "或者",
-    "serverRunning": "您的服务器正在运行",
-    "serverStart": "启动服务器",
-    "serverStop": "停止服务器"
+    "watchFolderHelpText": "文件夹内容更改时自动更新枢纽"
   },
   "SYSTEM": {
     "cancel": "取消",

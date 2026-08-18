@@ -1,5 +1,5 @@
 import { strict as assert } from 'assert';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { test } from 'node:test';
 import { join } from 'path';
 
@@ -69,7 +69,7 @@ test('uses one keyboard-accessible five-tab settings shell', () => {
   assert.match(component, /event\.key === 'End'/);
 });
 
-test('keeps Current Hub operations inside four responsive ledger sections', () => {
+test('keeps Current Hub operations inside three responsive ledger sections', () => {
   const template = source('src/app/components/statistics/statistics.component.html');
   const component = source('src/app/components/statistics/statistics.component.ts');
   const homeTemplate = source('src/app/components/home.component.html');
@@ -77,13 +77,16 @@ test('keeps Current Hub operations inside four responsive ledger sections', () =
   const styles = source('src/app/components/statistics/statistics.component.scss');
   const toggleStyles = source('src/app/components/statistics/toggle.scss');
 
-  assert.equal((template.match(/<section class="ledger-section/g) || []).length, 4);
+  assert.equal((template.match(/<section class="ledger-section/g) || []).length, 3);
   assert.match(template, /rescanFolder\(/);
   assert.match(template, /reconnectThisFolder\(/);
   assert.match(template, /regenerateFolderThumbnails\.emit\(/);
   assert.match(template, /addAnotherFolder\(/);
   assert.match(template, /cleanScreenshotFolder\(/);
-  assert.match(template, /startServer\(/);
+  assert.doesNotMatch(template, /STATISTICS\.server/);
+  assert.doesNotMatch(template, /startServer\(/);
+  assert.doesNotMatch(template, /port-select|qrcode|server-unavailable/);
+  assert.match(template, /<span class="ledger-number">03<\/span>[\s\S]*<h3>Catalogue Summary<\/h3>/);
   assert.match(template, /class="folder-row-actions"/);
   assert.match(template, /class="watch-folder-control"/);
   assert.match(template, /class="folder-disclosure"/);
@@ -134,6 +137,45 @@ test('keeps Current Hub operations inside four responsive ledger sections', () =
   assert.match(toggleStyles, /\.switch[\s\S]*position:\s*relative/);
   assert.doesNotMatch(toggleStyles, /\.switch\s*\{[^}]*position:\s*absolute/);
   assert.match(styles, /@media \(max-width: 900px\)[\s\S]*\.ledger-section[\s\S]*grid-template-columns:\s*1fr/);
+});
+
+test('removes the optional local server implementation and its user interface', () => {
+  const packageJson = JSON.parse(source('package.json'));
+  const mainProcess = source('main.ts');
+  const homeComponent = source('src/app/components/home.component.ts');
+  const statisticsComponent = source('src/app/components/statistics/statistics.component.ts');
+  const statisticsTemplate = source('src/app/components/statistics/statistics.component.html');
+  const removedRuntimePackages = ['an-qrcode', 'body-parser', 'express', 'ip', 'ws'];
+  const removedSourcePaths = [
+    'bin/hasRemoteCheck.sh',
+    'node/server.ts',
+    'remote/README.md',
+  ];
+
+  for (const packageName of removedRuntimePackages) {
+    assert.equal(packageJson.dependencies?.[packageName], undefined);
+  }
+  for (const relativePath of removedSourcePaths) {
+    assert.equal(existsSync(join(repositoryRoot, relativePath)), false);
+  }
+
+  assert.doesNotMatch(mainProcess, /setUpIpcForServer|node\/server/);
+  assert.doesNotMatch(
+    homeComponent,
+    /start-server|stop-server|remote-open-video|remote-ip-address|remote-save-settings|remote-send-new-data/,
+  );
+  assert.doesNotMatch(
+    statisticsComponent,
+    /ServerDetails|startServerOnPort|selectedPort|serverRunning|serverInfo/,
+  );
+  assert.doesNotMatch(statisticsTemplate, /STATISTICS\.server|port-select|qrcode/);
+
+  const removedTranslationKey = /"server(?:MoreInfo|OnPort|Or|Running|Start|Stop)?"\s*:/;
+  for (const translationFile of readdirSync(join(repositoryRoot, 'i18n'))) {
+    if (translationFile.endsWith('.json')) {
+      assert.doesNotMatch(source(`i18n/${translationFile}`), removedTranslationKey);
+    }
+  }
 });
 
 test('keeps every shortcut and its modifier guidance in the review ledger', () => {

@@ -419,14 +419,7 @@
     "videoFolder": "Video nằm ở đây:",
     "videoLengths": "Thời lượng video",
     "watchFolder": "thư mục xem",
-    "watchFolderHelpText": "Tự động cập nhật trung tâm khi nội dung thư mục thay đổi",
-    "server": "Người phục vụ",
-    "serverMoreInfo": "Đảm bảo rằng PC của bạn được kết nối với cùng một WiFi như điện thoại của bạn. Mở địa chỉ này trên điện thoại của bạn.",
-    "serverOnPort": "trên cảng",
-    "serverOr": "hoặc là",
-    "serverRunning": "Máy chủ của bạn đang chạy",
-    "serverStart": "Khởi động máy chủ",
-    "serverStop": "Dừng máy chủ"
+    "watchFolderHelpText": "Tự động cập nhật trung tâm khi nội dung thư mục thay đổi"
   },
   "SYSTEM": {
     "cancel": "Hủy bỏ",

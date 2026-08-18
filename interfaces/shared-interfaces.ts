@@ -80,11 +80,6 @@ export interface RenameFileResponse {
   errMsg?: string;
 }
 
-export interface RemoteVideoClick {
-  video: ImageElement;
-  thumbIndex?: number;
-}
-
 export interface ContextMenuCoordinate {
   x: number;
   y: number;

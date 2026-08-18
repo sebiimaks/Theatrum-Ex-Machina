@@ -83,7 +83,6 @@ export const AppState: AppStateInterface = { // AppState is saved into `settings
   language: 'en',
   menuHidden: false,
   numOfFolders: 0,
-  port: 3000,
   preferredVideoPlayer: '',
   scanFoldersOnAddition: true,
   selectedOutputFolder: '',
@@ -104,7 +103,6 @@ export interface AppStateInterface {
   language: SupportedLanguage;
   menuHidden: boolean;
   numOfFolders: number;
-  port: number;
   preferredVideoPlayer: string;
   scanFoldersOnAddition: boolean;
   selectedOutputFolder: string;
