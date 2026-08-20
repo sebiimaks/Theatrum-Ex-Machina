@@ -7,7 +7,7 @@
 **Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
 - Current fork version: `v1.0.0`
-- Change summary updated: 18/08/2026
+- Change summary updated: 20/08/2026
 
 # Fork Changelog
 
@@ -17,6 +17,12 @@ This changelog covers material fork-specific changes made after the upstream bas
 
 <details open>
 <summary><strong>Unreleased</strong></summary>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/100cba7"><code>100cba7</code></a> — <strong>Add safe Video Hub App catalogue interoperability</strong></summary>
+<p>Opening a legacy <code>.vha2</code> catalogue now presents a structured choice to browse and play it read only, or create a unique adjacent <code>.scaena</code> duplicate and reopen that copy with full editing, scanning, and saving. Read-only sessions display a persistent badge and block catalogue, source-file, scan, watcher, preview, rename, and deletion changes while leaving the original catalogue and backup untouched; if the primary legacy file is invalid, a validated backup can be opened in memory or used to create the duplicate without rewriting the source files.</p>
+<p>Current Hub can now export an editable <code>.scaena</code> catalogue as a Video Hub App-compatible <code>.vha2</code> copy after clearly disclosing conversion limits. Export preserves supported video metadata and promotes an available media location, while omitting fork-only Date Added, tag hierarchy, alternate-location, ignored-directory, availability/import-error, and pending-deletion state. Finder, startup, and file-picker open requests are queued and handled in order so multiple requests cannot overlap.</p>
+</details>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/f19ae57"><code>f19ae57</code></a> — <strong>Harden packaged dependency attribution and licensing</strong></summary>
