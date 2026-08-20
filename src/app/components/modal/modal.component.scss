@@ -88,6 +88,43 @@ h1 {
   font-size: 18px;
 }
 
+.dialog-choice-list {
+  border: 1px solid var(--app-border-subtle);
+  border-radius: var(--app-control-radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dialog-choice-description {
+  background: color-mix(in srgb, var(--app-gallery-background) 72%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+
+  & + & {
+    border-top: 1px solid var(--app-border-subtle);
+  }
+
+  strong {
+    color: var(--app-text-primary);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  span {
+    color: var(--app-text-secondary);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+}
+
+.dialog-choice-description-primary {
+  box-shadow: inset 3px 0 0 var(--app-accent);
+}
+
 .dialog-disclosure {
   border-top: 1px solid var(--app-border-subtle);
   color: var(--app-text-secondary);
@@ -141,6 +178,10 @@ h1 {
   gap: 10px;
   justify-content: flex-end;
   padding: 14px 18px;
+}
+
+.dialog-choice-actions {
+  flex-wrap: wrap;
 }
 
 .dialog-button {
@@ -207,6 +248,10 @@ h1 {
   .dialog-actions {
     align-items: stretch;
     flex-direction: column-reverse;
+  }
+
+  .dialog-choice-actions {
+    flex-direction: column;
   }
 
   .dialog-button {

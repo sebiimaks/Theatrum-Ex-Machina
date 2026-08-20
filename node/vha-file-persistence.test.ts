@@ -11,6 +11,7 @@ import {
   readVhaFileWithBackup,
   recoverVhaFileFromBackup,
   writeVhaJsonAtomically,
+  writeVhaJsonExclusively,
 } from './vha-file-persistence.ts';
 import { writeVhaFileToDisk } from './main-support';
 
@@ -102,18 +103,41 @@ test('loads a valid legacy catalogue without consulting the backup', async () =>
 
   assert.equal(result.source, 'primary');
   assert.equal(result.finalObject?.hubName, 'Primary');
+  assert.equal(result.raw, fs.readFileSync(cataloguePath, 'utf8'));
 });
 
-test('saves an opened legacy catalogue in place without creating a branded copy', async () => {
+test('returns the exact validated backup contents without changing either legacy file', async () => {
   const directory = createTemporaryDirectory();
-  const legacyPath = path.join(directory, 'legacy.vha2');
-  fs.writeFileSync(legacyPath, JSON.stringify(createCatalogue('Original')));
+  const cataloguePath = path.join(directory, 'legacy.vha2');
+  const invalidPrimary = '{';
+  const backup = JSON.stringify(createCatalogue('Backup'));
+  fs.writeFileSync(cataloguePath, invalidPrimary);
+  fs.writeFileSync(cataloguePath + '.bak', backup);
 
-  await writeVhaJsonAtomically(legacyPath, JSON.stringify(createCatalogue('Updated')));
+  const result = await readVhaFileWithBackup(cataloguePath);
 
-  assert.equal(parseVhaJson(fs.readFileSync(legacyPath)).hubName, 'Updated');
-  assert.equal(parseVhaJson(fs.readFileSync(legacyPath + '.bak')).hubName, 'Original');
-  assert.equal(fs.existsSync(path.join(directory, 'legacy.scaena')), false);
+  assert.equal(result.source, 'backup');
+  assert.equal(result.raw, backup);
+  assert.equal(fs.readFileSync(cataloguePath, 'utf8'), invalidPrimary);
+  assert.equal(fs.readFileSync(cataloguePath + '.bak', 'utf8'), backup);
+});
+
+test('publishes a validated new catalogue exclusively without a backup or replacement', async () => {
+  const directory = createTemporaryDirectory();
+  const destination = path.join(directory, 'duplicate.scaena');
+  const firstJson = JSON.stringify(createCatalogue('First'));
+  const secondJson = JSON.stringify(createCatalogue('Second'));
+
+  await writeVhaJsonExclusively(destination, firstJson);
+
+  assert.equal(fs.readFileSync(destination, 'utf8'), firstJson);
+  assert.equal(fs.existsSync(destination + '.bak'), false);
+  await assert.rejects(
+    writeVhaJsonExclusively(destination, secondJson),
+    (error: NodeJS.ErrnoException) => error.code === 'EEXIST',
+  );
+  assert.equal(fs.readFileSync(destination, 'utf8'), firstJson);
+  assert.equal(fs.existsSync(destination + '.bak'), false);
 });
 
 test('preserves Date Added while legacy entries remain valid without it', () => {

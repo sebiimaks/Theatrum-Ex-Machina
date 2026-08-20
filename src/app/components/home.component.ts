@@ -4,7 +4,7 @@ import { Component, HostListener } from '@angular/core';
 
 import * as path from 'path';
 
-import { BehaviorSubject } from 'rxjs';
+import { BehaviorSubject, firstValueFrom } from 'rxjs';
 import { TranslateService } from '@ngx-translate/core';
 import { VirtualScrollerComponent } from '@iharbeck/ngx-virtual-scroller';
 
@@ -89,7 +89,10 @@ import type { TagHierarchyMoveEmission } from './tag-tray/tag-tray.component';
 import type { SettingsButtonSavedProperties, SettingsObject } from '../../../interfaces/settings-object.interface';
 import type { SortType } from '../pipes/sorting.pipe';
 import type { WizardOptions } from '../../../interfaces/wizard-options.interface';
-import { isSupportedCatalogueFilePath } from '../../../interfaces/catalogue-file';
+import {
+  isLegacyCatalogueFilePath,
+  isSupportedCatalogueFilePath,
+} from '../../../interfaces/catalogue-file';
 import type {
   HistoryItem,
   RenameFileResponse,
@@ -153,6 +156,27 @@ interface IndividualThumbnailRegenerationStatus {
   cancelling: boolean;
   fileHash: string;
   fileName: string;
+}
+
+type CatalogueAccessMode = 'read-only' | 'read-write';
+type LegacyCatalogueOpenChoice = 'duplicate-scaena' | 'read-only';
+
+interface Vha2ExportResult {
+  error?: string;
+  fileName?: string;
+  status: 'cancelled' | 'error' | 'exported' | 'read-only';
+}
+
+interface CatalogueOpenRequest {
+  acknowledgeExternalRequest: boolean;
+  fullPath: string;
+}
+
+interface CatalogueLoadedFromBackupDetails {
+  openedPath?: string;
+  primaryError?: string;
+  readOnly?: boolean;
+  sourcePath?: string;
 }
 
 const GALLERY_LAYOUT_TRANSITION_MS = 320;
@@ -395,6 +419,16 @@ export class HomeComponent implements OnInit, AfterViewInit {
   catalogueEditorOpen = false;
   catalogueEditorSaveStatus = '';
   catalogueEditorSaving = false;
+  catalogueAccessMode: CatalogueAccessMode = 'read-write';
+  private backupNoticeOpen = false;
+  private catalogueOpenInFlight = false;
+  private catalogueOpenQueueScheduled = false;
+  private legacyOpenDialogPath: string | null = null;
+  private pendingCatalogueOpenRequests: CatalogueOpenRequest[] = [];
+
+  get catalogueReadOnly(): boolean {
+    return this.catalogueAccessMode === 'read-only';
+  }
 
   fuzzySearchString = '';
   startsWithSearchString = '';
@@ -1098,6 +1132,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       pathToFile: string,
       outputFolderPath: string,
       catalogueSettingsNormalized = false,
+      catalogueAccessMode: CatalogueAccessMode = 'read-write',
     ) => {
 
       // console.log('input dirs', finalObject.inputDirs);
@@ -1105,6 +1140,8 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.currentClickedItem = undefined;
       this.lastRenamedFileHack = undefined;
       this.imageElementService.finalArrayNeedsSaving = false;
+      this.catalogueAccessMode = catalogueAccessMode === 'read-only' ? 'read-only' : 'read-write';
+      this.catalogueEditorOpen = false;
 
       this.currentScreenshotSettings = finalObject.screenshotSettings;
       const thumbnailMetadataNormalized = normalizeCatalogueThumbnailCounts(
@@ -1135,7 +1172,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       this.setTags(finalObject.addTags, finalObject.removeTags); // auto-tags
 
       this.imageElementService.imageElements = this.demo ? finalObject.images.slice(0, 50) : finalObject.images;
-      if (thumbnailMetadataNormalized || catalogueSettingsNormalized) {
+      if (!this.catalogueReadOnly && (thumbnailMetadataNormalized || catalogueSettingsNormalized)) {
         this.imageElementService.finalArrayNeedsSaving = true;
       }
 
@@ -1161,6 +1198,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
       this.cd.detectChanges();
       this.markRendererStartupComplete();
+      this.finishCatalogueOpenRequest();
     });
 
     // If no previously saved settings exist, this gets sent over
@@ -1216,10 +1254,41 @@ export class HomeComponent implements OnInit, AfterViewInit {
       // Can happen when trying to open a catalogue file that no longer exists
       this.showOpeningWizard(firstRun, failedPath);
       this.markRendererStartupComplete();
+      this.finishCatalogueOpenRequest();
     });
 
     this.electronService.ipcRenderer.on('open-catalogue-from-system', (event, fullPath: string) => {
-      this.loadThisVhaFile(fullPath);
+      this.handleCatalogueOpenRequest({
+        acknowledgeExternalRequest: true,
+        fullPath,
+      });
+    });
+
+    this.electronService.ipcRenderer.on('legacy-catalogue-duplicated', (event, fileName: string) => {
+      this.zone.run(() => {
+        this.modalService.openSnackbar(this.translate.instant(
+          'SYSTEM.legacyCatalogueDuplicateSuccess',
+          { fileName },
+        ));
+      });
+    });
+
+    this.electronService.ipcRenderer.on('catalogue-loaded-from-backup', (
+      event,
+      details: CatalogueLoadedFromBackupDetails = {},
+    ) => {
+      this.zone.run(() => this.showCatalogueLoadedFromBackup(details));
+    });
+
+    this.electronService.ipcRenderer.on('catalogue-read-only-write-blocked', (event, channel?: string) => {
+      this.zone.run(() => {
+        this.unwindReadOnlyMutationState(channel);
+        this.showReadOnlyActionBlocked();
+      });
+    });
+
+    this.electronService.ipcRenderer.on('catalogue-open-request-finished', () => {
+      this.finishCatalogueOpenRequest();
     });
 
     // This happens when the computer is about to SHUT DOWN
@@ -1256,6 +1325,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.electronService.ipcRenderer.on('current-vha-file-save-failed', (event, errorMessage: string) => {
       this.catalogueEditorSaving = false;
       this.catalogueEditorSaveStatus = errorMessage ? 'Save failed: ' + errorMessage : 'Save failed';
+      this.finishCatalogueOpenRequest();
       this.cd.detectChanges();
     });
 
@@ -2024,10 +2094,123 @@ export class HomeComponent implements OnInit, AfterViewInit {
   }
 
   public loadThisVhaFile(fullPath: string): void {
+    this.handleCatalogueOpenRequest({
+      acknowledgeExternalRequest: false,
+      fullPath,
+    });
+  }
+
+  private handleCatalogueOpenRequest(request: CatalogueOpenRequest): void {
     if (this.blockActionDuringFolderThumbnailRegeneration()) {
+      this.acknowledgeExternalCatalogueOpen(request);
       return;
     }
-    this.electronService.ipcRenderer.send('load-this-vha-file', fullPath, this.getFinalObjectForSaving());
+
+    if (
+      this.catalogueOpenInFlight
+      || this.catalogueOpenQueueScheduled
+      || this.legacyOpenDialogPath !== null
+      || this.backupNoticeOpen
+    ) {
+      this.pendingCatalogueOpenRequests.push(request);
+      return;
+    }
+
+    if (!isLegacyCatalogueFilePath(request.fullPath)) {
+      this.catalogueOpenInFlight = true;
+      this.requestCatalogueOpen(request.fullPath, 'read-write');
+      this.acknowledgeExternalCatalogueOpen(request);
+      return;
+    }
+
+    this.legacyOpenDialogPath = request.fullPath;
+    // Startup is ready once the first decision is visible. This avoids leaving
+    // Finder/second-instance open requests stranded if the user cancels it.
+    this.markRendererStartupComplete();
+    this.zone.run(() => {
+      this.modalService.openChoiceDialog<LegacyCatalogueOpenChoice>({
+        cancelLabel: this.translate.instant('SYSTEM.cancel'),
+        choices: [
+          {
+            description: this.translate.instant('SYSTEM.legacyCatalogueReadOnlyDescription'),
+            id: 'read-only',
+            label: this.translate.instant('SYSTEM.legacyCatalogueReadOnlyLabel'),
+          },
+          {
+            description: this.translate.instant('SYSTEM.legacyCatalogueDuplicateDescription'),
+            id: 'duplicate-scaena',
+            label: this.translate.instant('SYSTEM.legacyCatalogueDuplicateLabel'),
+            primary: true,
+          },
+        ],
+        summary: this.translate.instant('SYSTEM.legacyCatalogueDialogSummary', {
+          fileName: path.basename(request.fullPath),
+        }),
+        supportingText: this.translate.instant('SYSTEM.legacyCatalogueDialogSupportingText'),
+        title: this.translate.instant('SYSTEM.legacyCatalogueDialogTitle'),
+      }).subscribe((choice: LegacyCatalogueOpenChoice | undefined) => {
+        this.legacyOpenDialogPath = null;
+        if (choice) {
+          this.catalogueOpenInFlight = true;
+          this.requestCatalogueOpen(request.fullPath, choice);
+        }
+        this.acknowledgeExternalCatalogueOpen(request);
+        if (!choice) {
+          this.continuePendingCatalogueOpen();
+        }
+      });
+    });
+  }
+
+  private acknowledgeExternalCatalogueOpen(request: CatalogueOpenRequest): void {
+    if (request.acknowledgeExternalRequest) {
+      this.electronService.ipcRenderer.send('catalogue-open-request-consumed');
+    }
+  }
+
+  private finishCatalogueOpenRequest(): void {
+    this.catalogueOpenInFlight = false;
+    this.continuePendingCatalogueOpen();
+  }
+
+  private continuePendingCatalogueOpen(): void {
+    if (
+      this.catalogueOpenInFlight
+      || this.catalogueOpenQueueScheduled
+      || this.legacyOpenDialogPath !== null
+      || this.backupNoticeOpen
+      || this.pendingCatalogueOpenRequests.length === 0
+    ) {
+      return;
+    }
+
+    this.catalogueOpenQueueScheduled = true;
+    setTimeout(() => {
+      this.catalogueOpenQueueScheduled = false;
+      if (
+        this.catalogueOpenInFlight
+        || this.legacyOpenDialogPath !== null
+        || this.backupNoticeOpen
+      ) {
+        return;
+      }
+      const nextRequest = this.pendingCatalogueOpenRequests.shift();
+      if (nextRequest) {
+        this.handleCatalogueOpenRequest(nextRequest);
+      }
+    }, 0);
+  }
+
+  private requestCatalogueOpen(
+    fullPath: string,
+    intent: CatalogueAccessMode | 'duplicate-scaena',
+  ): void {
+    this.electronService.ipcRenderer.send(
+      'load-this-vha-file',
+      fullPath,
+      this.getFinalObjectForSaving(),
+      intent,
+    );
   }
 
   private markRendererStartupComplete(): void {
@@ -2074,6 +2257,12 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
   public saveCurrentVhaFile(): void {
     if (this.catalogueEditorSaving || this.blockActionDuringFolderThumbnailRegeneration()) {
+      return;
+    }
+
+    if (this.catalogueReadOnly) {
+      this.catalogueEditorSaveStatus = 'Read only';
+      this.showReadOnlyActionBlocked();
       return;
     }
 
@@ -2140,9 +2329,18 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * Returns the finalArray if needed, otherwise returns `null`
    * completely depends on global variable `finalArrayNeedsSaving` or if any tags were added/removed in auto-tag-service
    */
-  public getFinalObjectForSaving(): FinalObject {
+  public getFinalObjectForSaving(): FinalObject | null {
+    if (this.catalogueReadOnly) {
+      return null;
+    }
     if (this.imageElementService.finalArrayNeedsSaving || this.autoTagsSaveService.needToSave()) {
-      const propsToReturn: FinalObject = {
+      return this.buildCurrentFinalObject();
+    }
+    return null;
+  }
+
+  private buildCurrentFinalObject(): FinalObject {
+    const propsToReturn: FinalObject = {
         addTags: this.autoTagsSaveService.getAddTags(),
         hubName: this.appState.hubName,
         images: this.imageElementService.imageElements,
@@ -2154,10 +2352,62 @@ export class HomeComponent implements OnInit, AfterViewInit {
         tagColors: this.manualTagsService.getTagColors(),
         tagDefinitions: this.manualTagsService.getTagDefinitions(),
         version: 3,
-      };
-      return propsToReturn;
-    } else {
-      return null;
+    };
+    return propsToReturn;
+  }
+
+  public async exportVha2Catalogue(): Promise<void> {
+    if (this.catalogueReadOnly || !/\.scaena$/i.test(this.appState.currentVhaFile || '')) {
+      this.showReadOnlyActionBlocked();
+      return;
+    }
+
+    const confirmed = await firstValueFrom(this.modalService.openConfirmationDialog({
+      cancelLabel: this.translate.instant('SYSTEM.cancel'),
+      confirmLabel: this.translate.instant('SYSTEM.exportVha2ConfirmLabel'),
+      detailsLabel: this.translate.instant('SYSTEM.exportVha2ImpactDetailsLabel'),
+      facts: [
+        {
+          label: this.translate.instant('SYSTEM.exportVha2FormatLabel'),
+          value: this.translate.instant('SYSTEM.exportVha2FormatValue'),
+        },
+        {
+          label: this.translate.instant('SYSTEM.exportVha2DeletedEntriesLabel'),
+          value: this.translate.instant('SYSTEM.exportVha2OmittedValue'),
+        },
+        {
+          label: this.translate.instant('SYSTEM.exportVha2ForkMetadataLabel'),
+          value: this.translate.instant('SYSTEM.exportVha2NotIncludedValue'),
+        },
+      ],
+      summary: this.translate.instant('SYSTEM.exportVha2ConfirmSummary'),
+      supportingText: this.translate.instant('SYSTEM.exportVha2CompatibilityWarning'),
+      title: this.translate.instant('SYSTEM.exportVha2ConfirmTitle'),
+      tone: 'warning',
+    }));
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const result = await this.electronService.ipcRenderer.invoke(
+        'export-vha2-catalogue',
+        this.buildCurrentFinalObject(),
+      ) as Vha2ExportResult;
+      if (result.status === 'exported' && result.fileName) {
+        this.modalService.openSnackbar(this.translate.instant('SYSTEM.exportVha2Success', {
+          fileName: result.fileName,
+        }));
+      } else if (result.status === 'error' || result.status === 'read-only') {
+        this.modalService.openSnackbar(result.error || this.translate.instant('SYSTEM.exportVha2Failed'));
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error || '');
+      this.modalService.openSnackbar(
+        detail
+          ? `${this.translate.instant('SYSTEM.exportVha2Failed')}: ${detail}`
+          : this.translate.instant('SYSTEM.exportVha2Failed'),
+      );
     }
   }
 
@@ -3183,6 +3433,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
     if (this.blockActionDuringFolderThumbnailRegeneration()) {
       return;
     }
+    if (this.catalogueReadOnly) {
+      this.showReadOnlyActionBlocked();
+      return;
+    }
     this.catalogueEditorOpen = true;
     this.catalogueEditorSaveStatus = '';
   }
@@ -3211,6 +3465,9 @@ export class HomeComponent implements OnInit, AfterViewInit {
   }
 
   handleCatalogueEntriesChanged(): void {
+    if (this.catalogueReadOnly) {
+      return;
+    }
     const activeImages = this.imageElementService.imageElements.filter((element: ImageElement) => (
       !element.deleted && !element.missing
     ));
@@ -3222,6 +3479,70 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.deletePipeTrigger = !this.deletePipeTrigger;
     this.setUpTimesPlayedFilterValues(activeImages);
     this.setUpYearFilterValues(activeImages);
+  }
+
+  private showReadOnlyActionBlocked(): void {
+    this.modalService.openSnackbar(
+      this.translate.instant('SYSTEM.catalogueReadOnlyActionBlocked'),
+    );
+  }
+
+  private unwindReadOnlyMutationState(channel?: string): void {
+    if (channel === 'try-to-rename-this-file' && this.currentRightClickedItem) {
+      const item = this.currentRightClickedItem;
+      this.renameFileResponseBehaviorSubject.next({
+        errMsg: 'SYSTEM.catalogueReadOnlyActionBlocked',
+        index: item.index,
+        oldFileName: item.fileName,
+        renameTo: item.fileName,
+        success: false,
+      });
+      this.renameFileResponseBehaviorSubject.next(undefined);
+    }
+
+    if (channel === 'regenerate-thumbnails' && this.individualThumbnailRegenerationStatus) {
+      this.clearIndividualThumbnailRegeneration(
+        this.individualThumbnailRegenerationStatus.fileHash,
+      );
+    }
+
+    if (channel === 'regenerate-folder-thumbnails') {
+      this.clearFolderThumbnailRegenerationRequest();
+    }
+
+    if (channel === 'save-current-vha-file') {
+      this.catalogueEditorSaving = false;
+      this.catalogueEditorSaveStatus = 'Read only';
+    }
+
+    this.cd.detectChanges();
+  }
+
+  private showCatalogueLoadedFromBackup(details: CatalogueLoadedFromBackupDetails): void {
+    this.backupNoticeOpen = true;
+    const readOnly = details.readOnly === true;
+    const sourcePath = details.sourcePath || this.appState.currentVhaFile || 'Unknown';
+    const openedPath = details.openedPath || this.appState.currentVhaFile || sourcePath;
+    const primaryError = details.primaryError || this.translate.instant(
+      'SYSTEM.catalogueLoadedFromBackupUnknownError',
+    );
+
+    this.modalService.openDialog(
+      this.translate.instant('SYSTEM.catalogueLoadedFromBackupTitle'),
+      this.translate.instant(
+        readOnly
+          ? 'SYSTEM.catalogueLoadedFromBackupReadOnlySummary'
+          : 'SYSTEM.catalogueLoadedFromBackupCopySummary',
+      ),
+      this.translate.instant('SYSTEM.catalogueLoadedFromBackupDetails', {
+        openedPath,
+        primaryError,
+        sourcePath,
+      }),
+    ).subscribe(() => {
+      this.backupNoticeOpen = false;
+      this.continuePendingCatalogueOpen();
+    });
   }
 
   // ---- HANDLE EXTRACTING AND RESTORING SETTINGS ON OPEN AND BEFORE CLOSE ------
@@ -3382,6 +3703,17 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.handleFolderWordClicked(this.currentRightClickedItem.partialPath);
   }
 
+  beginRenameFromContextMenu(): void {
+    if (this.catalogueReadOnly) {
+      this.showReadOnlyActionBlocked();
+      return;
+    }
+    if (!this.sourceFolderService.sourceFolderConnected[this.currentRightClickedItem.inputSource]) {
+      return;
+    }
+    this.renamingNow = true;
+  }
+
   rightMouseClicked(event: PointerEvent, item: ImageElement): void {
     this.currentRightClickedItem = item;
 
@@ -3433,6 +3765,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * Recreate all generated preview assets for the selected video.
    */
   regenerateThumbnails(item: ImageElement): void {
+    if (this.catalogueReadOnly) {
+      this.showReadOnlyActionBlocked();
+      return;
+    }
     if (this.thumbnailRegenerationActive) {
       this.modalService.openSnackbar(
         this.translate.instant('RIGHTCLICK.thumbnailRegenerationBusy'),
@@ -3459,6 +3795,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * response cannot operate on stale catalogue entries.
    */
   confirmRegenerateFolderThumbnails(target: FolderScopeTarget): void {
+    if (this.catalogueReadOnly) {
+      this.showReadOnlyActionBlocked();
+      return;
+    }
     if (this.thumbnailRegenerationActive) {
       this.modalService.openSnackbar(
         this.translate.instant('RIGHTCLICK.thumbnailRegenerationBusy'),
@@ -3840,6 +4180,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * Deletes a file (moves to recycling bin / trash) or dangerously deletes (bypassing trash)
    */
   deleteThisFile(item: ImageElement): void {
+    if (this.catalogueReadOnly) {
+      this.showReadOnlyActionBlocked();
+      return;
+    }
     const dangerously: boolean = this.settingsButtons['dangerousDelete'].toggled;
     const messageKey: string = dangerously
       ? 'RIGHTCLICK.confirmPermanentDeleteMessage'

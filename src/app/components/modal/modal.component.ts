@@ -16,8 +16,8 @@ export class ModalComponent {
     private dialogRef: MatDialogRef<ModalComponent>,
   ) { }
 
-  close(confirmed: boolean): void {
-    this.dialogRef.close(confirmed);
+  close(result: boolean | string | undefined): void {
+    this.dialogRef.close(result);
   }
 
 }

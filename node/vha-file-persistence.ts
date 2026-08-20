@@ -13,6 +13,7 @@ export interface VhaFileReadResult {
   backupRaw?: string;
   finalObject?: FinalObject;
   primaryError?: Error;
+  raw?: string;
   source: 'backup' | 'invalid' | 'primary' | 'unreadable';
 }
 
@@ -206,6 +207,7 @@ export async function readVhaFileWithBackup(pathToTheFile: string): Promise<VhaF
   if (primary.finalObject) {
     return {
       finalObject: primary.finalObject,
+      raw: primary.raw,
       source: 'primary',
     };
   }
@@ -223,6 +225,7 @@ export async function readVhaFileWithBackup(pathToTheFile: string): Promise<VhaF
       backupRaw: backup.raw,
       finalObject: backup.finalObject,
       primaryError: primary.error,
+      raw: backup.raw,
       source: 'backup',
     };
   }
@@ -391,6 +394,78 @@ export function writeVhaJsonAtomically(pathToTheFile: string, json: string): Pro
     parseVhaJson(json);
     await updateBackupFromValidPrimary(pathToTheFile);
     await replaceWithValidatedJson(pathToTheFile, json, parseVhaJson);
+  });
+}
+
+/**
+ * Publish a complete, validated catalogue at a path that must not already exist.
+ * A same-directory temporary file is fully written and synced before an atomic
+ * hard-link creates the destination directory entry. Network filesystems that
+ * reject hard links use an exclusive, synced copy instead. Both paths protect
+ * an existing file from replacement and never create or change a backup.
+ */
+export function writeVhaJsonExclusively(pathToTheFile: string, json: string): Promise<void> {
+  return enqueueWrite(pathToTheFile, async () => {
+    parseVhaJson(json);
+    const temporaryPath = createTemporaryPath(pathToTheFile, 'tmp');
+
+    try {
+      await writeSyncedFile(temporaryPath, json);
+      const completedContents = await fs.promises.readFile(temporaryPath, 'utf8');
+      parseVhaJson(completedContents);
+      try {
+        await fs.promises.link(temporaryPath, pathToTheFile);
+      } catch (error) {
+        const linkError = error as NodeJS.ErrnoException;
+        if (linkError.code === 'EEXIST') {
+          throw error;
+        }
+        if (!['EPERM', 'EOPNOTSUPP', 'ENOTSUP', 'EXDEV', 'EINVAL'].includes(linkError.code || '')) {
+          throw error;
+        }
+
+        // Some SMB/NAS volumes do not support hard links. COPYFILE_EXCL keeps
+        // the no-overwrite guarantee there; the completed temporary file stays
+        // available until the destination has also been synced and validated.
+        try {
+          await fs.promises.copyFile(temporaryPath, pathToTheFile, fs.constants.COPYFILE_EXCL);
+          const destinationHandle = await fs.promises.open(pathToTheFile, 'r+');
+          try {
+            await destinationHandle.sync();
+          } finally {
+            await destinationHandle.close();
+          }
+          const destinationContents = await fs.promises.readFile(pathToTheFile, 'utf8');
+          parseVhaJson(destinationContents);
+          if (destinationContents !== json) {
+            throw new Error('The completed catalogue copy did not match its source data.');
+          }
+        } catch (copyError) {
+          const exclusiveCopyError = copyError as NodeJS.ErrnoException;
+          if (exclusiveCopyError.code !== 'EEXIST') {
+            await removeTemporaryFile(pathToTheFile);
+          }
+          throw copyError;
+        }
+      }
+      await syncParentDirectory(pathToTheFile);
+    } catch (error) {
+      const fileError = error as NodeJS.ErrnoException;
+      if (fileError.code === 'EEXIST') {
+        throw error;
+      }
+      try {
+        const destinationContents = await fs.promises.readFile(pathToTheFile, 'utf8');
+        if (destinationContents !== json) {
+          throw error;
+        }
+        parseVhaJson(destinationContents);
+      } catch {
+        throw error;
+      }
+    } finally {
+      await removeTemporaryFile(temporaryPath);
+    }
   });
 }
 

@@ -1,0 +1,87 @@
+import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import { test } from 'node:test';
+import { CatalogueOpenQueue } from './catalogue-open-queue';
+
+const mainSource = fs.readFileSync('main.ts', 'utf8');
+const ipcSource = fs.readFileSync('node/main-ipc.ts', 'utf8');
+const homeSource = fs.readFileSync('src/app/components/home.component.ts', 'utf8');
+
+test('routes native catalogue choices through the renderer and validates explicit open modes', () => {
+  assert.match(mainSource, /event\.sender\.send\('open-catalogue-from-system', chosenFile\)/);
+  assert.match(mainSource, /requestCatalogueOpenFromSystem\(pathToVhaFile\)/);
+  assert.match(
+    mainSource,
+    /value === 'read-only' \|\| value === 'read-write' \|\| value === 'duplicate-scaena'/,
+  );
+  assert.match(mainSource, /legacyCatalogue && intent === 'read-write'/);
+  assert.match(mainSource, /!legacyCatalogue && intent === 'read-only'/);
+});
+
+test('queues native catalogue opens in order and requires acknowledgement between requests', () => {
+  const queue = new CatalogueOpenQueue();
+  queue.enqueue('/catalogues/first.vha2');
+  queue.enqueue('/catalogues/second.scaena');
+
+  assert.equal(queue.next(), '/catalogues/first.vha2');
+  assert.equal(queue.next(), null);
+  assert.equal(queue.waitingCount, 1);
+  queue.acknowledge();
+  assert.equal(queue.next(), '/catalogues/second.scaena');
+  queue.requeueInFlight();
+  assert.equal(queue.next(), '/catalogues/second.scaena');
+});
+
+test('dispatches startup opens after settings failure and serializes renderer ownership', () => {
+  assert.match(mainSource, /rendererCanReceiveCatalogueOpenRequests = true;\s*dispatchNextCatalogueOpenRequest\(\);/);
+  assert.doesNotMatch(mainSource, /requestCatalogueOpenFromSystem\(requestedCataloguePath\)/);
+  assert.match(mainSource, /ipcMain\.on\('catalogue-open-request-consumed'/);
+  assert.match(mainSource, /catalogueOpenOperationActive = true/);
+  assert.match(mainSource, /sender\.send\('catalogue-open-request-finished'\)/);
+  assert.match(homeSource, /ipcRenderer\.on\('catalogue-open-request-finished'/);
+  assert.match(mainSource, /catalogueOpenOperationActive = false;\s*dispatchNextCatalogueOpenRequest\(\);/);
+});
+
+test('upgrades and normalizes an exclusive sibling before opening it read-write', () => {
+  const duplicateFunction = mainSource.slice(
+    mainSource.indexOf('async function duplicateLegacyCatalogue'),
+    mainSource.indexOf('function requestCatalogueOpenFromSystem'),
+  );
+  assert.match(mainSource, /function prepareLegacyCatalogueDuplicate[\s\S]*JSON\.parse\(JSON\.stringify\(finalObject\)\)/);
+  assert.match(mainSource, /function prepareLegacyCatalogueDuplicate[\s\S]*upgradeToVersion3\(duplicateObject\)/);
+  assert.match(mainSource, /function prepareLegacyCatalogueDuplicate[\s\S]*insertTemporaryFields\(initializationProbe\.images\)/);
+  assert.match(duplicateFunction, /writeVhaJsonExclusively\(destination, duplicateJson\)/);
+  assert.match(mainSource, /openCatalogueFile\([\s\S]*duplicateResult\.destinationPath,[\s\S]*'read-write'/);
+  assert.match(mainSource, /catalogueOpenFailureSuffix\(publishedDuplicatePath/);
+  assert.match(mainSource, /'legacy-catalogue-duplicated'/);
+  assert.match(mainSource, /'catalogue-loaded-from-backup'/);
+});
+
+test('read-only opening never recovers catalogue or preview files and starts no scans or watchers', () => {
+  assert.match(mainSource, /readResult\.source === 'backup' && accessMode === 'read-only'/);
+  assert.match(mainSource, /if \(accessMode === 'read-write'\) \{\s*try \{\s*const recovery = await recoverInterruptedPreviewTransactions/);
+  assert.match(mainSource, /accessMode === 'read-write',\s*\);/);
+  assert.match(mainSource, /finalObjectToSave !== null && GLOBALS\.catalogueAccessMode === 'read-write'/);
+});
+
+test('read-only sessions block catalogue, source-file, scan, and preview mutations while still closing', () => {
+  for (const channel of [
+    'delete-video-file',
+    'replace-thumbnail',
+    'configure-source-folder',
+    'rescan-source-folder-scope',
+    'update-source-folder-ignored-subdirectories',
+    'regenerate-thumbnails',
+    'regenerate-folder-thumbnails',
+    'clean-old-thumbnails',
+    'save-current-vha-file',
+    'try-to-rename-this-file',
+  ]) {
+    assert.match(ipcSource, new RegExp(`'${channel}'`));
+  }
+  assert.match(
+    ipcSource,
+    /finalObjectToSave === null \|\| GLOBALS\.catalogueAccessMode === 'read-only'/,
+  );
+  assert.match(ipcSource, /catalogue-read-only-write-blocked/);
+});

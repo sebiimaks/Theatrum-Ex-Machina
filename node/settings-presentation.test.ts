@@ -139,6 +139,75 @@ test('keeps Current Hub operations inside three responsive ledger sections', () 
   assert.match(styles, /@media \(max-width: 900px\)[\s\S]*\.ledger-section[\s\S]*grid-template-columns:\s*1fr/);
 });
 
+test('keeps the legacy catalogue choices, read-only state, and compatibility export visible', () => {
+  const statisticsTemplate = source('src/app/components/statistics/statistics.component.html');
+  const statisticsComponent = source('src/app/components/statistics/statistics.component.ts');
+  const homeTemplate = source('src/app/components/home.component.html');
+  const homeComponent = source('src/app/components/home.component.ts');
+  const translations = source('i18n/en.json');
+  const identitySectionStart = statisticsTemplate.indexOf(
+    '<section class="ledger-section identity-section">',
+  );
+  const videoLocationSectionStart = statisticsTemplate.indexOf(
+    '<section class="ledger-section sources-section">',
+  );
+  const identitySection = statisticsTemplate.slice(identitySectionStart, videoLocationSectionStart);
+
+  assert.ok(identitySectionStart >= 0);
+  assert.ok(videoLocationSectionStart > identitySectionStart);
+  assert.match(identitySection, /@if \(canExportVha2Copy\(\)\)/);
+  assert.match(identitySection, /\(click\)="exportVha2Catalogue\.emit\(\)"/);
+  assert.match(identitySection, /STATISTICS\.exportVha2CopyHint/);
+  assert.match(identitySection, /STATISTICS\.exportVha2Copy/);
+  assert.match(identitySection, /SYSTEM\.exportVha2CompatibilityWarning/);
+  assert.match(statisticsComponent, /readonly exportVha2Catalogue = output<void>\(\)/);
+  assert.match(statisticsComponent, /return !this\.catalogueReadOnly\(\)[\s\S]*\\\.scaena\$\/i/);
+  assert.match(homeTemplate, /\(exportVha2Catalogue\)="exportVha2Catalogue\(\)"/);
+  assert.match(homeTemplate, /\[catalogueReadOnly\]="catalogueReadOnly"/);
+  assert.match(homeTemplate, /@if \(catalogueReadOnly\)[\s\S]*class="catalogue-read-only-badge"[\s\S]*role="status"/);
+  assert.match(homeTemplate, /SYSTEM\.catalogueReadOnly/);
+
+  assert.match(homeComponent, /type LegacyCatalogueOpenChoice = 'duplicate-scaena' \| 'read-only'/);
+  assert.match(homeComponent, /openChoiceDialog<LegacyCatalogueOpenChoice>/);
+  const readOnlyChoice = homeComponent.indexOf("id: 'read-only'");
+  const duplicateChoice = homeComponent.indexOf("id: 'duplicate-scaena'");
+  assert.ok(readOnlyChoice >= 0);
+  assert.ok(duplicateChoice > readOnlyChoice, 'Open Read Only must precede Save as .scaena.');
+  assert.match(homeComponent.slice(duplicateChoice, duplicateChoice + 260), /primary: true/);
+  assert.match(homeComponent, /public async exportVha2Catalogue\(\): Promise<void>/);
+  assert.match(homeComponent, /'export-vha2-catalogue'/);
+
+  assert.match(translations, /"catalogueReadOnly": "Read Only"/);
+  assert.match(translations, /"legacyCatalogueReadOnlyLabel": "Open Read Only"/);
+  assert.match(translations, /"legacyCatalogueDuplicateLabel": "Save as \.scaena"/);
+  assert.match(translations, /"exportVha2Copy": "Export \.vha2 Copy…"/);
+  assert.match(translations, /"exportVha2CompatibilityWarning": "The compatibility copy excludes Date Added/);
+  assert.match(translations, /"catalogueReadOnlyNote": "This legacy catalogue is open read only\.[^"]*source-media changes are disabled and will not be saved\."/);
+});
+
+test('queues external catalogue opens and visibly blocks read-only context mutations', () => {
+  const homeTemplate = source('src/app/components/home.component.html');
+  const homeComponent = source('src/app/components/home.component.ts');
+  const translations = source('i18n/en.json');
+
+  assert.match(homeComponent, /pendingCatalogueOpenRequests: CatalogueOpenRequest\[\]/);
+  assert.match(homeComponent, /legacyOpenDialogPath !== null[\s\S]*pendingCatalogueOpenRequests\.push\(request\)/);
+  assert.match(homeComponent, /send\('catalogue-open-request-consumed'\)/);
+  assert.match(homeComponent, /markRendererStartupComplete\(\);[\s\S]*openChoiceDialog<LegacyCatalogueOpenChoice>/);
+  assert.match(homeComponent, /finishCatalogueOpenRequest\(\)/);
+  assert.match(homeComponent, /catalogue-loaded-from-backup/);
+  assert.match(homeComponent, /showCatalogueLoadedFromBackup/);
+  assert.match(homeComponent, /unwindReadOnlyMutationState\(channel\)/);
+  assert.match(homeComponent, /channel === 'try-to-rename-this-file'/);
+  assert.match(homeComponent, /channel === 'regenerate-thumbnails'/);
+  assert.match(homeComponent, /channel === 'regenerate-folder-thumbnails'/);
+
+  const disabledContextItems = homeTemplate.match(/\[attr\.aria-disabled\]="catalogueReadOnly/g) || [];
+  assert.equal(disabledContextItems.length, 3);
+  assert.match(homeTemplate, /beginRenameFromContextMenu\(\)/);
+  assert.match(translations, /"catalogueLoadedFromBackupTitle": "Catalogue Opened from Backup"/);
+});
+
 test('removes the optional local server implementation and its user interface', () => {
   const packageJson = JSON.parse(source('package.json'));
   const mainProcess = source('main.ts');

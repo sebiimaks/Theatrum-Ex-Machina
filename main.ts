@@ -1,5 +1,5 @@
 // Update the `demo` and `version` when building
-import { GLOBALS } from './node/main-globals';
+import { GLOBALS, type CatalogueAccessMode } from './node/main-globals';
 
 GLOBALS.macVersion = process.platform === 'darwin';
 
@@ -14,8 +14,14 @@ const windowStateKeeper = require('electron-window-state');
 // Methods
 import { createTouchBar } from './node/main-touch-bar';
 import { setUpIpcMessages } from './node/main-ipc';
-import { sendFinalObjectToAngular, setUpDirectoryWatchers, upgradeToVersion3, writeVhaFileToDisk, parseAdditionalExtensions } from './node/main-support';
-import { readVhaFileWithBackup, recoverVhaFileFromBackup } from './node/vha-file-persistence';
+import { insertTemporaryFields, sendFinalObjectToAngular, setUpDirectoryWatchers, upgradeToVersion3, writeVhaFileToDisk, parseAdditionalExtensions } from './node/main-support';
+import {
+  parseVhaJson,
+  readVhaFileWithBackup,
+  recoverVhaFileFromBackup,
+  writeVhaJsonExclusively,
+} from './node/vha-file-persistence';
+import { CatalogueOpenQueue } from './node/catalogue-open-queue';
 
 // Interfaces
 import { FinalObject } from './interfaces/final-object.interface';
@@ -56,24 +62,132 @@ let systemMessages = English.SYSTEM; // Set English as default; update via `syst
 let screenWidth;
 let screenHeight;
 
-let userWantedToOpen: string = null; // find a better pattern for handling this functionality
 let rendererStartupComplete = false;
+let rendererCanReceiveCatalogueOpenRequests = false;
+let catalogueOpenOperationActive = false;
+const catalogueOpenQueue = new CatalogueOpenQueue();
+
+type CatalogueOpenIntent = CatalogueAccessMode | 'duplicate-scaena';
+
+interface CatalogueOpenResult {
+  loadedFromBackup: boolean;
+  opened: boolean;
+  primaryError?: string;
+}
+
+interface DuplicateLegacyCatalogueResult {
+  destinationPath: string;
+  loadedFromBackup: boolean;
+  primaryError?: string;
+}
+
+function isCatalogueOpenIntent(value: unknown): value is CatalogueOpenIntent {
+  return value === 'read-only' || value === 'read-write' || value === 'duplicate-scaena';
+}
+
+function isLegacyCataloguePath(filePath: string): boolean {
+  return path.extname(filePath).toLowerCase() === '.vha2';
+}
+
+function nextDuplicateCataloguePath(sourcePath: string, attempt: number): string {
+  const parsed = path.parse(sourcePath);
+  const suffix = attempt === 0 ? '' : attempt === 1 ? ' copy' : ` copy ${attempt}`;
+  return path.join(parsed.dir, `${parsed.name}${suffix}.scaena`);
+}
+
+function prepareLegacyCatalogueDuplicate(finalObject: FinalObject): string {
+  // Validate both the persistent representation and the renderer's temporary
+  // field preparation before publishing a new path. This keeps malformed
+  // legacy data from leaving behind a copy that can never initialize.
+  const duplicateObject = JSON.parse(JSON.stringify(finalObject)) as FinalObject;
+  upgradeToVersion3(duplicateObject);
+  duplicateObject.screenshotSettings = sanitizeScreenshotSettings(duplicateObject.screenshotSettings);
+  const duplicateJson = JSON.stringify(duplicateObject);
+  const validatedDuplicate = parseVhaJson(duplicateJson);
+  const initializationProbe = JSON.parse(JSON.stringify(validatedDuplicate)) as FinalObject;
+  insertTemporaryFields(initializationProbe.images);
+  return duplicateJson;
+}
+
+async function duplicateLegacyCatalogue(sourcePath: string): Promise<DuplicateLegacyCatalogueResult> {
+  const readResult = await readVhaFileWithBackup(sourcePath);
+  if (!readResult.finalObject) {
+    const primaryError = readResult.primaryError?.message || 'The catalogue could not be read.';
+    const backupError = readResult.backupError?.message || 'No valid backup was found.';
+    throw new Error(`${primaryError}\n${backupError}`);
+  }
+
+  const duplicateJson = prepareLegacyCatalogueDuplicate(readResult.finalObject);
+
+  for (let attempt = 0; attempt < 10_000; attempt++) {
+    const destination = nextDuplicateCataloguePath(sourcePath, attempt);
+    try {
+      await writeVhaJsonExclusively(destination, duplicateJson);
+      return {
+        destinationPath: destination,
+        loadedFromBackup: readResult.source === 'backup',
+        primaryError: readResult.primaryError?.message,
+      };
+    } catch (error) {
+      const fileError = error as NodeJS.ErrnoException;
+      if (fileError.code !== 'EEXIST') {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error('A unique .scaena copy name could not be created beside the legacy catalogue.');
+}
+
+function dispatchNextCatalogueOpenRequest(): void {
+  if (
+    !rendererCanReceiveCatalogueOpenRequests
+    || catalogueOpenOperationActive
+    || !GLOBALS.angularApp
+  ) {
+    return;
+  }
+  const sender = GLOBALS.angularApp.sender;
+  if (!sender || sender.isDestroyed()) {
+    return;
+  }
+  const queuedPath = catalogueOpenQueue.next();
+  if (queuedPath) {
+    sender.send('open-catalogue-from-system', queuedPath);
+  }
+}
 
 function requestCatalogueOpenFromSystem(filePath: string): void {
   if (!filePath) {
     return;
   }
-  if (rendererStartupComplete && GLOBALS.angularApp) {
-    GLOBALS.angularApp.sender.send('open-catalogue-from-system', filePath);
-  } else {
-    userWantedToOpen = filePath;
-  }
+  catalogueOpenQueue.enqueue(filePath);
+  dispatchNextCatalogueOpenRequest();
 }
 
-function takeQueuedCataloguePath(): string | null {
-  const queuedPath = userWantedToOpen;
-  userWantedToOpen = null;
-  return queuedPath;
+function catalogueOpenFailureSuffix(
+  publishedDuplicatePath?: string,
+  recoveredCatalogue = false,
+): string {
+  if (publishedDuplicatePath) {
+    return `A .scaena copy was created and remains at:\n${publishedDuplicatePath}\n\nThe original .vha2 catalogue and its backup were not changed.`;
+  }
+  if (recoveredCatalogue) {
+    return 'The catalogue backup was restored successfully, but the recovered catalogue could not be initialized.';
+  }
+  return 'No catalogue files were changed.';
+}
+
+function notifyCatalogueLoadedFromBackup(payload: {
+  openedPath: string;
+  primaryError?: string;
+  readOnly: boolean;
+  sourcePath: string;
+}): void {
+  const sender = GLOBALS.angularApp && GLOBALS.angularApp.sender;
+  if (sender && !sender.isDestroyed()) {
+    sender.send('catalogue-loaded-from-backup', payload);
+  }
 }
 
 function removeEmptyCatalogueAssetFolders(hubAssetsDirectory: string): void {
@@ -112,7 +226,7 @@ process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true';
 // For windows -- when loading the app the first time
 if (args[0]) {
   if (!serve) {
-    userWantedToOpen = args[0]; // TODO -- clean up file-opening code to not use variable
+    catalogueOpenQueue.enqueue(args[0]);
   }
 }
 
@@ -250,6 +364,8 @@ function createWindow() {
 
   // Emitted when the window is closed.
   win.on('closed', () => {
+    rendererCanReceiveCatalogueOpenRequests = false;
+    catalogueOpenQueue.requeueInFlight();
     // Dereference the window object, usually you would store window
     // in an array if your app supports multi windows, this is the time
     // when you should delete the corresponding element.
@@ -336,7 +452,11 @@ function getAngularToShutDown(): void {
  * Invalid catalogues are handled here so a failed JSON parse cannot crash Electron.
  * @param pathToVhaFile full path to the catalogue file
  */
-async function openThisDamnFile(pathToVhaFile: string): Promise<void> {
+async function openThisDamnFile(
+  pathToVhaFile: string,
+  intent: unknown = 'read-write',
+): Promise<void> {
+  let publishedDuplicatePath: string | undefined;
 
   if (isThumbnailRegenerationActive()) {
     await dialog.showMessageBox(win, {
@@ -346,20 +466,89 @@ async function openThisDamnFile(pathToVhaFile: string): Promise<void> {
       title: 'Catalogue Is Busy',
       type: 'warning',
     });
+    if (GLOBALS.angularApp) {
+      GLOBALS.angularApp.sender.send('catalogue-open-request-finished');
+    }
     return;
   }
 
   setThumbnailRegenerationBlocked(true);
   try {
-    await openCatalogueFile(pathToVhaFile);
+    if (!isCatalogueOpenIntent(intent)) {
+      throw new Error('The catalogue open mode is invalid.');
+    }
+    const legacyCatalogue = isLegacyCataloguePath(pathToVhaFile);
+    if (legacyCatalogue && intent === 'read-write') {
+      throw new Error('A legacy .vha2 catalogue must be opened read-only or duplicated as a .scaena catalogue.');
+    }
+    if (!legacyCatalogue && intent === 'duplicate-scaena') {
+      throw new Error('Only a legacy .vha2 catalogue can be duplicated during opening.');
+    }
+    if (!legacyCatalogue && intent === 'read-only') {
+      throw new Error('Read-only opening is reserved for legacy .vha2 catalogues.');
+    }
+
+    if (intent === 'duplicate-scaena') {
+      const duplicateResult = await duplicateLegacyCatalogue(pathToVhaFile);
+      publishedDuplicatePath = duplicateResult.destinationPath;
+      const openResult = await openCatalogueFile(
+        duplicateResult.destinationPath,
+        'read-write',
+        duplicateResult.destinationPath,
+      );
+      if (openResult.opened) {
+        GLOBALS.angularApp.sender.send(
+          'legacy-catalogue-duplicated',
+          path.basename(duplicateResult.destinationPath),
+        );
+        if (duplicateResult.loadedFromBackup) {
+          notifyCatalogueLoadedFromBackup({
+            openedPath: duplicateResult.destinationPath,
+            primaryError: duplicateResult.primaryError,
+            readOnly: false,
+            sourcePath: pathToVhaFile,
+          });
+        }
+      }
+      return;
+    }
+
+    const openResult = await openCatalogueFile(pathToVhaFile, intent);
+    if (openResult.opened && openResult.loadedFromBackup) {
+      notifyCatalogueLoadedFromBackup({
+        openedPath: pathToVhaFile,
+        primaryError: openResult.primaryError,
+        readOnly: intent === 'read-only',
+        sourcePath: pathToVhaFile,
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await dialog.showMessageBox(win, {
+      buttons: ['OK'],
+      detail: `${message}\n\n${catalogueOpenFailureSuffix(publishedDuplicatePath)}`,
+      message: 'The catalogue could not be opened safely.',
+      title: 'Unable to Open Catalogue',
+      type: 'error',
+    });
+    if (GLOBALS.angularApp) {
+      GLOBALS.angularApp.sender.send('please-open-wizard', false, pathToVhaFile);
+    }
   } finally {
     setThumbnailRegenerationBlocked(false);
   }
 }
 
-async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
+async function openCatalogueFile(
+  pathToVhaFile: string,
+  accessMode: CatalogueAccessMode,
+  publishedDuplicatePath?: string,
+): Promise<CatalogueOpenResult> {
 
   resetAllQueues();
+  let loadedFromBackup = false;
+  let primaryError: string | undefined;
+  let recoveredCatalogue = false;
 
   try {
     const readResult = await readVhaFileWithBackup(pathToVhaFile);
@@ -371,15 +560,21 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
       const readError = readResult.primaryError ? readResult.primaryError.message : 'Unknown read error';
       await dialog.showMessageBox(win, {
         buttons: ['OK'],
-        detail: `${readError}\n\nCheck that the drive is connected and that the catalogue can be read. No recovery was attempted and no files were changed.`,
+        detail: `${readError}\n\nCheck that the drive is connected and that the catalogue can be read. No recovery was attempted.\n\n${catalogueOpenFailureSuffix(publishedDuplicatePath)}`,
         message: 'This catalogue could not be read.',
         title: 'Unable to Read Catalogue',
         type: 'error',
       });
       GLOBALS.angularApp.sender.send('please-open-wizard', false, pathToVhaFile);
-      return;
+      return { loadedFromBackup: false, opened: false, primaryError: readError };
+    } else if (readResult.source === 'backup' && accessMode === 'read-only') {
+      // A read-only session may use a valid backup in memory, but must never
+      // replace, preserve, or otherwise modify either legacy source file.
+      finalObject = readResult.finalObject;
+      loadedFromBackup = true;
+      primaryError = readResult.primaryError?.message;
     } else if (readResult.source === 'backup') {
-    const recoveryChoice = await dialog.showMessageBox(win, {
+      const recoveryChoice = await dialog.showMessageBox(win, {
       buttons: ['Recover Backup', 'Cancel'],
       cancelId: 1,
       defaultId: 0,
@@ -390,37 +585,48 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
       type: 'warning',
     });
 
-    if (recoveryChoice.response !== 0) {
-      GLOBALS.angularApp.sender.send('please-open-wizard', false, pathToVhaFile);
-      return;
-    }
+      if (recoveryChoice.response !== 0) {
+        GLOBALS.angularApp.sender.send('please-open-wizard', false, pathToVhaFile);
+        return {
+          loadedFromBackup: true,
+          opened: false,
+          primaryError: readResult.primaryError?.message,
+        };
+      }
 
-    try {
-      const recoveryResult = await recoverVhaFileFromBackup(pathToVhaFile);
-      finalObject = recoveryResult.finalObject;
+      try {
+        const recoveryResult = await recoverVhaFileFromBackup(pathToVhaFile);
+        finalObject = recoveryResult.finalObject;
+        loadedFromBackup = true;
+        primaryError = readResult.primaryError?.message;
+        recoveredCatalogue = true;
 
-      const preservationDetail = recoveryResult.corruptPath
-        ? 'The damaged catalogue was preserved at:\n' + recoveryResult.corruptPath
-        : 'The backup was restored. The damaged catalogue was empty or missing, so no additional copy was created.';
-      await dialog.showMessageBox(win, {
-        buttons: ['OK'],
-        detail: preservationDetail,
-        message: 'The catalogue was recovered successfully.',
-        title: 'Catalogue Recovered',
-        type: 'info',
-      });
-    } catch (error) {
-      const recoveryError = error instanceof Error ? error.message : String(error);
-      await dialog.showMessageBox(win, {
-        buttons: ['OK'],
-        detail: recoveryError,
-        message: 'The catalogue backup could not be recovered. Neither file was changed.',
-        title: 'Catalogue Recovery Failed',
-        type: 'error',
-      });
-      GLOBALS.angularApp.sender.send('please-open-wizard', false, pathToVhaFile);
-      return;
-    }
+        const preservationDetail = recoveryResult.corruptPath
+          ? 'The damaged catalogue was preserved at:\n' + recoveryResult.corruptPath
+          : 'The backup was restored. The damaged catalogue was empty or missing, so no additional copy was created.';
+        await dialog.showMessageBox(win, {
+          buttons: ['OK'],
+          detail: preservationDetail,
+          message: 'The catalogue was recovered successfully.',
+          title: 'Catalogue Recovered',
+          type: 'info',
+        });
+      } catch (error) {
+        const recoveryError = error instanceof Error ? error.message : String(error);
+        await dialog.showMessageBox(win, {
+          buttons: ['OK'],
+          detail: recoveryError,
+          message: 'The catalogue backup could not be recovered. Neither file was changed.',
+          title: 'Catalogue Recovery Failed',
+          type: 'error',
+        });
+        GLOBALS.angularApp.sender.send('please-open-wizard', false, pathToVhaFile);
+        return {
+          loadedFromBackup: true,
+          opened: false,
+          primaryError: readResult.primaryError?.message,
+        };
+      }
     } else {
       const primaryError = readResult.primaryError ? readResult.primaryError.message : 'Unknown error';
       const backupError = readResult.backupError ? readResult.backupError.message : 'No valid backup was found';
@@ -432,7 +638,7 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
         type: 'error',
       });
       GLOBALS.angularApp.sender.send('please-open-wizard', false, pathToVhaFile);
-      return;
+      return { loadedFromBackup: false, opened: false, primaryError };
     }
 
     // set globals only after a catalogue has been parsed and validated successfully
@@ -440,39 +646,48 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
     const sanitizedScreenshotSettings = sanitizeScreenshotSettings(finalObject.screenshotSettings);
     const catalogueSettingsNormalized = sanitizedScreenshotSettings.n !== finalObject.screenshotSettings.n;
     finalObject.screenshotSettings = sanitizedScreenshotSettings;
+    GLOBALS.catalogueAccessMode = accessMode;
     GLOBALS.currentlyOpenVhaFile = pathToVhaFile;
     GLOBALS.selectedOutputFolder = path.parse(pathToVhaFile).dir;
     GLOBALS.hubName = finalObject.hubName;
     GLOBALS.screenshotSettings = finalObject.screenshotSettings;
     GLOBALS.selectedSourceFolders = finalObject.inputDirs;
 
-    try {
-      const recovery = await recoverInterruptedPreviewTransactions(
-        path.join(GLOBALS.selectedOutputFolder, 'vha-' + GLOBALS.hubName),
-      );
-      if (recovery.rolledBack > 0 || recovery.committedCleaned > 0) {
-        console.warn('Recovered interrupted thumbnail transactions:', recovery);
+    if (accessMode === 'read-write') {
+      try {
+        const recovery = await recoverInterruptedPreviewTransactions(
+          path.join(GLOBALS.selectedOutputFolder, 'vha-' + GLOBALS.hubName),
+        );
+        if (recovery.rolledBack > 0 || recovery.committedCleaned > 0) {
+          console.warn('Recovered interrupted thumbnail transactions:', recovery);
+        }
+      } catch (error) {
+        const recoveryError = error instanceof Error ? error.message : String(error);
+        console.error('Unable to recover an interrupted thumbnail transaction:', error);
+        await dialog.showMessageBox(win, {
+          buttons: ['OK'],
+          detail: recoveryError,
+          message: 'Some interrupted thumbnail files could not be recovered automatically.',
+          title: 'Thumbnail Recovery Warning',
+          type: 'warning',
+        });
       }
-    } catch (error) {
-      const recoveryError = error instanceof Error ? error.message : String(error);
-      console.error('Unable to recover an interrupted thumbnail transaction:', error);
-      await dialog.showMessageBox(win, {
-        buttons: ['OK'],
-        detail: recoveryError,
-        message: 'Some interrupted thumbnail files could not be recovered automatically.',
-        title: 'Thumbnail Recovery Warning',
-        type: 'warning',
-      });
     }
 
     app.addRecentDocument(pathToVhaFile);
     sendFinalObjectToAngular(finalObject, GLOBALS, catalogueSettingsNormalized);
-    setUpDirectoryWatchers(finalObject.inputDirs, finalObject.images, false);
+    setUpDirectoryWatchers(
+      finalObject.inputDirs,
+      finalObject.images,
+      false,
+      accessMode === 'read-write',
+    );
+    return { loadedFromBackup, opened: true, primaryError };
   } catch (error) {
     const unexpectedError = error instanceof Error ? error.message : String(error);
     await dialog.showMessageBox(win, {
       buttons: ['OK'],
-      detail: `${unexpectedError}\n\nNo catalogue files were changed.`,
+      detail: `${unexpectedError}\n\n${catalogueOpenFailureSuffix(publishedDuplicatePath, recoveredCatalogue)}`,
       message: 'The catalogue could not be initialized safely.',
       title: 'Unable to Open Catalogue',
       type: 'error',
@@ -480,6 +695,7 @@ async function openCatalogueFile(pathToVhaFile: string): Promise<void> {
     if (GLOBALS.angularApp) {
       GLOBALS.angularApp.sender.send('please-open-wizard', false, pathToVhaFile);
     }
+    return { loadedFromBackup, opened: false, primaryError };
   }
 }
 
@@ -506,13 +722,10 @@ ipcMain.on('just-started', (event) => {
   const locale: string = app.getLocale();
 
   fs.readFile(path.join(GLOBALS.settingsPath, 'settings.json'), (err, data) => {
-    const requestedCataloguePath = takeQueuedCataloguePath();
     if (err) {
       win.setBounds({ x: 0, y: 0, width: screenWidth, height: screenHeight });
       event.sender.send('set-language-based-off-system-locale', locale);
-      if (requestedCataloguePath) {
-        void openThisDamnFile(requestedCataloguePath);
-      } else {
+      if (catalogueOpenQueue.waitingCount === 0) {
         event.sender.send('please-open-wizard', true); // firstRun = true!
       }
     } else {
@@ -526,18 +739,32 @@ ipcMain.on('just-started', (event) => {
           'settings-returning',
           previouslySavedSettings,
           locale,
-          requestedCataloguePath,
+          null,
         );
 
       } catch (err) {
-        if (requestedCataloguePath) {
-          void openThisDamnFile(requestedCataloguePath);
-        } else {
+        event.sender.send('set-language-based-off-system-locale', locale);
+        if (catalogueOpenQueue.waitingCount === 0) {
           event.sender.send('please-open-wizard', false);
         }
       }
     }
+    // `just-started` is emitted only after the renderer has installed its IPC
+    // listeners. Dispatch directly here even when settings are absent or
+    // corrupt; waiting for settings-driven startup completion would deadlock.
+    rendererCanReceiveCatalogueOpenRequests = true;
+    dispatchNextCatalogueOpenRequest();
   });
+});
+
+ipcMain.on('catalogue-open-request-consumed', (event) => {
+  const trustedSender = GLOBALS.angularApp && GLOBALS.angularApp.sender;
+  if (!trustedSender || event.sender.id !== trustedSender.id) {
+    console.warn('Ignored catalogue-open acknowledgement from an untrusted renderer.');
+    return;
+  }
+  catalogueOpenQueue.acknowledge();
+  dispatchNextCatalogueOpenRequest();
 });
 
 ipcMain.on('renderer-startup-complete', () => {
@@ -551,10 +778,8 @@ ipcMain.on('renderer-startup-complete', () => {
     setImmediate(() => app.quit());
     return;
   }
-  const queuedCataloguePath = takeQueuedCataloguePath();
-  if (queuedCataloguePath && GLOBALS.angularApp) {
-    GLOBALS.angularApp.sender.send('open-catalogue-from-system', queuedCataloguePath);
-  }
+  rendererCanReceiveCatalogueOpenRequests = true;
+  dispatchNextCatalogueOpenRequest();
 });
 
 /**
@@ -663,6 +888,7 @@ function writeVhaFileAndStartExtraction(): void {
     }
 
     GLOBALS.currentlyOpenVhaFile = pathToTheFile;
+    GLOBALS.catalogueAccessMode = 'read-write';
 
     sendFinalObjectToAngular(finalObject, GLOBALS);
 
@@ -688,7 +914,7 @@ ipcMain.on('system-open-file-through-modal', (event, somethingElse) => {  // TOD
     const chosenFile: string = result.filePaths[0];
 
     if (chosenFile && isCataloguePickerFilePath(chosenFile)) {
-      openThisDamnFile(chosenFile);
+      event.sender.send('open-catalogue-from-system', chosenFile);
     } else if (chosenFile) {
       void dialog.showMessageBox(win, {
         buttons: ['OK'],
@@ -705,14 +931,26 @@ ipcMain.on('system-open-file-through-modal', (event, somethingElse) => {  // TOD
  * Open a catalogue file from the given path.
  * Save the current catalogue to disk first, if provided.
  */
-ipcMain.on('load-this-vha-file', (event, pathToVhaFile: string, finalObjectToSave: FinalObject) => {
+ipcMain.on('load-this-vha-file', (
+  event,
+  pathToVhaFile: string,
+  finalObjectToSave: FinalObject,
+  intent: unknown = 'read-write',
+) => {
+  catalogueOpenOperationActive = true;
+  const openRequestedCatalogue = (): void => {
+    void openThisDamnFile(pathToVhaFile, intent).finally(() => {
+      catalogueOpenOperationActive = false;
+      dispatchNextCatalogueOpenRequest();
+    });
+  };
 
   if (isThumbnailRegenerationActive()) {
-    void openThisDamnFile(pathToVhaFile);
+    openRequestedCatalogue();
     return;
   }
 
-  if (finalObjectToSave !== null) {
+  if (finalObjectToSave !== null && GLOBALS.catalogueAccessMode === 'read-write') {
 
     writeVhaFileToDisk(finalObjectToSave, GLOBALS.currentlyOpenVhaFile, (error: Error) => {
       if (error) {
@@ -724,14 +962,16 @@ ipcMain.on('load-this-vha-file', (event, pathToVhaFile: string, finalObjectToSav
           type: 'error',
         });
         event.sender.send('current-vha-file-save-failed', error.message);
+        catalogueOpenOperationActive = false;
+        dispatchNextCatalogueOpenRequest();
         return;
       }
       console.log('Catalogue saved before opening another');
-      openThisDamnFile(pathToVhaFile);
+      openRequestedCatalogue();
     });
 
   } else {
-    openThisDamnFile(pathToVhaFile);
+    openRequestedCatalogue();
   }
 });
 
@@ -764,7 +1004,7 @@ ipcMain.on('system-messages-updated', (event, newSystemMessages): void => {
  */
 ipcMain.on('open-file', (event, pathToVhaFile) => {
   event.preventDefault();
-  openThisDamnFile(pathToVhaFile);
+  requestCatalogueOpenFromSystem(pathToVhaFile);
 });
 
 /**

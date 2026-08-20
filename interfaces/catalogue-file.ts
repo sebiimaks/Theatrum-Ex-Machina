@@ -30,6 +30,11 @@ export function isSupportedCatalogueFilePath(filePath: string): boolean {
   return SUPPORTED_CATALOGUE_FILE_EXTENSIONS.some((extension) => normalizedPath.endsWith(extension));
 }
 
+export function isLegacyCatalogueFilePath(filePath: string): boolean {
+  const normalizedPath = filePath.toLowerCase();
+  return LEGACY_CATALOGUE_FILE_EXTENSIONS.some((extension) => normalizedPath.endsWith(extension));
+}
+
 export function isCataloguePickerFilePath(filePath: string): boolean {
   const normalizedPath = filePath.toLowerCase();
   return CATALOGUE_PICKER_EXTENSIONS.some((extension) => normalizedPath.endsWith(`.${extension}`));

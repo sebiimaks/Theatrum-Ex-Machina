@@ -35,6 +35,21 @@
       </p>
     }
 
+    @if (data.kind === 'choice' && data.choices?.length) {
+      <div class="dialog-choice-list" role="list">
+        @for (choice of data.choices; track choice.id) {
+          <div
+            class="dialog-choice-description"
+            [class.dialog-choice-description-primary]="choice.primary"
+            role="listitem"
+          >
+            <strong>{{ choice.label }}</strong>
+            <span>{{ choice.description }}</span>
+          </div>
+        }
+      </div>
+    }
+
     @if (data.kind === 'confirmation' && data.facts?.length) {
       <details class="dialog-disclosure">
         <summary>{{ data.detailsLabel || 'Show full impact' }}</summary>
@@ -55,6 +70,28 @@
       </p>
     }
   </div>
+
+  @if (data.kind === 'choice' && data.cancelLabel && data.choices?.length) {
+    <div class="dialog-actions dialog-choice-actions">
+      <button
+        (click)="close(undefined)"
+        class="dialog-button"
+        type="button"
+      >
+        {{ data.cancelLabel }}
+      </button>
+      @for (choice of data.choices; track choice.id) {
+        <button
+          (click)="close(choice.id)"
+          class="dialog-button"
+          [class.dialog-button-confirm]="choice.primary"
+          type="button"
+        >
+          {{ choice.label }}
+        </button>
+      }
+    </div>
+  }
 
   @if (data.cancelLabel && data.confirmLabel) {
     <div class="dialog-actions">

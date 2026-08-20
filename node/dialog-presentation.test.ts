@@ -33,6 +33,35 @@ test('renders confirmations with the progressive Option E hierarchy', () => {
   assert.match(styles, /\.dialog-shell-destructive/);
 });
 
+test('renders typed choice dialogs with a distinct cancellation result', () => {
+  const service = source('src/app/components/modal/modal.service.ts');
+  const component = source('src/app/components/modal/modal.component.ts');
+  const template = source('src/app/components/modal/modal.component.html');
+  const styles = source('src/app/components/modal/modal.component.scss');
+
+  assert.match(service, /interface DialogChoice<T extends string = string>/);
+  assert.match(service, /interface ChoiceDialogOptions<T extends string = string>/);
+  assert.match(service, /openChoiceDialog<T extends string>\(options: ChoiceDialogOptions<T>\)/);
+  assert.match(service, /map\(\(result: unknown\): T \| undefined/);
+  assert.match(service, /options\.choices\.some\(\(choice\) => choice\.id === result\)/);
+  assert.match(service, /panelClass: \['app-modal-panel', 'app-choice-dialog'\]/);
+  assert.match(component, /close\(result: boolean \| string \| undefined\)/);
+  assert.match(template, /data\.kind === 'choice'/);
+  assert.match(template, /class="dialog-choice-list"/);
+  assert.match(template, /class="dialog-choice-description"/);
+  assert.match(template, /\{\{ choice\.description \}\}/);
+  assert.match(template, /\(click\)="close\(undefined\)"/);
+  assert.match(template, /\(click\)="close\(choice\.id\)"/);
+  assert.match(template, /\[class\.dialog-button-confirm\]="choice\.primary"/);
+  assert.ok(
+    template.indexOf('close(undefined)') < template.indexOf('close(choice.id)'),
+    'Cancel must remain before every choice action in keyboard order.',
+  );
+  assert.match(styles, /\.dialog-choice-list/);
+  assert.match(styles, /\.dialog-choice-description-primary/);
+  assert.match(styles, /\.dialog-choice-actions[\s\S]*flex-wrap: wrap;/);
+});
+
 test('uses structured data for every renderer confirmation family', () => {
   const catalogueEditor = source('src/app/components/catalogue-editor/catalogue-editor.component.ts');
   const home = source('src/app/components/home.component.ts');
@@ -40,13 +69,15 @@ test('uses structured data for every renderer confirmation family', () => {
   const combined = `${catalogueEditor}\n${home}\n${tagTray}`;
   const structuredCalls = combined.match(/openConfirmationDialog\(\{/g) || [];
 
-  assert.equal(structuredCalls.length, 8);
+  assert.equal(structuredCalls.length, 9);
   assert.match(catalogueEditor, /Imported records skipped/);
   assert.match(catalogueEditor, /Matches outside displayed results/);
   assert.match(catalogueEditor, /transition: \{[\s\S]*New value/);
   assert.match(home, /Eligible videos/);
   assert.match(home, /tone: dangerously \? 'destructive' : 'warning'/);
   assert.match(home, /Metadata-bearing entries removed/);
+  assert.match(home, /exportVha2CompatibilityWarning/);
+  assert.match(home, /exportVha2ConfirmTitle/);
   assert.match(home, /currentPlan\.nextElements\.forEach\([\s\S]*element\.index = index/);
   assert.match(home, /ipcRenderer\.invoke\([\s\S]*update-source-folder-ignored-subdirectories/);
   assert.match(tagTray, /Duplicate assignments consolidated/);

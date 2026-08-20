@@ -567,6 +567,7 @@ export function sendFinalObjectToAngular(
     globals.currentlyOpenVhaFile,
     getHtmlPath(globals.selectedOutputFolder),
     catalogueSettingsNormalized,
+    globals.catalogueAccessMode,
   );
 }
 
@@ -641,6 +642,7 @@ export function setUpDirectoryWatchers(
   inputDirs: InputSources,
   currentImages: ImageElement[],
   scanNonWatchingSources: boolean,
+  allowWatchingAndScanning = true,
 ): void {
 
   console.log('---------------------------------');
@@ -664,7 +666,10 @@ export function setUpDirectoryWatchers(
       if (!err) {
         GLOBALS.angularApp.sender.send('directory-now-connected', parseInt(key, 10), pathToDir);
 
-        if (shouldStartSourceOnCatalogueSetup(shouldWatch, scanNonWatchingSources)) {
+        if (
+          allowWatchingAndScanning
+          && shouldStartSourceOnCatalogueSetup(shouldWatch, scanNonWatchingSources)
+        ) {
 
           // Temp logging
           if (!shouldWatch) {

@@ -32,10 +32,26 @@ export interface ConfirmationDialogOptions {
   transition?: DialogTransition;
 }
 
-export interface DialogData extends Partial<ConfirmationDialogOptions> {
+export interface DialogChoice<T extends string = string> {
+  description: string;
+  id: T;
+  label: string;
+  primary?: boolean;
+}
+
+export interface ChoiceDialogOptions<T extends string = string> {
+  cancelLabel: string;
+  choices: readonly DialogChoice<T>[];
+  summary: string;
+  supportingText?: string;
+  title: string;
+}
+
+export interface DialogData extends Partial<ConfirmationDialogOptions>, Partial<ChoiceDialogOptions> {
   cancelLabel?: string;
+  choices?: readonly DialogChoice[];
   confirmLabel?: string;
-  kind: 'confirmation' | 'message';
+  kind: 'choice' | 'confirmation' | 'message';
   summary: string;
   title: string;
   details?: string;
@@ -103,6 +119,39 @@ export class ModalService {
     );
 
     return dialogRef.afterClosed().pipe(map((result: unknown) => result === true));
+  }
+
+  /**
+   * Opens a choice dialog and emits the selected choice id. Dismissal and the
+   * explicit cancel action both emit `undefined`, keeping cancellation distinct
+   * from every valid choice.
+   */
+  openChoiceDialog<T extends string>(options: ChoiceDialogOptions<T>) {
+    const dialogRef = this.dialog.open(
+      ModalComponent,
+      {
+        ariaLabel: options.title,
+        autoFocus: 'first-tabbable',
+        data: {
+          ...options,
+          kind: 'choice',
+        },
+        maxHeight: 'calc(100vh - 32px)',
+        maxWidth: 'calc(100vw - 32px)',
+        panelClass: ['app-modal-panel', 'app-choice-dialog'],
+        restoreFocus: true,
+        role: 'dialog',
+        width: '680px',
+      }
+    );
+
+    return dialogRef.afterClosed().pipe(
+      map((result: unknown): T | undefined => (
+        options.choices.some((choice) => choice.id === result)
+          ? result as T
+          : undefined
+      )),
+    );
   }
 
   /**

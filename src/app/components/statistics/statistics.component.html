@@ -20,6 +20,21 @@
           {{ hubName() }}
         </h2>
         <span class="stats-heading folder catalogue-path" [innerHtml]="pathToVhaFile() | folderArrowsPipe"></span>
+        @if (canExportVha2Copy()) {
+          <div class="export-vha2-area">
+            <button
+              type="button"
+              class="export-vha2-copy"
+              (click)="exportVha2Catalogue.emit()"
+              [attr.title]="'STATISTICS.exportVha2CopyHint' | translate"
+            >
+              {{ 'STATISTICS.exportVha2Copy' | translate }}
+            </button>
+            <p class="export-vha2-warning">
+              {{ 'SYSTEM.exportVha2CompatibilityWarning' | translate }}
+            </p>
+          </div>
+        }
       </div>
 
       <div class="ledger-summary">
@@ -45,6 +60,11 @@
     </div>
 
     <div class="ledger-content sources-content">
+      @if (catalogueReadOnly()) {
+        <div class="catalogue-read-only-note" role="note">
+          {{ 'STATISTICS.catalogueReadOnlyNote' | translate }}
+        </div>
+      }
 
   <div
     class="input-sources"
@@ -116,7 +136,8 @@
             class="ignore-subdirectory-control"
             [class.ignore-subdirectory-control-active]="row.ignored"
             (click)="toggleIgnoredSubdirectory.emit(target)"
-            [disabled]="folderThumbnailRegenerationStatus() !== null || folderSourceIsBusy(sourceIndex)"
+            [disabled]="catalogueReadOnly() || folderThumbnailRegenerationStatus() !== null
+                        || folderSourceIsBusy(sourceIndex)"
             [attr.aria-label]="row.ignored
               ? ('STATISTICS.includeSubdirectoryAriaLabel' | translate : { folderName: folderDisplayName(target) })
               : ('STATISTICS.ignoreSubdirectoryAriaLabel' | translate : { folderName: folderDisplayName(target) })"
@@ -158,7 +179,7 @@
               {{ 'STATISTICS.cancelFolderThumbnailRegeneration' | translate }}
             }
           </button>
-        } @else if (removeFoldersMode && !row.ignored) {
+        } @else if (!catalogueReadOnly() && removeFoldersMode && !row.ignored) {
           <button
             type="button"
             class="regenerate-folder-thumbnails"
@@ -180,7 +201,8 @@
           </button>
         }
 
-        @if (!row.ignored && !removeFoldersMode && folderThumbnailRegenerationStatus() === null && !item.value.watch && sourceFolderService.sourceFolderConnected[sourceIndex]) {
+        @if (!catalogueReadOnly() && !row.ignored && !removeFoldersMode
+             && folderThumbnailRegenerationStatus() === null && !item.value.watch && sourceFolderService.sourceFolderConnected[sourceIndex]) {
           <button
             type="button"
             class="folder-text-action rescan-input-folder"
@@ -198,7 +220,7 @@
           </button>
         }
 
-        @if (isRoot && !sourceFolderService.sourceFolderConnected[sourceIndex] && !removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
+        @if (!catalogueReadOnly() && isRoot && !sourceFolderService.sourceFolderConnected[sourceIndex] && !removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
           <button
             type="button"
             class="folder-text-action input-not-connected"
@@ -210,7 +232,7 @@
           </button>
         }
 
-        @if (isRoot && !removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
+        @if (isRoot && !catalogueReadOnly() && !removeFoldersMode && folderThumbnailRegenerationStatus() === null) {
           <label
             class="watch-folder-control"
             title="{{ 'STATISTICS.watchFolderHelpText' | translate }}"
@@ -257,7 +279,7 @@
     <button
       class="wizard-button start-import"
       (click)="addAnotherFolder()"
-      [disabled]="folderThumbnailRegenerationStatus() !== null"
+      [disabled]="catalogueReadOnly() || folderThumbnailRegenerationStatus() !== null"
       [ngClass]="{ 'button-hidden': !removeFoldersMode }"
     >
       {{ 'STATISTICS.addFolderToHub' | translate }}
@@ -266,7 +288,7 @@
     <button
       (click)="removeFoldersMode = !removeFoldersMode"
       class="wizard-button "
-      [disabled]="folderThumbnailRegenerationStatus() !== null"
+      [disabled]="catalogueReadOnly() || folderThumbnailRegenerationStatus() !== null"
       [ngClass]="{ 'edit-mode-active': removeFoldersMode }"
     >
       {{ 'STATISTICS.editFolders' | translate }}
@@ -282,6 +304,7 @@
           type="checkbox"
           [ngModel]="appState().scanFoldersOnAddition"
           (ngModelChange)="appState().scanFoldersOnAddition = $event"
+          [disabled]="catalogueReadOnly()"
         >
         <span class="slider round"></span>
       </span>
@@ -297,6 +320,7 @@
           type="checkbox"
           [ngModel]="appState().generatePreviewsOnFolderAddition"
           (ngModelChange)="appState().generatePreviewsOnFolderAddition = $event"
+          [disabled]="catalogueReadOnly()"
         >
         <span class="slider round"></span>
       </span>
@@ -312,6 +336,7 @@
           type="checkbox"
           [ngModel]="appState().hideSubdirectoriesWithNoVideos"
           (ngModelChange)="appState().hideSubdirectoriesWithNoVideos = $event"
+          [disabled]="catalogueReadOnly()"
         >
         <span class="slider round"></span>
       </span>
@@ -321,7 +346,7 @@
       class="wizard-button"
       (click)="addMissingThumbnails()"
       (mouseup)="animateThis($event)"
-      [disabled]="folderThumbnailRegenerationStatus() !== null"
+      [disabled]="catalogueReadOnly() || folderThumbnailRegenerationStatus() !== null"
       [ngClass]="{ 'button-hidden': !removeFoldersMode }"
     >
       {{ 'STATISTICS.addMissingThumbnails' | translate }}
@@ -331,7 +356,7 @@
       class="wizard-button"
       (click)="cleanScreenshotFolder()"
       (mouseup)="animateThis($event)"
-      [disabled]="folderThumbnailRegenerationStatus() !== null"
+      [disabled]="catalogueReadOnly() || folderThumbnailRegenerationStatus() !== null"
       title="{{ 'STATISTICS.cleanScreenshotsHint' | translate }}"
       [ngClass]="{ 'button-hidden': !removeFoldersMode }"
     >

@@ -390,6 +390,53 @@
   text-align: left;
 }
 
+.export-vha2-copy {
+  appearance: none;
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  color: var(--app-accent-text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  margin-top: 12px;
+  padding: 6px 10px;
+
+  &:hover {
+    background: var(--app-control-hover);
+    border-color: var(--app-accent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--app-accent);
+    outline-offset: 2px;
+  }
+}
+
+.export-vha2-area {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.export-vha2-warning {
+  color: var(--app-text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 0;
+  max-width: 720px;
+}
+
+.catalogue-read-only-note {
+  background: var(--app-accent-soft);
+  border-bottom: 1px solid var(--app-border-strong);
+  color: var(--app-text-primary);
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 10px 16px;
+}
+
 .ledger-summary {
   display: flex;
   flex: 0 0 auto;
@@ -679,6 +726,14 @@
   gap: 8px;
   justify-content: flex-start;
   text-align: left;
+}
+
+.edit-mode-container :disabled,
+.scan-on-addition-control:has(input:disabled),
+.generate-on-addition-control:has(input:disabled),
+.hide-empty-subdirectories-control:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .edit-mode-container .wizard-button,

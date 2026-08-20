@@ -106,8 +106,11 @@
   >
     <ul @rightClickContentAnimation>
       <li
-        (click)="renamingNow = true"
-        [ngClass]="{ 'right-click-disabled': !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource] }"
+        (click)="beginRenameFromContextMenu()"
+        [attr.aria-disabled]="catalogueReadOnly
+          || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource]"
+        [ngClass]="{ 'right-click-disabled': catalogueReadOnly
+          || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource] }"
       >
                                                                 {{ 'RIGHTCLICK.renameFile'  | translate }}</li>
       <li (click)="showSimilarNow()">                           {{ 'RIGHTCLICK.showSimilar' | translate }}</li>
@@ -120,7 +123,11 @@
       <li (click)="openThumbnailSheet(currentRightClickedItem)">{{ 'RIGHTCLICK.sheetModal'  | translate }}</li>
       <li
         (click)="regenerateThumbnails(currentRightClickedItem)"
-        [ngClass]="{ 'right-click-disabled': thumbnailRegenerationActive
+        [attr.aria-disabled]="catalogueReadOnly
+          || thumbnailRegenerationActive
+          || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource]"
+        [ngClass]="{ 'right-click-disabled': catalogueReadOnly
+                                               || thumbnailRegenerationActive
                                                || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource] }"
       >
                                                                 {{ 'RIGHTCLICK.regenerateThumbnails' | translate }}</li>
@@ -128,7 +135,10 @@
       <li
         (click)="deleteThisFile(currentRightClickedItem)"
         class="right-click-delete"
-        [ngClass]="{ 'right-click-disabled': !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource] }"
+        [attr.aria-disabled]="catalogueReadOnly
+          || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource]"
+        [ngClass]="{ 'right-click-disabled': catalogueReadOnly
+          || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource] }"
       >
                                                                 {{ 'RIGHTCLICK.delete'      | translate }}</li>
     }
@@ -284,8 +294,10 @@
         (finalArrayNeedsSaving)="imageElementService.finalArrayNeedsSaving = true"
         (regenerateFolderThumbnails)="confirmRegenerateFolderThumbnails($event)"
         (toggleIgnoredSubdirectory)="toggleIgnoredSubdirectory($event)"
+        (exportVha2Catalogue)="exportVha2Catalogue()"
 
         [appState]="appState"
+        [catalogueReadOnly]="catalogueReadOnly"
         [darkMode]="settingsButtons['darkMode'].toggled"
         [folderThumbnailRegenerationStatus]="folderThumbnailRegenerationStatus"
         [hubName]="appState.hubName"
@@ -413,12 +425,22 @@
       </div>
       <div
         (click)="openCatalogueEditor()"
-        [ngClass]="{ catalogueEditorButtonActive: catalogueEditorOpen }"
+        [ngClass]="{
+          catalogueEditorButtonActive: catalogueEditorOpen,
+          catalogueEditorButtonDisabled: catalogueReadOnly
+        }"
         class="catalogueEditorButton"
-        title="Edit catalogue JSON"
+        [attr.title]="catalogueReadOnly
+          ? ('SYSTEM.catalogueReadOnlyActionBlocked' | translate)
+          : 'Edit catalogue JSON'"
       >
         JSON
       </div>
+      @if (catalogueReadOnly) {
+        <span class="catalogue-read-only-badge" role="status">
+          {{ 'SYSTEM.catalogueReadOnly' | translate }}
+        </span>
+      }
     @if (importStage !== 'done' && settingsButtons['hideTop'].toggled) {
       <div
         class="scanning-indicator scanning-indicator-right"

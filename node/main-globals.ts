@@ -1,5 +1,7 @@
 import type { ScreenshotSettings, InputSources } from '../interfaces/final-object.interface';
 
+export type CatalogueAccessMode = 'read-only' | 'read-write';
+
 // For release, update 4 values:                                                                          <---- !!! RELEASE !!!
 //
 // `demo: true,`                 -- below
@@ -9,6 +11,7 @@ import type { ScreenshotSettings, InputSources } from '../interfaces/final-objec
 
 export const GLOBALS: VhaGlobals = {
   angularApp: null,            // reference used to send messages back to Angular App
+  catalogueAccessMode: 'read-write',
   currentlyOpenVhaFile: '',    // OFFICAL DECREE IN NODE WHICH FILE IS CURRENTLY OPEN !!!
   debug: false,
   demo: false,                 // change to `true` during release                                         <---- !!! RELEASE !!!
@@ -35,6 +38,7 @@ export const GLOBALS: VhaGlobals = {
 export interface VhaGlobals {
   additionalExtensions: string[];
   angularApp: any;
+  catalogueAccessMode: CatalogueAccessMode;
   currentlyOpenVhaFile: string;
   debug: boolean;
   demo: boolean;

@@ -57,8 +57,10 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
   readonly finalArrayNeedsSaving = output<any>();
   readonly regenerateFolderThumbnails = output<FolderScopeTarget>();
   readonly toggleIgnoredSubdirectory = output<FolderScopeTarget>();
+  readonly exportVha2Catalogue = output<void>();
 
   readonly appState = input<AppStateInterface>();
+  readonly catalogueReadOnly = input<boolean>(false);
   readonly darkMode = input<boolean>(false);
   readonly hubName = input<string>();
   readonly inputFolders = input<InputSources>();
@@ -75,6 +77,11 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
   eventSubscriptionMap: Map<string, Subscription> = new Map();
 
   totalFiles: number;
+
+  canExportVha2Copy(): boolean {
+    return !this.catalogueReadOnly()
+      && /\.scaena$/i.test(this.pathToVhaFile() || '');
+  }
 
   // Length
   longest = 0;

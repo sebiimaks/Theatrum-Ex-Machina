@@ -12,6 +12,7 @@ import {
   CATALOGUE_METADATA_MAX_BYTES,
   serializeCatalogueMetadataExport,
 } from '../interfaces/catalogue-metadata-transfer';
+import { projectFinalObjectForVha2Export } from '../interfaces/vha2-compatibility';
 import { createDotPlsFile, writeVhaFileToDisk } from './main-support';
 import { replaceThumbnailWithNewImage } from './main-extract';
 import {
@@ -29,7 +30,7 @@ import {
   ThumbnailRegenerationError,
   updateSourceFolderIgnoredSubdirectories,
 } from './main-extract-async';
-import { writeJsonAtomically } from './vha-file-persistence';
+import { writeJsonAtomically, writeVhaJsonAtomically } from './vha-file-persistence';
 import {
   buildPlayerLaunch,
   isAllowedExternalUrl,
@@ -55,6 +56,34 @@ let activeCustomThumbnailReplacements = 0;
  * @param systemMessages
  */
 export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
+
+  const readOnlyMutationChannels = new Set([
+    'add-missing-thumbnails',
+    'clean-old-thumbnails',
+    'configure-source-folder',
+    'delete-video-file',
+    'reconnect-this-folder',
+    'regenerate-folder-thumbnails',
+    'regenerate-thumbnails',
+    'replace-thumbnail',
+    'rescan-source-folder-scope',
+    'save-current-vha-file',
+    'start-watching-folder',
+    'stop-watching-folder',
+    'try-to-rename-this-file',
+    'update-source-folder-ignored-subdirectories',
+  ]);
+
+  const rejectReadOnlyMutation = (event: any, channel: string): boolean => {
+    if (GLOBALS.catalogueAccessMode !== 'read-only' || !readOnlyMutationChannels.has(channel)) {
+      return false;
+    }
+    console.warn('Ignored catalogue mutation during a read-only session:', channel);
+    if (event.sender && !event.sender.isDestroyed()) {
+      event.sender.send('catalogue-read-only-write-blocked', channel);
+    }
+    return true;
+  };
 
   const activeWindow = (): any => {
     const currentWindow = GLOBALS.winRef;
@@ -88,6 +117,9 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
         console.warn('Ignored IPC message from an untrusted renderer:', channel);
         return;
       }
+      if (rejectReadOnlyMutation(event, channel)) {
+        return;
+      }
       listener(event, ...args);
     });
   };
@@ -104,6 +136,13 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
       if (!trustedWebContents || event.sender.id !== trustedWebContents.id) {
         console.warn('Ignored IPC request from an untrusted renderer:', channel);
         throw new Error('The request did not come from the active application window.');
+      }
+
+      if (rejectReadOnlyMutation(event, channel)) {
+        return {
+          error: 'This legacy catalogue is open read-only.',
+          status: 'read-only',
+        };
       }
 
       return listener(event, ...args);
@@ -833,6 +872,56 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
   });
 
   /**
+   * Export an upstream-compatible version-3 .vha2 copy without changing the
+   * current catalogue path, access mode, or dirty state.
+   */
+  trustedIpcHandle('export-vha2-catalogue', async (_event, finalObject: FinalObject): Promise<unknown> => {
+    try {
+      if (GLOBALS.catalogueAccessMode !== 'read-write') {
+        return {
+          error: 'A read-only legacy catalogue cannot be exported as another legacy copy.',
+          status: 'read-only',
+        };
+      }
+
+      const currentCatalogue = GLOBALS.currentlyOpenVhaFile;
+      if (path.extname(currentCatalogue).toLowerCase() !== '.scaena') {
+        return {
+          error: 'Only an open .scaena catalogue can be exported as a .vha2 copy.',
+          status: 'error',
+        };
+      }
+
+      const compatibleCatalogue = projectFinalObjectForVha2Export(finalObject);
+      const parsedCurrent = path.parse(currentCatalogue);
+      const result = await showSaveDialog({
+        defaultPath: path.join(parsedCurrent.dir, `${parsedCurrent.name}.vha2`),
+        filters: [{ name: 'Video Hub App catalogue', extensions: ['vha2'] }],
+        properties: ['createDirectory', 'showOverwriteConfirmation'],
+        title: 'Export Video Hub App Catalogue',
+      });
+
+      if (result.canceled || !result.filePath) {
+        return { status: 'cancelled' };
+      }
+
+      const destination = path.extname(result.filePath).toLowerCase() === '.vha2'
+        ? result.filePath
+        : `${result.filePath}.vha2`;
+      await writeVhaJsonAtomically(destination, JSON.stringify(compatibleCatalogue));
+
+      return {
+        fileName: path.basename(destination),
+        status: 'exported',
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The .vha2 catalogue could not be exported.';
+      console.error('Unable to export a Video Hub App catalogue:', error);
+      return { error: message, status: 'error' };
+    }
+  });
+
+  /**
    * Read only a user-selected JSON file, enforce a conservative size limit, and
    * return its text for category-aware validation in the Catalogue Editor.
    */
@@ -991,7 +1080,7 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
       }
 
       writeJsonAtomically(path.join(GLOBALS.settingsPath, 'settings.json'), json).then(() => {
-        if (finalObjectToSave === null) {
+        if (finalObjectToSave === null || GLOBALS.catalogueAccessMode === 'read-only') {
           closeWindow();
           return;
         }
