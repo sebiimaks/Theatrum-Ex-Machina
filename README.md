@@ -6,7 +6,7 @@
 
 **Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
-- Current fork version: `v1.0.0`
+- Current fork version: `v1.1.0`
 - Change summary updated: 21/08/2026
 
 # Fork Changelog
@@ -15,8 +15,22 @@ This changelog covers material fork-specific changes made after the upstream bas
 
 `v1.0.0` begins the independent Theatrum Ex Machina version line. Earlier entries preserve the fork's pre-1.0 development history.
 
-<details open>
+<details>
 <summary><strong>Unreleased</strong></summary>
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v1.1.0">v1.1.0</a> — 21 August 2026</strong></summary>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/a04c4d2"><code>a04c4d2</code></a> — <strong>Make catalogue save failures recoverable</strong></summary>
+<p>Catalogue Editor now validates media file and folder edits before mutating saved locations, shows inline guidance for invalid paths, and preserves authoritative alternate-location data. Save failures identify the affected catalogue entry. If a catalogue still cannot be saved while closing, the native safety dialog now offers either to keep working or explicitly quit without saving the current catalogue changes, while leaving the existing catalogue file untouched. Regression coverage confirms that ordinary punctuation in custom-thumbnail file names, including ampersands, is accepted.</p>
+</details>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/e4e09c3"><code>e4e09c3</code></a> — <strong>Restore safe catalogue drag and drop</strong></summary>
+<p>Restored opening <code>.scaena</code> and <code>.vha2</code> catalogues dropped onto the app. Dropped files now resolve through Electron’s supported path API and enter the same validated, serialised open workflow as other catalogue requests, preserving the legacy read-only or duplicate choice and keeping custom-thumbnail drops on gallery items isolated from catalogue opening.</p>
+</details>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/91baf5d"><code>91baf5d</code></a> — <strong>Remove the legacy demo mode</strong></summary>
