@@ -7,7 +7,7 @@
 **Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
 - Current fork version: `v1.0.0`
-- Change summary updated: 20/08/2026
+- Change summary updated: 21/08/2026
 
 # Fork Changelog
 
@@ -17,6 +17,11 @@ This changelog covers material fork-specific changes made after the upstream bas
 
 <details open>
 <summary><strong>Unreleased</strong></summary>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/91baf5d"><code>91baf5d</code></a> — <strong>Remove the legacy demo mode</strong></summary>
+<p>Removed the dormant demo build flag, the 50-video catalogue and scan limits, the demo labels and translations, and the obsolete standalone demo assets. Catalogues now always load and accept their complete set of videos. Regression, release-preflight, and packaged-application checks prevent the retired limits or stale compiled demo code from returning.</p>
+</details>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/100cba7"><code>100cba7</code></a> — <strong>Add safe Video Hub App catalogue interoperability</strong></summary>
