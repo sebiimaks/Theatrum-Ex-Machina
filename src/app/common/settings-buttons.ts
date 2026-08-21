@@ -7,6 +7,7 @@ export type SettingsButtonKey = 'autoFileTags'
  | 'clearHistory'
  | 'clipsThumbnail'
  | 'compactView'
+ | 'showCleanNameInCompactView'
  | 'dangerousDelete'
  | 'darkMode'
  | 'doubleClickMode'
@@ -175,6 +176,7 @@ export const SettingsButtonsGroups: SettingsButtonKey[][] = [
   ],
   [ // 7 - Layout
     'compactView',
+    'showCleanNameInCompactView',
     'showMoreInfo',
     'fontSizeLarger',
     'favorites',
@@ -395,6 +397,15 @@ export const SettingsButtons: SettingsButtonsType = {
     moreInfo: 'BUTTONS.compactViewMoreInfo',
     settingsHeading: 'SETTINGS.miscView',
     title: 'BUTTONS.compactViewHint',
+    toggled: false
+  },
+  'showCleanNameInCompactView': {
+    description: 'BUTTONS.showCleanNameInCompactViewDescription',
+    hidden: false,
+    iconName: 'icon-show-filenames',
+    moreInfo: 'BUTTONS.showCleanNameInCompactViewMoreInfo',
+    settingsNested: true,
+    title: 'BUTTONS.showCleanNameInCompactViewHint',
     toggled: false
   },
   'dangerousDelete': {

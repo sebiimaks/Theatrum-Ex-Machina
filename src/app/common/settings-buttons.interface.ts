@@ -6,4 +6,5 @@ export interface SettingsButton {
   toggled: boolean;         // default state unless user overrides
   moreInfo?: string;        // hint text in the settings menu when hovering over the `i` icon
   settingsHeading?: string; // Long text to appear in the settings above the button
+  settingsNested?: boolean; // visually group a dependent option beneath its parent setting
 }

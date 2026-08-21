@@ -24,7 +24,10 @@
 
             <div class="settings-ledger__rows">
           @for (buttonKey of section.buttonKeys; track buttonKey) {
-            <div class="settings-ledger__row">
+            <div
+              class="settings-ledger__row"
+              [class.settings-ledger__row--nested]="settingsButtons[buttonKey].settingsNested"
+            >
               <div class="settings-ledger__copy">
                 <span class="settings-ledger__description">
                   {{ settingsButtons[buttonKey].description | translate }}

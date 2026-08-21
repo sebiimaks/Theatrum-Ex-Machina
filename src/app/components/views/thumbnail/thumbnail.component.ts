@@ -46,6 +46,7 @@ export class ThumbnailComponent implements OnInit, OnDestroy {
   readonly imgHeight = input<number>();
   readonly largerFont = input<boolean>();
   readonly returnToFirstScreenshot = input<boolean>();
+  readonly showCleanNameInCompactView = input(false);
   readonly showFavorites = input<boolean>();
   readonly showMeta = input<boolean>();
   readonly thumbAutoAdvance = input<boolean>();

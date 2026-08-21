@@ -3,10 +3,21 @@ import { test } from 'node:test';
 
 import { shouldStartSourceOnCatalogueSetup } from '../interfaces/folder-scan-startup';
 import {
+  CURRENT_SETTINGS_SCHEMA_VERSION,
+  shouldRevealCompactCleanNameToolbar,
+} from '../interfaces/settings-object.interface';
+import {
   normalizeGeneratePreviewsOnFolderAddition,
   normalizeHideSubdirectoriesWithNoVideos,
   normalizeScanFoldersOnAddition,
 } from '../src/app/common/app-state';
+
+test('reveals the new compact clean-name toolbar control once for older settings', () => {
+  assert.equal(shouldRevealCompactCleanNameToolbar(undefined), true);
+  assert.equal(shouldRevealCompactCleanNameToolbar(0), true);
+  assert.equal(shouldRevealCompactCleanNameToolbar(CURRENT_SETTINGS_SCHEMA_VERSION), false);
+  assert.equal(shouldRevealCompactCleanNameToolbar(CURRENT_SETTINGS_SCHEMA_VERSION + 1), false);
+});
 
 test('migrates legacy scan-on-addition settings without overwriting an explicit choice', () => {
   assert.equal(normalizeScanFoldersOnAddition(undefined), true);

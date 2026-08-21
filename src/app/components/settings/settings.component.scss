@@ -126,6 +126,21 @@ select {
   }
 }
 
+.settings-ledger__row--nested .settings-ledger__copy {
+  padding-inline-start: 22px;
+  position: relative;
+}
+
+.settings-ledger__row--nested .settings-ledger__copy::before {
+  color: var(--app-text-secondary);
+  content: '↳';
+  font-family: var(--app-font-mono);
+  inset-inline-start: 4px;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
 .settings-ledger__copy {
   align-items: center;
   display: flex;

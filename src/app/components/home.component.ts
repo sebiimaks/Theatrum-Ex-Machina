@@ -86,6 +86,10 @@ import type {
   FolderThumbnailRegenerationStatus,
 } from './statistics/statistics.component';
 import type { TagHierarchyMoveEmission } from './tag-tray/tag-tray.component';
+import {
+  CURRENT_SETTINGS_SCHEMA_VERSION,
+  shouldRevealCompactCleanNameToolbar,
+} from '../../../interfaces/settings-object.interface';
 import type { SettingsButtonSavedProperties, SettingsObject } from '../../../interfaces/settings-object.interface';
 import type { SortType } from '../pipes/sorting.pipe';
 import type { WizardOptions } from '../../../interfaces/wizard-options.interface';
@@ -3567,6 +3571,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
     return {
       appState: this.appState,
       buttonSettings: buttonSettings,
+      settingsSchemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION,
       shortcuts: this.shortcutService.keyToActionMap,
       vhaFileHistory: this.vhaFileHistory,
       wizardOptions: this.wizard
@@ -3611,6 +3616,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
    * restore settings from saved file
    */
   restoreSettingsFromBefore(settingsObject: SettingsObject): void {
+    const revealCompactCleanNameToolbar = shouldRevealCompactCleanNameToolbar(
+      settingsObject.settingsSchemaVersion,
+    );
+
     if (settingsObject.appState) {
       this.appState = settingsObject.appState;
       delete (this.appState as AppStateInterface & { port?: unknown }).port;
@@ -3636,7 +3645,10 @@ export class HomeComponent implements OnInit, AfterViewInit {
     this.grabAllSettingsKeys().forEach(element => {
       if (settingsObject.buttonSettings[element]) {
         this.settingsButtons[element].toggled = settingsObject.buttonSettings[element].toggled;
-        this.settingsButtons[element].hidden = settingsObject.buttonSettings[element].hidden;
+        this.settingsButtons[element].hidden = element === 'showCleanNameInCompactView'
+          && revealCompactCleanNameToolbar
+          ? false
+          : settingsObject.buttonSettings[element].hidden;
         // retrieving state of buttons for touchBar
         if (this.settingsButtons[element].toggled) {
           this.electronService.ipcRenderer.send('app-to-touchBar', element);

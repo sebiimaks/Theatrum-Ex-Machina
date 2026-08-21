@@ -9,9 +9,18 @@ export interface SettingsButtonSavedProperties {
   toggled: boolean;
 }
 
+export const CURRENT_SETTINGS_SCHEMA_VERSION = 1;
+
+export function shouldRevealCompactCleanNameToolbar(settingsSchemaVersion: unknown): boolean {
+  return typeof settingsSchemaVersion !== 'number'
+    || !Number.isFinite(settingsSchemaVersion)
+    || settingsSchemaVersion < CURRENT_SETTINGS_SCHEMA_VERSION;
+}
+
 export interface SettingsObject {
   appState: AppStateInterface;
   buttonSettings: Record<SettingsButtonKey, SettingsButtonSavedProperties>;
+  settingsSchemaVersion?: number;
   shortcuts: Map<string, SettingsButtonKey | CustomShortcutAction>;
   vhaFileHistory: HistoryItem[];
   wizardOptions: WizardOptions;

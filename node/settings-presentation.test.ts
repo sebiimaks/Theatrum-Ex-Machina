@@ -32,6 +32,72 @@ test('presents every setting exactly once in explicit review-ledger sections', (
   assert.match(styles, /@media \(max-width: 560px\)[\s\S]*grid-template-columns:\s*1fr/);
 });
 
+test('optionally shows clean names inside compact thumbnails without changing card dimensions', () => {
+  const homeTemplate = source('src/app/components/home.component.html');
+  const thumbnailTemplate = source('src/app/components/views/thumbnail/thumbnail.component.html');
+  const thumbnailComponent = source('src/app/components/views/thumbnail/thumbnail.component.ts');
+  const thumbnailStyles = source('src/app/components/views/thumbnail/thumbnail.component.scss');
+  const settingsTemplate = source('src/app/components/settings/settings.component.html');
+  const settingsStyles = source('src/app/components/settings/settings.component.scss');
+  const english = JSON.parse(source('i18n/en.json'));
+  const layoutSection = SettingsSections[1].find((section) => section.heading === 'SETTINGS.miscView');
+
+  assert.ok(layoutSection);
+  assert.equal(
+    layoutSection.buttonKeys.indexOf('showCleanNameInCompactView'),
+    layoutSection.buttonKeys.indexOf('compactView') + 1,
+  );
+  assert.equal(SettingsButtons.showCleanNameInCompactView.toggled, false);
+  assert.equal(SettingsButtons.showCleanNameInCompactView.hidden, false);
+  assert.equal(SettingsButtons.showCleanNameInCompactView.iconName, 'icon-show-filenames');
+  assert.equal(SettingsButtons.showCleanNameInCompactView.settingsNested, true);
+  assert.equal(
+    english.BUTTONS.showCleanNameInCompactViewDescription,
+    'Show clean name in compact view',
+  );
+  assert.match(settingsTemplate, /\[class\.settings-ledger__row--nested\]/);
+  assert.match(settingsStyles, /\.settings-ledger__row--nested/);
+
+  assert.equal((homeTemplate.match(/\[showCleanNameInCompactView\]/g) || []).length, 1);
+  assert.match(
+    homeTemplate,
+    /\[showCleanNameInCompactView\]="settingsButtons\['showCleanNameInCompactView'\]\.toggled"/,
+  );
+  assert.match(thumbnailComponent, /showCleanNameInCompactView = input\(false\)/);
+  assert.match(
+    thumbnailTemplate,
+    /compactView\(\) && showCleanNameInCompactView\(\) && video\.cleanName/,
+  );
+  assert.match(thumbnailTemplate, /class="rez compact-clean-name"/);
+  assert.match(
+    thumbnailTemplate,
+    /\[attr\.title\]="compactView\(\) && showCleanNameInCompactView\(\) \? video\.cleanName : null"/,
+  );
+  assert.match(
+    thumbnailStyles,
+    /\.compact-clean-name\s*\{[^}]*bottom:\s*2px[^}]*max-width:[^}]*pointer-events:\s*none[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/,
+  );
+  assert.equal((thumbnailTemplate.match(/\[class\.compact-meta-line\]/g) || []).length, 2);
+  assert.match(
+    thumbnailStyles,
+    /\.compact-meta-line\s*\{[^}]*bottom:\s*17px/,
+  );
+
+  assert.match(
+    thumbnailTemplate,
+    /\[class\.playlist-icon--after-heart\]="showFavorites\(\)"/,
+  );
+  const playlistRule = thumbnailStyles.match(/\.playlist-icon\s*\{([^}]*)\}/)?.[1];
+  assert.ok(playlistRule);
+  assert.match(playlistRule, /left:\s*3px/);
+  assert.match(playlistRule, /top:\s*3px/);
+  assert.doesNotMatch(playlistRule, /bottom:|right:/);
+  assert.match(
+    thumbnailStyles,
+    /\.playlist-icon--after-heart\s*\{[^}]*left:\s*23px/,
+  );
+});
+
 test('keeps setting actions, toolbar visibility, and Main Settings controls wired', () => {
   const template = source('src/app/components/settings/settings.component.html');
 
