@@ -385,7 +385,7 @@ test('keeps wizard theme assets, readable paths, and narrow-window layout', () =
   assert.match(styles, /\.path\s*\{[^}]*overflow-wrap:\s*anywhere/);
 });
 
-test('keeps the 1.1.0 release identity and fork attribution aligned', () => {
+test('keeps the 1.1.1 release identity and fork attribution aligned', () => {
   const packageJson = JSON.parse(source('package.json'));
   const packageLock = JSON.parse(source('package-lock.json'));
   const builder = JSON.parse(source('electron-builder.json'));
@@ -395,10 +395,10 @@ test('keeps the 1.1.0 release identity and fork attribution aligned', () => {
     + 'Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. '
     + 'Use at your own risk.';
 
-  assert.equal(packageJson.version, '1.1.0');
+  assert.equal(packageJson.version, '1.1.1');
   assert.equal(packageLock.version, packageJson.version);
   assert.equal(packageLock.packages[''].version, packageJson.version);
-  assert.match(globals, /version:\s*'1\.1\.0'/);
+  assert.match(globals, /version:\s*'1\.1\.1'/);
   assert.ok(template.includes(`<strong>${expectedAttribution}</strong>`));
   assert.equal(builder.linux.synopsis, 'Personal fork of Video Hub App');
   assert.ok(builder.linux.description.includes(expectedAttribution));

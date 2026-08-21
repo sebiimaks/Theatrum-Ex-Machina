@@ -6,8 +6,8 @@
 
 **Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
-- Current fork version: `v1.1.0`
-- Change summary updated: 21/08/2026
+- Current fork version: `v1.1.1`
+- Change summary updated: 22/08/2026
 
 # Fork Changelog
 
@@ -17,6 +17,21 @@ This changelog covers material fork-specific changes made after the upstream bas
 
 <details>
 <summary><strong>Unreleased</strong></summary>
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v1.1.1">v1.1.1</a> — 22 August 2026</strong></summary>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/4f65fc2"><code>4f65fc2</code></a> — <strong>Fix compact gallery layout on startup</strong></summary>
+<p>Compact View now restores its saved gallery geometry correctly at startup, including when the sidebar or Tags panel is open. The gallery renders restored layout classes before measuring, observes later gallery-width changes, and refreshes virtual-scroller measurements after panel transitions, so thumbnails fill the available space without toggling the view off and on.</p>
+</details>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/7638bd7"><code>7638bd7</code></a> — <strong>Add compact clean-name thumbnail controls</strong></summary>
+<p>Compact View can now optionally show each video’s clean catalogue name inside the preview, with its metadata row immediately above. The option is available in View Settings and from a toolbar glyph beside Compact View; existing settings profiles reveal it automatically. The playlist control now sits at the top beside Favorites, leaving the thumbnail information unobscured.</p>
+</details>
+
 </details>
 
 <details>
