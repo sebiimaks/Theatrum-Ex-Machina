@@ -95,3 +95,53 @@ test('the app does not override Electron built-in file protocol handling', () =>
 
   assert.equal(mainProcess.includes("registerFileProtocol('file'"), false);
 });
+
+test('gallery width changes settle before virtual-scroll geometry is refreshed', () => {
+  const component = readFileSync(
+    join(__dirname, '../src/app/components/home.component.ts'),
+    'utf8',
+  );
+  const afterViewInit = component.slice(
+    component.indexOf('ngAfterViewInit()'),
+    component.indexOf('ngOnDestroy(): void'),
+  );
+  const onDestroy = component.slice(
+    component.indexOf('ngOnDestroy(): void'),
+    component.indexOf('/**\n   * Tell Electron to drag'),
+  );
+
+  assert.match(afterViewInit, /new ResizeObserver/);
+  assert.match(afterViewInit, /Math\.abs\(width - this\.observedGalleryWidth\) < 0\.5/);
+  assert.match(
+    afterViewInit,
+    /this\.observedGalleryWidth = width;\s*this\.scheduleGalleryLayoutRefresh\(GALLERY_RESIZE_SETTLE_MS\)/,
+  );
+  assert.match(onDestroy, /this\.galleryResizeObserver\?\.disconnect\(\)/);
+  assert.match(onDestroy, /clearTimeout\(this\.galleryLayoutRefreshTimeout\)/);
+  assert.match(onDestroy, /cancelAnimationFrame\(this\.galleryLayoutRefreshFrame\)/);
+});
+
+test('restored compact layout renders before measurement and stabilizes after catalogue load', () => {
+  const component = readFileSync(
+    join(__dirname, '../src/app/components/home.component.ts'),
+    'utf8',
+  );
+  const restoreStart = component.indexOf('restoreSettingsFromBefore(settingsObject: SettingsObject)');
+  const restoreEnd = component.indexOf('/**\n   * Restore the language', restoreStart);
+  const restore = component.slice(restoreStart, restoreEnd);
+  const finalObjectStart = component.indexOf("ipcRenderer.on('final-object-returning'");
+  const finalObjectEnd = component.indexOf('// If no previously saved settings exist', finalObjectStart);
+  const finalObject = component.slice(finalObjectStart, finalObjectEnd);
+
+  const firstRender = restore.indexOf('this.cd.detectChanges();');
+  const firstMeasure = restore.indexOf('this.computeTextBufferAmount();');
+  assert.ok(firstRender >= 0 && firstRender < firstMeasure);
+  assert.match(
+    restore,
+    /showTagTray'\]\.toggled = true;[^}]*this\.cd\.detectChanges\(\);[^}]*this\.scheduleGalleryLayoutRefresh\(GALLERY_LAYOUT_TRANSITION_MS\)/s,
+  );
+  assert.match(
+    finalObject,
+    /this\.cd\.detectChanges\(\);\s*this\.scheduleGalleryLayoutRefresh\(GALLERY_LAYOUT_TRANSITION_MS\);\s*this\.markRendererStartupComplete\(\)/,
+  );
+});

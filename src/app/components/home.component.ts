@@ -1,4 +1,4 @@
-import type { AfterViewInit, ElementRef, OnInit } from '@angular/core';
+import type { AfterViewInit, ElementRef, OnDestroy, OnInit } from '@angular/core';
 import { ChangeDetectorRef, NgZone, viewChild } from '@angular/core';
 import { Component, HostListener } from '@angular/core';
 
@@ -184,6 +184,7 @@ interface CatalogueLoadedFromBackupDetails {
 }
 
 const GALLERY_LAYOUT_TRANSITION_MS = 320;
+const GALLERY_RESIZE_SETTLE_MS = 60;
 
 @Component({
   standalone: false,
@@ -219,7 +220,7 @@ const GALLERY_LAYOUT_TRANSITION_MS = 320;
     topAnimation
   ]
 })
-export class HomeComponent implements OnInit, AfterViewInit {
+export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
   readonly fuzzySearch = viewChild<ElementRef>('fuzzySearch');
   readonly startsWithSearch = viewChild<ElementRef>('startsWithSearch');
@@ -249,6 +250,8 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
   private galleryLayoutRefreshTimeout: ReturnType<typeof setTimeout> | undefined;
   private galleryLayoutRefreshFrame: number | undefined;
+  private galleryResizeObserver: ResizeObserver | undefined;
+  private observedGalleryWidth: number | undefined;
   private pendingGalleryScrollReset = false;
 
   newVideoImportTimeout = null;
@@ -1200,6 +1203,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
       }
 
       this.cd.detectChanges();
+      this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
       this.markRendererStartupComplete();
       this.finishCatalogueOpenRequest();
     });
@@ -1574,6 +1578,25 @@ export class HomeComponent implements OnInit, AfterViewInit {
   // =======================================================================================================================================
 
   ngAfterViewInit() {
+    const gallery = document.getElementById('scrollDiv');
+    if (gallery && typeof ResizeObserver !== 'undefined') {
+      this.observedGalleryWidth = gallery.getBoundingClientRect().width;
+      this.galleryResizeObserver = new ResizeObserver((entries: ResizeObserverEntry[]) => {
+        const width = entries.find((entry: ResizeObserverEntry) => entry.target === gallery)
+          ?.contentRect.width;
+        if (
+          width === undefined
+          || !Number.isFinite(width)
+          || width <= 0
+          || Math.abs(width - this.observedGalleryWidth) < 0.5
+        ) {
+          return;
+        }
+        this.observedGalleryWidth = width;
+        this.scheduleGalleryLayoutRefresh(GALLERY_RESIZE_SETTLE_MS);
+      });
+      this.galleryResizeObserver.observe(gallery);
+    }
     this.scheduleGalleryLayoutRefresh();
 
     // this is required, otherwise when user drops the file, it opens as plaintext
@@ -1596,6 +1619,15 @@ export class HomeComponent implements OnInit, AfterViewInit {
         console.error('Unable to resolve the dropped catalogue path:', error);
       }
     };
+  }
+
+  ngOnDestroy(): void {
+    this.galleryResizeObserver?.disconnect();
+    clearTimeout(this.galleryLayoutRefreshTimeout);
+    if (this.galleryLayoutRefreshFrame !== undefined) {
+      cancelAnimationFrame(this.galleryLayoutRefreshFrame);
+      this.galleryLayoutRefreshFrame = undefined;
+    }
   }
 
   /**
@@ -3655,15 +3687,27 @@ export class HomeComponent implements OnInit, AfterViewInit {
         }
       }
     });
-    this.computeTextBufferAmount();
-
     this.settingsButtons['showTags'].toggled = false; // never show tags on load (they don't load right anyway)
 
-    if (this.settingsButtons['showTagTray'].toggled) {
+    const reopenTagTray = this.settingsButtons['showTagTray'].toggled;
+    if (reopenTagTray) {
       this.settingsButtons['showTagTray'].toggled = false;
+    }
+
+    // Render restored layout classes before measuring the gallery. IPC callbacks
+    // can otherwise leave compact view using the default panel/sidebar width.
+    this.cd.detectChanges();
+    this.computeTextBufferAmount();
+    this.cd.detectChanges();
+    this.scheduleGalleryLayoutRefresh();
+
+    if (reopenTagTray) {
       setTimeout(() => {
-        this.settingsButtons['showTagTray'].toggled = true; // needs a delay to show up correctly
-        this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
+        this.zone.run(() => {
+          this.settingsButtons['showTagTray'].toggled = true; // needs a delay to show up correctly
+          this.cd.detectChanges();
+          this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
+        });
       }, 100);
     }
   }
@@ -4664,9 +4708,13 @@ export class HomeComponent implements OnInit, AfterViewInit {
   fixManualTagTrayBreakingBug(): void {
       if (this.settingsButtons['showTagTray'].toggled) {
         this.settingsButtons['showTagTray'].toggled = false;
+        this.cd.detectChanges();
         setTimeout(() => {
-          this.settingsButtons['showTagTray'].toggled = true;
-          this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
+          this.zone.run(() => {
+            this.settingsButtons['showTagTray'].toggled = true;
+            this.cd.detectChanges();
+            this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
+          });
         }, 0);
       }
   }
