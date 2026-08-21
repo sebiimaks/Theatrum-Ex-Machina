@@ -1577,14 +1577,19 @@ export class HomeComponent implements OnInit, AfterViewInit {
       ev.preventDefault();
     };
     document.body.ondrop = (ev) => {
-      if (ev.dataTransfer.files.length > 0) {
-        // const fullPath: string = ev.dataTransfer.files[0].path;
-        console.warn("TODO: FIX - DRAG & DROP BROKEN");
-        const fullPath = "TODO";
-        ev.preventDefault();
+      const droppedFile = ev.dataTransfer?.files.item(0);
+      if (!droppedFile) {
+        return;
+      }
+
+      ev.preventDefault();
+      try {
+        const fullPath = this.electronService.getPathForFile(droppedFile);
         if (isSupportedCatalogueFilePath(fullPath)) {
           this.loadThisVhaFile(fullPath);
         }
+      } catch (error) {
+        console.error('Unable to resolve the dropped catalogue path:', error);
       }
     };
   }

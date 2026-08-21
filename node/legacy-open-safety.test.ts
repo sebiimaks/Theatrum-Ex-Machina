@@ -32,6 +32,30 @@ test('queues native catalogue opens in order and requires acknowledgement betwee
   assert.equal(queue.next(), '/catalogues/second.scaena');
 });
 
+test('routes a dropped catalogue through the Electron path resolver and existing open workflow', () => {
+  const dropHandler = homeSource.slice(
+    homeSource.indexOf('document.body.ondrop'),
+    homeSource.indexOf('/**\n   * Tell Electron to drag a file out of the app'),
+  );
+  const galleryDropHandler = homeSource.slice(
+    homeSource.indexOf('droppedSomethingOverVideo('),
+    homeSource.indexOf('/**\n   * Low-tech debounced window resize'),
+  );
+
+  assert.match(dropHandler, /dataTransfer\?\.files\.item\(0\)/);
+  assert.match(dropHandler, /electronService\.getPathForFile\(droppedFile\)/);
+  assert.match(dropHandler, /isSupportedCatalogueFilePath\(fullPath\)/);
+  assert.match(dropHandler, /this\.loadThisVhaFile\(fullPath\)/);
+  assert.match(dropHandler, /catch \(error\)/);
+  assert.doesNotMatch(dropHandler, /\bmyAPI\b/);
+  assert.doesNotMatch(dropHandler, /(?:droppedFile|files(?:\.item\(0\)|\[0\]))\.path\b/);
+  assert.doesNotMatch(dropHandler, /TODO: FIX - DRAG & DROP BROKEN|const fullPath = ["']TODO["']/);
+  assert.match(
+    galleryDropHandler,
+    /if \(droppedFile\) \{\s*event\.preventDefault\(\);\s*event\.stopPropagation\(\);[\s\S]*electronService\.getPathForFile\(droppedFile\)/,
+  );
+});
+
 test('dispatches startup opens after settings failure and serializes renderer ownership', () => {
   assert.match(mainSource, /rendererCanReceiveCatalogueOpenRequests = true;\s*dispatchNextCatalogueOpenRequest\(\);/);
   assert.doesNotMatch(mainSource, /requestCatalogueOpenFromSystem\(requestedCataloguePath\)/);
