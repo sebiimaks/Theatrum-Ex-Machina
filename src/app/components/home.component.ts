@@ -238,7 +238,6 @@ export class HomeComponent implements OnInit, AfterViewInit {
   // App state to save -- so it can be exported and saved when closing the app
   appState = AppState;
 
-  demo = GLOBALS.demo;
   macVersion = window.process?.platform === 'darwin' || GLOBALS.macVersion;
   versionNumber = GLOBALS.version;
 
@@ -1171,7 +1170,7 @@ export class HomeComponent implements OnInit, AfterViewInit {
 
       this.setTags(finalObject.addTags, finalObject.removeTags); // auto-tags
 
-      this.imageElementService.imageElements = this.demo ? finalObject.images.slice(0, 50) : finalObject.images;
+      this.imageElementService.imageElements = finalObject.images;
       if (!this.catalogueReadOnly && (thumbnailMetadataNormalized || catalogueSettingsNormalized)) {
         this.imageElementService.finalArrayNeedsSaving = true;
       }
@@ -1413,43 +1412,41 @@ export class HomeComponent implements OnInit, AfterViewInit {
         copyRecoveredEntryMetadata(element, deletedOrigin);
       }
 
-      if (!this.demo || this.imageElementService.imageElements.length <= 50) {
-        if (!inheritedExistingMetadata) {
-          ensureDateAddedForNewEntry(element);
-        }
-        if (probeStillFailed) {
-          element.metadataImportFailed = true;
-          element.tags = element.tags || [];
-          if (!element.tags.includes(IMPORT_ERROR_TAG)) {
-            element.tags.push(IMPORT_ERROR_TAG);
-          }
-          this.manualTagsService.addTag(IMPORT_ERROR_TAG);
-        } else if (element.tags?.includes(IMPORT_ERROR_TAG)) {
-          delete element.metadataImportFailed;
-          element.tags = element.tags.filter((tag: string) => tag !== IMPORT_ERROR_TAG);
-          if (this.manualTagsService.tagsFrequencyMap.has(IMPORT_ERROR_TAG)) {
-            this.manualTagsService.removeTag(IMPORT_ERROR_TAG);
-          }
-        }
-
-        if (
-          deletedOrigin
-          && replaceRecoveredFolderEntry(
-            this.imageElementService.imageElements,
-            element,
-            deletedOrigin,
-          ) !== undefined
-        ) {
-          this.imageElementService.finalArrayNeedsSaving = true;
-          this.resetFinalArrayRef();
-          return;
-        }
-
-        element.index = this.imageElementService.imageElements.length;
-        this.imageElementService.imageElements.push(element); // not enough for view to update; we need `.slice()`
-        this.imageElementService.finalArrayNeedsSaving = true;
-        this.debounceImport();
+      if (!inheritedExistingMetadata) {
+        ensureDateAddedForNewEntry(element);
       }
+      if (probeStillFailed) {
+        element.metadataImportFailed = true;
+        element.tags = element.tags || [];
+        if (!element.tags.includes(IMPORT_ERROR_TAG)) {
+          element.tags.push(IMPORT_ERROR_TAG);
+        }
+        this.manualTagsService.addTag(IMPORT_ERROR_TAG);
+      } else if (element.tags?.includes(IMPORT_ERROR_TAG)) {
+        delete element.metadataImportFailed;
+        element.tags = element.tags.filter((tag: string) => tag !== IMPORT_ERROR_TAG);
+        if (this.manualTagsService.tagsFrequencyMap.has(IMPORT_ERROR_TAG)) {
+          this.manualTagsService.removeTag(IMPORT_ERROR_TAG);
+        }
+      }
+
+      if (
+        deletedOrigin
+        && replaceRecoveredFolderEntry(
+          this.imageElementService.imageElements,
+          element,
+          deletedOrigin,
+        ) !== undefined
+      ) {
+        this.imageElementService.finalArrayNeedsSaving = true;
+        this.resetFinalArrayRef();
+        return;
+      }
+
+      element.index = this.imageElementService.imageElements.length;
+      this.imageElementService.imageElements.push(element); // not enough for view to update; we need `.slice()`
+      this.imageElementService.finalArrayNeedsSaving = true;
+      this.debounceImport();
     });
 
     this.justStarted();

@@ -1,4 +1,4 @@
-// Update the `demo` and `version` when building
+// Update the version when building
 import { GLOBALS, type CatalogueAccessMode } from './node/main-globals';
 
 GLOBALS.macVersion = process.platform === 'darwin';

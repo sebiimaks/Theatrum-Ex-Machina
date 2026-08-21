@@ -16,7 +16,6 @@ export class TitleBarComponent {
   readonly initiateMinimize = output<void>();
 
   readonly appState = input<AppStateInterface>();
-  readonly demo = input<boolean>();
   readonly importStage = input();
   readonly macVersion = input<boolean>();
   readonly progressString = input();

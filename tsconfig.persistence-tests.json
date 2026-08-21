@@ -20,6 +20,7 @@
     "node/catalogue-editor.test.ts",
     "node/catalogue-metadata-transfer.test.ts",
     "node/date-added.test.ts",
+    "node/demo-removal.test.ts",
     "node/folder-rescan.test.ts",
     "node/settings-startup.test.ts",
     "node/tag-hierarchy.test.ts",

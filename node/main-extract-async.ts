@@ -336,11 +336,6 @@ function sourceRelativePathForAbsolutePath(
   return normalizeSourceFolderRelativePath(relativePath);
 }
 
-function knownPathCount(): number {
-  return Array.from(knownPathsBySource.values())
-    .reduce((count: number, sourcePaths: Set<string>) => count + sourcePaths.size, 0);
-}
-
 // =====================================================================================================================
 
 // Miscellaneous
@@ -879,14 +874,6 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
 
   if (metaExtractionStartTime === 0) {
     metaExtractionStartTime = performance.now();
-  }
-
-  if (GLOBALS.demo && knownPathCount() >= 50) {
-    console.log(' - DEMO LIMIT REACHED - CANCELING SCAN !!!');
-    sendCurrentProgress(50, 50, 'done');
-    metadataQueue.kill();
-    thumbQueue.resume();
-    return;
   }
 
   sendCurrentProgress(metaDone, metaDone + metadataQueue.length() + 1, 'importingMeta');

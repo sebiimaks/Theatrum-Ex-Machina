@@ -2,19 +2,13 @@ import type { ScreenshotSettings, InputSources } from '../interfaces/final-objec
 
 export type CatalogueAccessMode = 'read-only' | 'read-write';
 
-// For release, update 4 values:                                                                          <---- !!! RELEASE !!!
-//
-// `demo: true,`                 -- below
-// `version: 'X.X.X',`           -- below
-// `productName: "... Demo'`     -- package.json
-// `"version": "X.X.X",`         -- package.json
+// For release, update the version below and in package.json in tandem.
 
 export const GLOBALS: VhaGlobals = {
   angularApp: null,            // reference used to send messages back to Angular App
   catalogueAccessMode: 'read-write',
   currentlyOpenVhaFile: '',    // OFFICAL DECREE IN NODE WHICH FILE IS CURRENTLY OPEN !!!
   debug: false,
-  demo: false,                 // change to `true` during release                                         <---- !!! RELEASE !!!
   hubName: 'untitled',         // in case user doesn't name their hub any name
   macVersion: false,           // auto updated by `main.ts`
   readyToQuit: false,          // hack to quit gracefully
@@ -41,7 +35,6 @@ export interface VhaGlobals {
   catalogueAccessMode: CatalogueAccessMode;
   currentlyOpenVhaFile: string;
   debug: boolean;
-  demo: boolean;
   hubName: string;
   macVersion: boolean;
   readyToQuit: boolean;

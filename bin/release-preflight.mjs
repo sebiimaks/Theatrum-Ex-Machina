@@ -48,6 +48,17 @@ const origin = git(['remote', 'get-url', 'origin']);
 const releaseWorktree = optionalGit(['config', '--worktree', '--get', 'vha.releaseWorktree']);
 const status = git(['status', '--porcelain=v1', '--untracked-files=all']);
 
+const removedDemoMarkers = new Map([
+  ['node/main-extract-async.ts', ['DEMO LIMIT REACHED', 'knownPathCount']],
+  ['node/main-globals.ts', ['demo: false', 'demo: boolean']],
+  ['src/app/components/home.component.html', ['[demo]']],
+  ['src/app/components/home.component.ts', ['GLOBALS.demo', 'slice(0, 50)']],
+  ['src/app/components/settings/settings.component.html', ['limited to 50 video files']],
+  ['src/app/components/settings/settings.component.ts', ['readonly demo = input']],
+  ['src/app/components/title-bar/title-bar.component.html', ['limited to 50 video files']],
+  ['src/app/components/title-bar/title-bar.component.ts', ['readonly demo = input']],
+]);
+
 if (currentDirectory !== repositoryRoot) {
   failures.push('Run the release command from the repository root.');
 }
@@ -68,6 +79,33 @@ if (releaseWorktree !== 'true') {
 }
 if (status) {
   failures.push('The production worktree is not clean. Commit or intentionally exclude every change before packaging.');
+}
+if (fs.existsSync(path.join(repositoryRoot, 'demo'))) {
+  failures.push('The removed demo application directory has returned.');
+}
+for (const [relativePath, markers] of removedDemoMarkers) {
+  const absolutePath = path.join(repositoryRoot, relativePath);
+  if (!fs.existsSync(absolutePath)) {
+    failures.push(`Unable to verify demo removal because '${relativePath}' is missing.`);
+    continue;
+  }
+  const contents = fs.readFileSync(absolutePath, 'utf8');
+  markers.forEach((marker) => {
+    if (contents.includes(marker)) {
+      failures.push(`Removed demo marker '${marker}' has returned in '${relativePath}'.`);
+    }
+  });
+}
+for (const localeFile of fs.readdirSync(path.join(repositoryRoot, 'i18n'))) {
+  if (!localeFile.endsWith('.json')) {
+    continue;
+  }
+  const translation = JSON.parse(
+    fs.readFileSync(path.join(repositoryRoot, 'i18n', localeFile), 'utf8'),
+  );
+  if (Object.prototype.hasOwnProperty.call(translation.WIZARD || {}, 'demoVersion')) {
+    failures.push(`Removed demo translation has returned in 'i18n/${localeFile}'.`);
+  }
 }
 
 if (failures.length > 0) {

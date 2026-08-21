@@ -222,6 +222,32 @@ assert.ok(
 const applicationArchive = path.join(resourcesPath, 'app.asar');
 const archivedFiles = asar.listPackage(applicationArchive);
 const archivedFileSet = new Set(archivedFiles);
+assert.equal(
+  archivedFiles.some((entry) => entry === '/demo' || entry.startsWith('/demo/')),
+  false,
+  'The removed demo application must not be packaged.',
+);
+const appOwnedTextFiles = archivedFiles.filter((entry) => (
+  entry === '/main.js'
+  || entry.startsWith('/node/')
+  || entry.startsWith('/interfaces/')
+  || entry.startsWith('/dist/')
+) && /\.(?:html|js|json)$/u.test(entry));
+const removedDemoMarkers = [
+  'DEMO LIMIT REACHED',
+  'demoVersion',
+  'limited to 50 video files',
+];
+for (const archivedFile of appOwnedTextFiles) {
+  const contents = asar.extractFile(applicationArchive, archivedFile.slice(1)).toString('utf8');
+  removedDemoMarkers.forEach((marker) => {
+    assert.equal(
+      contents.includes(marker),
+      false,
+      `Removed demo marker '${marker}' must not be packaged in ${archivedFile}.`,
+    );
+  });
+}
 for (const themedAsset of [
   'assets/logo-light.png',
   'assets/logo-dark.png',

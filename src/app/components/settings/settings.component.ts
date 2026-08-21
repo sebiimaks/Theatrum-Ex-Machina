@@ -34,7 +34,6 @@ export class SettingsComponent implements OnInit, OnChanges {
   readonly toggleHideButton = output<string>();
 
   @Input() appState;
-  readonly demo = input();
   readonly settingTabToShow = input();
   @Input() settingsButtons: SettingsButtonsType;
   readonly versionNumber = input();
