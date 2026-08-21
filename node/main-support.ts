@@ -249,13 +249,33 @@ export function writeVhaFileToDisk(finalObject: FinalObject, pathToTheFile: stri
   try {
     finalObject.images = finalObject.images.filter(element => !element.deleted);
 
+    const catalogueEntryLabels = new Map<ImageElement, string>();
+    finalObject.images.forEach((element, index) => {
+      const entryNumber = Number.isSafeInteger(element.index) && element.index >= 0
+        ? element.index + 1
+        : index + 1;
+      const entryName = [element.fileName, element.cleanName]
+        .find(value => typeof value === 'string' && value.length > 0);
+      catalogueEntryLabels.set(
+        element,
+        `Catalogue entry ${entryNumber}${entryName ? ` “${entryName}”` : ''}`,
+      );
+    });
+
     finalObject.images = stripOutTemporaryFields(finalObject.images);
 
     // Detach stale sources and retain a logical entry whenever another
     // configured location can still resolve it.
-    finalObject.images = finalObject.images.filter(element => (
-      retainConfiguredImageLocations(element, finalObject.inputDirs)
-    ));
+    finalObject.images = finalObject.images.filter((element, index) => {
+      try {
+        return retainConfiguredImageLocations(element, finalObject.inputDirs);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `${catalogueEntryLabels.get(element) || `Catalogue entry ${index + 1}`} has invalid media location data. ${errorMessage}`,
+        );
+      }
+    });
 
     finalObject.images = alphabetizeFinalArray(finalObject.images); // needed for `default` sort to show proper order
     finalObject.images = markDuplicatesAsDeleted(finalObject.images); // expects `alphabetizeFinalArray` to run first

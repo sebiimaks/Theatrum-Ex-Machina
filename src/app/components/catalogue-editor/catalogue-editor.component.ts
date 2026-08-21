@@ -4,7 +4,10 @@ import { Component, ElementRef, EventEmitter, Input, Output, QueryList, ViewChil
 import type { ImageElement, StarRating } from '../../../../interfaces/final-object.interface';
 import { formatDateAddedForInput, parseDateAddedInput } from '../../../../interfaces/date-added';
 import { tagIdentityKey } from '../../../../interfaces/tag-hierarchy';
-import { updatePreferredImageLocationFields } from '../../../../interfaces/media-locations';
+import {
+  normalizeImageLocation,
+  updatePreferredImageLocationFields,
+} from '../../../../interfaces/media-locations';
 import {
   applyCatalogueMetadataImportPlan,
   buildCatalogueMetadataImportPlan,
@@ -63,6 +66,8 @@ interface TagDraftParseResult {
   error?: string;
   tags: string[];
 }
+
+type CatalogueLocationField = 'fileName' | 'partialPath';
 
 @Component({
   standalone: false,
@@ -142,6 +147,10 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   private tagValidationErrors: { [index: number]: string } = {};
   private tagTypeaheads: { [index: number]: string } = {};
   private dateAddedErrors = new WeakMap<ImageElement, string>();
+  private locationFieldErrors = new WeakMap<
+    ImageElement,
+    Partial<Record<CatalogueLocationField, string>>
+  >();
   private destroyed = false;
   private metadataImportJson = '';
   private metadataImportPreviews = new WeakMap<ImageElement, MetadataChangePreview[]>();
@@ -1008,17 +1017,81 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     }
   }
 
-  updateStringField(item: ImageElement, field: 'cleanName' | 'fileName' | 'partialPath', value: string): void {
+  locationFieldErrorFor(item: ImageElement, field: CatalogueLocationField): string {
+    return this.locationFieldErrors.get(item)?.[field] || '';
+  }
+
+  updateStringField(item: ImageElement, field: 'cleanName' | CatalogueLocationField, value: string): void {
     const nextValue = value || '';
 
-    if (item[field] !== nextValue) {
-      item[field] = nextValue;
-      if (field === 'fileName' || field === 'partialPath') {
-        updatePreferredImageLocationFields(item, { [field]: nextValue });
+    if (field === 'cleanName') {
+      if (item.cleanName !== nextValue) {
+        item.cleanName = nextValue;
+        this.markDirty();
+        this.refreshFilteredEntries();
       }
-      this.markDirty();
-      this.refreshFilteredEntries();
+      return;
     }
+
+    let normalizedValue: string;
+    try {
+      const normalizedLocation = normalizeImageLocation({
+        fileName: field === 'fileName' ? nextValue : item.fileName,
+        inputSource: item.inputSource,
+        partialPath: field === 'partialPath' ? nextValue : item.partialPath,
+      });
+      normalizedValue = normalizedLocation[field];
+      this.clearLocationFieldError(item, field);
+    } catch {
+      this.setLocationFieldError(
+        item,
+        field,
+        field === 'fileName'
+          ? 'Enter a file name without folder separators.'
+          : 'Enter a folder inside the configured video location.',
+      );
+      return;
+    }
+
+    if (item[field] === normalizedValue) {
+      return;
+    }
+
+    try {
+      if (item.locations !== undefined) {
+        updatePreferredImageLocationFields(item, { [field]: normalizedValue });
+      } else {
+        item[field] = normalizedValue;
+      }
+    } catch {
+      this.setLocationFieldError(item, field, 'This media location cannot be updated safely.');
+      return;
+    }
+
+    this.clearLocationFieldError(item, field);
+    this.markDirty();
+    this.refreshFilteredEntries();
+  }
+
+  private clearLocationFieldError(item: ImageElement, field: CatalogueLocationField): void {
+    const current = this.locationFieldErrors.get(item);
+    if (!current) {
+      return;
+    }
+    delete current[field];
+    if (Object.keys(current).length === 0) {
+      this.locationFieldErrors.delete(item);
+    }
+  }
+
+  private setLocationFieldError(
+    item: ImageElement,
+    field: CatalogueLocationField,
+    message: string,
+  ): void {
+    const current = this.locationFieldErrors.get(item) || {};
+    current[field] = message;
+    this.locationFieldErrors.set(item, current);
   }
 
   updateTagDraft(item: ImageElement, value: string): void {

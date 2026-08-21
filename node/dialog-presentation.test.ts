@@ -92,4 +92,6 @@ test('keeps startup and shutdown confirmations native', () => {
   assert.match(main, /title: 'Recover Catalogue'/);
   assert.match(mainIpc, /title: 'Cancel Thumbnail Generation\?'/);
   assert.match(mainIpc, /dialog\.showMessageBox/);
+  assert.match(mainIpc, /buttons: \['Keep Working', 'Quit Without Saving Catalogue Changes'\]/);
+  assert.match(mainIpc, /if \(result\.response === 1\) \{\s*closeWindow\(\);/);
 });

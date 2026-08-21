@@ -93,6 +93,24 @@ test('metadata import template exposes a preview-only diff workflow', () => {
   assert.match(template, /metadataChangesFor\(item\)/);
 });
 
+test('validates catalogue location edits before mutating saved paths', () => {
+  const component = readFileSync(
+    join(__dirname, '../src/app/components/catalogue-editor/catalogue-editor.component.ts'),
+    'utf8',
+  );
+  const template = readFileSync(
+    join(__dirname, '../src/app/components/catalogue-editor/catalogue-editor.component.html'),
+    'utf8',
+  );
+
+  assert.match(component, /normalizeImageLocation\(\{/);
+  assert.match(component, /updatePreferredImageLocationFields\(item, \{ \[field\]: normalizedValue \}\)/);
+  assert.match(component, /Enter a file name without folder separators\./);
+  assert.match(component, /Enter a folder inside the configured video location\./);
+  assert.match(template, /\[attr\.aria-invalid\]="locationFieldErrorFor\(item, 'fileName'\)/);
+  assert.match(template, /\[attr\.aria-invalid\]="locationFieldErrorFor\(item, 'partialPath'\)/);
+});
+
 test('metadata import is scoped to the entries displayed by the active filters', () => {
   const component = readFileSync(
     join(__dirname, '../src/app/components/catalogue-editor/catalogue-editor.component.ts'),

@@ -1067,6 +1067,32 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
       }
     };
 
+    const reportCatalogueCloseFailure = (error: unknown): void => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      event.sender.send('close-window-save-failed', errorMessage);
+      const ownerWindow = activeWindow();
+      const dialogOptions = {
+        buttons: ['Keep Working', 'Quit Without Saving Catalogue Changes'],
+        cancelId: 0,
+        defaultId: 0,
+        detail: `${errorMessage}\n\nThe catalogue file has not been changed. You can keep working and correct the problem, or quit without saving the current catalogue changes.`,
+        message: 'The current catalogue could not be saved.',
+        noLink: true,
+        title: 'Unable to Close Safely',
+        type: 'error' as const,
+      };
+      const response = ownerWindow && !ownerWindow.isDestroyed()
+        ? dialog.showMessageBox(ownerWindow, dialogOptions)
+        : dialog.showMessageBox(dialogOptions);
+      response.then((result) => {
+        if (result.response === 1) {
+          closeWindow();
+        }
+      }).catch((dialogError) => {
+        console.error('Unable to show the catalogue save failure dialog:', dialogError);
+      });
+    };
+
     const saveAndClose = (): void => {
       let json: string;
       try {
@@ -1087,7 +1113,7 @@ export function setUpIpcMessages(ipc, win, pathToAppData, systemMessages) {
 
         writeVhaFileToDisk(finalObjectToSave, GLOBALS.currentlyOpenVhaFile, (error: Error) => {
           if (error) {
-            reportCloseFailure(error, 'The current catalogue could not be saved. The app will remain open to protect your changes.');
+            reportCatalogueCloseFailure(error);
             return;
           }
           closeWindow();

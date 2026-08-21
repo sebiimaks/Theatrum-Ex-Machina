@@ -49,6 +49,20 @@ function location(
   };
 }
 
+test('accepts ordinary punctuation in a custom thumbnail file name', () => {
+  const fileName = 'Jo Geier - Service Leica M3 - Mint & Rare-0001.png';
+
+  assert.deepEqual(normalizeImageLocation({
+    fileName,
+    inputSource: 0,
+    partialPath: '/',
+  }), {
+    fileName,
+    inputSource: 0,
+    partialPath: '/',
+  });
+});
+
 function userMetadata(entry: ImageElement) {
   return {
     cleanName: entry.cleanName,

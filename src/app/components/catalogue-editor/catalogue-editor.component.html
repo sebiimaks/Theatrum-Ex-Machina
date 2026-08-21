@@ -454,9 +454,15 @@
           <input
             [ngModel]="item.fileName"
             (ngModelChange)="updateStringField(item, 'fileName', $event)"
+            [attr.aria-invalid]="locationFieldErrorFor(item, 'fileName') ? 'true' : null"
             [disabled]="metadataImportPreviewActive"
             type="text"
           >
+          <span
+            *ngIf="locationFieldErrorFor(item, 'fileName')"
+            aria-live="polite"
+            class="catalogue-field-error"
+          >{{ locationFieldErrorFor(item, 'fileName') }}</span>
         </label>
 
         <label>
@@ -464,9 +470,15 @@
           <input
             [ngModel]="item.partialPath"
             (ngModelChange)="updateStringField(item, 'partialPath', $event)"
+            [attr.aria-invalid]="locationFieldErrorFor(item, 'partialPath') ? 'true' : null"
             [disabled]="metadataImportPreviewActive"
             type="text"
           >
+          <span
+            *ngIf="locationFieldErrorFor(item, 'partialPath')"
+            aria-live="polite"
+            class="catalogue-field-error"
+          >{{ locationFieldErrorFor(item, 'partialPath') }}</span>
         </label>
 
         <label [class.catalogue-field-pending-change]="metadataFieldWillChange(item, 'tags')">

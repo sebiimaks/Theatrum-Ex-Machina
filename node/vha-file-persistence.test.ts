@@ -396,6 +396,33 @@ test('rejects malformed missing-file state instead of treating it inconsistently
   );
 });
 
+test('identifies the catalogue entry that prevents a safe save', async () => {
+  const directory = createTemporaryDirectory();
+  const cataloguePath = path.join(directory, 'invalid-location.scaena');
+  const catalogue = createCatalogue('Invalid legacy location');
+  const deletedEntry = NewImageElement();
+  deletedEntry.fileName = 'deleted-before-invalid.mp4';
+  deletedEntry.hash = 'deleted-location-hash';
+  deletedEntry.inputSource = 0;
+  deletedEntry.partialPath = '/Camera';
+  deletedEntry.deleted = true;
+  deletedEntry.index = 0;
+  const malformedEntry = NewImageElement();
+  malformedEntry.cleanName = 'Recoverable title';
+  malformedEntry.fileName = '';
+  malformedEntry.hash = 'invalid-location-hash';
+  malformedEntry.index = 1;
+  malformedEntry.inputSource = 0;
+  malformedEntry.partialPath = '/Camera';
+  catalogue.images = [deletedEntry, malformedEntry];
+
+  await assert.rejects(
+    writeCatalogue(catalogue, cataloguePath),
+    /Catalogue entry 2 “Recoverable title” has invalid media location data\. The media location file name is invalid\./,
+  );
+  assert.equal(fs.existsSync(cataloguePath), false);
+});
+
 test('offers a valid backup for an empty primary catalogue', async () => {
   const directory = createTemporaryDirectory();
   const cataloguePath = path.join(directory, 'empty.scaena');
