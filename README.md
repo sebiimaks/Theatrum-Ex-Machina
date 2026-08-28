@@ -7,7 +7,7 @@
 **Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
 - Current fork version: `v1.1.1`
-- Change summary updated: 22/08/2026
+- Change summary updated: 28/08/2026
 
 # Fork Changelog
 
@@ -17,6 +17,22 @@ This changelog covers material fork-specific changes made after the upstream bas
 
 <details>
 <summary><strong>Unreleased</strong></summary>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/b8f36e43af7649308ed8293e2103acd9f9441952"><code>b8f36e43</code></a> — <strong>Refactor thumbnail regeneration state and IPC</strong></summary>
+<p>Moved folder thumbnail-regeneration bookkeeping and all individual and folder regeneration messaging out of the main Home component into typed, independently testable sessions, coordinators, and services. Incoming events are validated at runtime, listeners are disposed and fenced against stale callbacks, and progress is correlated to the exact request, catalogue, source, and expected video hashes. Same-path catalogue reloads retain a safe cancellation tombstone, malformed progress can cancel only the authenticated active batch, and stale or duplicate terminal events cannot mutate a newer catalogue session.</p>
+</details>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/b67cf67efffbfa1726dc2be160acf7325f6a74c7"><code>b67cf67e</code></a> — <strong>Refactor catalogue persistence and gallery state</strong></summary>
+<p>Split catalogue opening, save and close messaging, catalogue-document projection, and gallery-layout policy out of the main Home component into typed coordinators and focused services. Catalogue requests remain serialised, late callbacks from disconnected listeners are ignored, save and close state transitions retain their established behaviour, and gallery measurement timing stays in the renderer while deterministic layout calculations can be tested independently. Focused lifecycle and parity coverage protects the user-visible workflows during further decomposition of central application state.</p>
+</details>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/ceaa3c21f5b0420635cdcedd16245eedee2b5a27"><code>ceaa3c21</code></a> — <strong>Harden Electron and media authority boundaries</strong></summary>
+<p>Sandboxed and context-isolated the renderer behind a narrow allowlisted preload bridge, replaced unrestricted local-file access with constrained application and generated-media protocols, and moved catalogue, source-folder, media-location, and write authority into the main process. Catalogue transitions and generated-preview mutations are serialised; extraction inputs and output roots are validated against canonical filesystem identities; stale, redirected, or unauthorised renderer requests fail closed. Regression and packaged-application checks now cover the hardened Electron boundary, persistence authority, path handling, and preview publication lifecycle.</p>
+</details>
+
 </details>
 
 <details>
