@@ -5,6 +5,7 @@ import * as path from 'path';
 import { SourceFolderService } from '../statistics/source-folder.service';
 
 import type { ImageElement, ImageLocation } from '../../../../interfaces/final-object.interface';
+import { createTheatrumMediaUrl } from '../../../../interfaces/theatrum-protocol';
 import {
   imageElementAtLocation,
   selectAvailableImageLocation,
@@ -42,6 +43,13 @@ export class FilePathService {
     video?: boolean,
     cacheKey?: string,
   ): string {
+    const bridge = (globalThis as typeof globalThis & {
+      theatrum?: { isElectron?: boolean };
+    }).theatrum;
+    if (bridge?.isElectron) {
+      return createTheatrumMediaUrl(subfolder, hash, Boolean(video), cacheKey);
+    }
+
     const filePath = 'file://' + path.normalize(path.join(
       folderPath,
       'vha-' + hubName,

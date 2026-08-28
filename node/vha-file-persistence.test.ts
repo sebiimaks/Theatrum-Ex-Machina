@@ -7,6 +7,7 @@ import { afterEach, test } from 'node:test';
 import type { FinalObject, ImageElement } from '../interfaces/final-object.interface';
 import { NewImageElement } from '../interfaces/final-object.interface';
 import {
+  CATALOGUE_FILE_MAX_BYTES,
   parseVhaJson,
   readVhaFileWithBackup,
   recoverVhaFileFromBackup,
@@ -122,6 +123,33 @@ test('returns the exact validated backup contents without changing either legacy
   assert.equal(fs.readFileSync(cataloguePath + '.bak', 'utf8'), backup);
 });
 
+test('rejects an oversized primary catalogue before reading it and safely uses a valid backup', async () => {
+  const directory = createTemporaryDirectory();
+  const cataloguePath = path.join(directory, 'oversized.scaena');
+  fs.closeSync(fs.openSync(cataloguePath, 'w'));
+  fs.truncateSync(cataloguePath, CATALOGUE_FILE_MAX_BYTES + 1);
+  const backup = JSON.stringify(createCatalogue('Bounded Backup'));
+  fs.writeFileSync(cataloguePath + '.bak', backup);
+
+  const result = await readVhaFileWithBackup(cataloguePath);
+
+  assert.equal(result.source, 'backup');
+  assert.equal(result.finalObject?.hubName, 'Bounded Backup');
+  assert.match(result.primaryError?.message || '', /256 MB safety limit/);
+});
+
+test('rejects catalogues with an unreasonable number of configured source folders', () => {
+  const catalogue = createCatalogue('Too Many Sources') as unknown as Record<string, any>;
+  catalogue.inputDirs = Object.fromEntries(
+    Array.from({ length: 4097 }, (_, index) => [index, { path: `/videos/${index}`, watch: false }]),
+  );
+
+  assert.throws(
+    () => parseVhaJson(JSON.stringify(catalogue)),
+    /too many video folder entries/,
+  );
+});
+
 test('publishes a validated new catalogue exclusively without a backup or replacement', async () => {
   const directory = createTemporaryDirectory();
   const destination = path.join(directory, 'duplicate.scaena');
@@ -151,6 +179,16 @@ test('preserves Date Added while legacy entries remain valid without it', () => 
 
   assert.equal(parsed.images[0].dateAdded, 1_700_000_000_123);
   assert.equal(parsed.images[1].dateAdded, undefined);
+});
+
+test('rejects a catalogue hub name that could escape its generated asset directory', () => {
+  for (const unsafeHubName of ['../outside', 'nested/catalogue', 'nested\\catalogue', '.', '..']) {
+    assert.throws(
+      () => parseVhaJson(JSON.stringify(createCatalogue(unsafeHubName))),
+      /valid hub name/,
+      unsafeHubName,
+    );
+  }
 });
 
 test('round-trips persistent tag definitions that are not assigned to videos', async () => {

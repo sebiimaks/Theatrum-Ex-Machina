@@ -5,10 +5,12 @@ import { CatalogueOpenQueue } from './catalogue-open-queue';
 
 const mainSource = fs.readFileSync('main.ts', 'utf8');
 const ipcSource = fs.readFileSync('node/main-ipc.ts', 'utf8');
+const globalsSource = fs.readFileSync('node/main-globals.ts', 'utf8');
 const homeSource = fs.readFileSync('src/app/components/home.component.ts', 'utf8');
 
 test('routes native catalogue choices through the renderer and validates explicit open modes', () => {
-  assert.match(mainSource, /event\.sender\.send\('open-catalogue-from-system', chosenFile\)/);
+  assert.match(mainSource, /const authorizedPath = rememberCataloguePath\(chosenFile/);
+  assert.match(mainSource, /event\.sender\.send\('open-catalogue-from-system', authorizedPath\)/);
   assert.match(mainSource, /requestCatalogueOpenFromSystem\(pathToVhaFile\)/);
   assert.match(
     mainSource,
@@ -59,11 +61,37 @@ test('routes a dropped catalogue through the Electron path resolver and existing
 test('dispatches startup opens after settings failure and serializes renderer ownership', () => {
   assert.match(mainSource, /rendererCanReceiveCatalogueOpenRequests = true;\s*dispatchNextCatalogueOpenRequest\(\);/);
   assert.doesNotMatch(mainSource, /requestCatalogueOpenFromSystem\(requestedCataloguePath\)/);
-  assert.match(mainSource, /ipcMain\.on\('catalogue-open-request-consumed'/);
+  assert.match(mainSource, /trustedIpcOn\('catalogue-open-request-consumed'/);
   assert.match(mainSource, /catalogueOpenOperationActive = true/);
   assert.match(mainSource, /sender\.send\('catalogue-open-request-finished'\)/);
   assert.match(homeSource, /ipcRenderer\.on\('catalogue-open-request-finished'/);
-  assert.match(mainSource, /catalogueOpenOperationActive = false;\s*dispatchNextCatalogueOpenRequest\(\);/);
+  assert.match(
+    mainSource,
+    /catalogueOpenOperationActive = false;\s*GLOBALS\.catalogueTransitionActive = false;\s*activeCatalogueOpenGeneration = undefined;\s*dispatchNextCatalogueOpenRequest\(\);/,
+  );
+});
+
+test('serializes catalogue transitions with a main-owned session generation', () => {
+  assert.match(globalsSource, /catalogueSessionGeneration:\s*0/);
+  assert.match(globalsSource, /catalogueTransitionActive:\s*false/);
+  assert.match(globalsSource, /cataloguePersistenceActive:\s*false/);
+  assert.match(mainSource, /activeCatalogueOpenGeneration = \+\+GLOBALS\.catalogueSessionGeneration/);
+  assert.match(mainSource, /GLOBALS\.catalogueTransitionActive = true/);
+  assert.match(mainSource, /GLOBALS\.catalogueTransitionActive = false/);
+  assert.match(
+    mainSource,
+    /catalogueOpenOperationActive\s*\|\| GLOBALS\.catalogueTransitionActive\s*\|\| GLOBALS\.cataloguePersistenceActive/,
+  );
+  assert.match(mainSource, /Ignored concurrent renderer catalogue-open request[\s\S]*?catalogue-open-request-finished/);
+  assert.match(
+    mainSource,
+    /function dispatchNextCatalogueOpenRequest[\s\S]*?GLOBALS\.cataloguePersistenceActive[\s\S]*?catalogueOpenQueue\.next/,
+  );
+  assert.match(mainSource, /GLOBALS\.requestCatalogueOpenDispatch = dispatchNextCatalogueOpenRequest/);
+  assert.match(mainSource, /openThisDamnFile\(pathToVhaFile, intent, operationGeneration\)/);
+  assert.match(mainSource, /finishCatalogueOpenOperation\(operationGeneration\)/);
+  assert.match(mainSource, /assertCurrentCatalogueOpenOperation\(operationGeneration\);/);
+  assert.match(mainSource, /writeVhaFileAndStartExtraction\(operationGeneration,\s*\{/);
 });
 
 test('upgrades and normalizes an exclusive sibling before opening it read-write', () => {
@@ -83,7 +111,10 @@ test('upgrades and normalizes an exclusive sibling before opening it read-write'
 
 test('read-only opening never recovers catalogue or preview files and starts no scans or watchers', () => {
   assert.match(mainSource, /readResult\.source === 'backup' && accessMode === 'read-only'/);
-  assert.match(mainSource, /if \(accessMode === 'read-write'\) \{\s*try \{\s*const recovery = await recoverInterruptedPreviewTransactions/);
+  assert.match(
+    mainSource,
+    /if \(accessMode === 'read-write'\) \{\s*try \{[\s\S]*?const assetDirectory = resolveTheatrumAssetDirectory\([\s\S]*?const recovery = await recoverInterruptedPreviewTransactions/,
+  );
   assert.match(mainSource, /accessMode === 'read-write',\s*\);/);
   assert.match(mainSource, /finalObjectToSave !== null && GLOBALS\.catalogueAccessMode === 'read-write'/);
 });

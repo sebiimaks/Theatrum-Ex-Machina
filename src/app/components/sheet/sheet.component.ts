@@ -5,6 +5,7 @@ import * as path from 'path';
 import type { BehaviorSubject } from 'rxjs';
 
 import { FilePathService } from '../views/file-path.service';
+import { ElectronService } from '../../providers/electron.service';
 import { ImageElementService } from './../../services/image-element.service';
 import { ManualTagsService } from '../tags-manual/manual-tags.service';
 
@@ -69,6 +70,7 @@ export class SheetComponent implements OnInit {
 
   constructor(
     public filePathService: FilePathService,
+    public electronService: ElectronService,
     public imageElementService: ImageElementService,
     public manualTagsService: ManualTagsService
   ) { }
@@ -138,7 +140,11 @@ export class SheetComponent implements OnInit {
   }
 
   copyToClipboard(): void {
-    navigator.clipboard.writeText(this.pathToVideoFile);
+    if (this.electronService.isElectron()) {
+      this.electronService.copyText(this.pathToVideoFile);
+      return;
+    }
+    void navigator.clipboard?.writeText(this.pathToVideoFile);
   }
 
   /**

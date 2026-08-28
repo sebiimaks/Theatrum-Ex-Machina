@@ -20,9 +20,19 @@ import type {
 } from '../interfaces/final-object.interface';
 import { isMetadataImportFailure } from '../interfaces/final-object.interface';
 import { getImageLocations } from '../interfaces/media-locations';
-import { acceptableFiles } from './main-filenames';
-import { cancelActiveMediaProcesses, extractAll, isExpectedJpeg } from './main-extract';
-import type { SystemThumbnailCreator } from './main-extract';
+import { configuredMediaFileExtensions } from './main-filenames';
+import {
+  addCatalogueMediaLocationAuthority,
+  requireCatalogueMediaLocationAuthority,
+} from './catalogue-media-authority';
+import {
+  cancelActiveMediaProcesses,
+  capturePreviewPublicationEpoch,
+  extractAll,
+  isExpectedJpeg,
+  previewPublicationIsAllowed,
+} from './main-extract';
+import type { PreviewOutputPathResolver, SystemThumbnailCreator } from './main-extract';
 import { sendCurrentProgress, insertTemporaryFieldsSingle, extractMetadataAsync, cleanUpFileName } from './main-support';
 import {
   createImportErrorElement,
@@ -38,6 +48,7 @@ import {
 import type { ThumbnailCoreStatus } from './thumbnail-count';
 import { runSequentialBatch } from './sequential-batch';
 import {
+  requireAuthorizedSourceRoot,
   resolveExistingMediaPath,
   resolveExistingSourceSubfolder,
 } from './local-operation-safety';
@@ -45,6 +56,12 @@ import {
   beginPreviewTransaction,
   markPreviewTransactionCommitted,
 } from './thumbnail-transaction';
+import {
+  resolveCanonicalTheatrumAssetDirectory,
+  resolveCanonicalTheatrumExistingAssetPath,
+  resolveCanonicalTheatrumMediaWriteTarget,
+  resolveTheatrumAssetDirectory,
+} from './theatrum-protocol-paths';
 import {
   buildKnownSuccessfulMediaPathCounts,
   FolderScanCoordinator,
@@ -58,10 +75,12 @@ import type {
 } from '../interfaces/folder-rescan';
 import {
   configuredSourceRootsEqual,
+  compileIgnoredSubdirectories,
   normalizeIgnoredSubdirectories,
   normalizeSourceFolderRelativePath,
   sourceFolderPathIsIgnored,
 } from '../interfaces/source-folder-path';
+import type { CompiledIgnoredSubdirectories } from '../interfaces/source-folder-path';
 
 export interface TempMetadataQueueObject {
   dateAdded: number;
@@ -95,12 +114,91 @@ interface ThumbnailQueueElement extends ImageElement {
   thumbnailRegenerationJobId?: number;
 }
 
+interface SafeThumbnailQueueElement {
+  authorizedSourcePath: string;
+  canonicalMediaPath: string;
+  device: number;
+  inode: number;
+}
+
+function canonicalMediaStillMatches(safeElement: SafeThumbnailQueueElement): boolean {
+  try {
+    const currentCanonicalPath = fs.realpathSync.native(safeElement.canonicalMediaPath);
+    if (!sameFilesystemPath(currentCanonicalPath, safeElement.canonicalMediaPath)) {
+      return false;
+    }
+    const currentStat = fs.statSync(currentCanonicalPath);
+    return currentStat.isFile()
+      && currentStat.dev === safeElement.device
+      && currentStat.ino === safeElement.inode;
+  } catch {
+    return false;
+  }
+}
+
+function requireSafeThumbnailQueueElement(element: ImageElement): SafeThumbnailQueueElement {
+  if (
+    !element
+    || !Number.isSafeInteger(element.inputSource)
+    || typeof element.hash !== 'string'
+    || element.hash.length === 0
+    || element.hash.length > 200
+    || !/^[a-zA-Z0-9_-]+$/.test(element.hash)
+    || !GLOBALS.authorizedCatalogueImageHashes.has(element.hash)
+  ) {
+    throw new Error('The preview item identifier is invalid.');
+  }
+  requireCatalogueMediaLocationAuthority(
+    GLOBALS.authorizedCatalogueMediaLocations,
+    element,
+  );
+  const extension = path.extname(element.fileName).slice(1).toLocaleLowerCase('en-US');
+  const allowedExtensions = new Set(
+    configuredMediaFileExtensions(GLOBALS.additionalExtensions),
+  );
+  if (!extension || !allowedExtensions.has(extension)) {
+    throw new Error('The preview item is not a configured media type.');
+  }
+  const sourceFolder = GLOBALS.selectedSourceFolders[element.inputSource];
+  if (!sourceFolder?.path) {
+    throw new Error('The preview source folder is unavailable.');
+  }
+  const authorizedSourcePath = requireAuthorizedSourceRoot(
+    sourceFolder.path,
+    Array.from(GLOBALS.authorizedSourceFolderPaths),
+    GLOBALS.authorizedSourceFolderRealPaths,
+  );
+  const mediaPath = resolveExistingMediaPath(
+    authorizedSourcePath,
+    element.partialPath,
+    element.fileName,
+  );
+  const canonicalMediaPath = fs.realpathSync.native(mediaPath);
+  const canonicalExtension = path.extname(canonicalMediaPath).slice(1).toLocaleLowerCase('en-US');
+  const canonicalStat = fs.statSync(canonicalMediaPath);
+  if (
+    !canonicalStat.isFile()
+    || canonicalExtension !== extension
+    || !allowedExtensions.has(canonicalExtension)
+  ) {
+    throw new Error('The preview media path is not a file.');
+  }
+  return {
+    authorizedSourcePath,
+    canonicalMediaPath,
+    device: canonicalStat.dev,
+    inode: canonicalStat.ino,
+  };
+}
+
 interface ThumbnailRegenerationState {
+  assetDirectory: string;
   cancelRunner?: () => void;
   folderBatchJobId?: number;
   generation: number;
   installing: boolean;
   jobId: number;
+  outputDirectory: string;
   screenshotCount: number;
   screenshotOutputFolder: string;
   screenshotSettings: ScreenshotSettings;
@@ -110,6 +208,178 @@ interface ThumbnailRegenerationState {
     reject: (reason?: Error) => void;
     resolve: (screenshotCount: number) => void;
   }[];
+}
+
+interface CanonicalPreviewAssetRoot {
+  assetDirectory: string;
+  canonicalAssetDirectory: string;
+  outputDirectory: string;
+}
+
+const PREVIEW_ASSET_DIRECTORIES = new Set(['thumbnails', 'filmstrips', 'clips']);
+
+function sameFilesystemPath(left: string, right: string): boolean {
+  return process.platform === 'win32'
+    ? left.toLocaleLowerCase('en-US') === right.toLocaleLowerCase('en-US')
+    : left === right;
+}
+
+function isInsideDirectory(rootDirectory: string, candidatePath: string): boolean {
+  const relativePath = path.relative(rootDirectory, candidatePath);
+  return relativePath !== ''
+    && relativePath !== '..'
+    && !relativePath.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relativePath);
+}
+
+/** Resolve and pin the physical generated-assets root for an active hub. */
+function requireCurrentCanonicalPreviewAssetRoot(): CanonicalPreviewAssetRoot {
+  const outputDirectory = GLOBALS.selectedOutputFolder;
+  const assetDirectory = resolveTheatrumAssetDirectory(outputDirectory, GLOBALS.hubName);
+  const canonicalAssetDirectory = assetDirectory && resolveCanonicalTheatrumAssetDirectory(
+    outputDirectory,
+    assetDirectory,
+  );
+  if (!assetDirectory || !canonicalAssetDirectory) {
+    throw new Error('The catalogue preview asset directory is outside the selected output folder.');
+  }
+  return { assetDirectory, canonicalAssetDirectory, outputDirectory };
+}
+
+/** Revalidate a running regeneration before it changes any generated preview. */
+function requireActiveCanonicalPreviewAssetRoot(
+  state: ThumbnailRegenerationState,
+): CanonicalPreviewAssetRoot {
+  const current = requireCurrentCanonicalPreviewAssetRoot();
+  if (
+    !sameFilesystemPath(current.outputDirectory, state.outputDirectory)
+    || !sameFilesystemPath(current.assetDirectory, state.assetDirectory)
+    || !sameFilesystemPath(current.canonicalAssetDirectory, state.screenshotOutputFolder)
+  ) {
+    throw new Error('The catalogue preview asset directory changed during thumbnail regeneration.');
+  }
+  return current;
+}
+
+function requireCanonicalPreviewWriteTarget(
+  filePath: string,
+  assetRoot: CanonicalPreviewAssetRoot,
+): string {
+  const target = resolveCanonicalTheatrumMediaWriteTarget(
+    filePath,
+    assetRoot.outputDirectory,
+    assetRoot.assetDirectory,
+  );
+  if (!target) {
+    throw new Error('A thumbnail regeneration target is outside the active catalogue assets.');
+  }
+  return target;
+}
+
+function requireCanonicalExistingPreviewPath(
+  filePath: string,
+  assetRoot: CanonicalPreviewAssetRoot,
+): string {
+  const target = resolveCanonicalTheatrumExistingAssetPath(
+    filePath,
+    assetRoot.outputDirectory,
+    assetRoot.assetDirectory,
+  );
+  if (!target) {
+    throw new Error('A generated thumbnail file is outside the active catalogue assets.');
+  }
+  return target;
+}
+
+function requireSameCanonicalPreviewAssetRoot(
+  current: CanonicalPreviewAssetRoot,
+  expected: CanonicalPreviewAssetRoot,
+): void {
+  if (
+    !sameFilesystemPath(current.outputDirectory, expected.outputDirectory)
+    || !sameFilesystemPath(current.assetDirectory, expected.assetDirectory)
+    || !sameFilesystemPath(current.canonicalAssetDirectory, expected.canonicalAssetDirectory)
+  ) {
+    throw new Error('The catalogue preview asset directory changed during thumbnail extraction.');
+  }
+}
+
+/** Return a canonical live or staging preview folder within the active hub. */
+function requireCanonicalPreviewDirectory(
+  directory: string,
+  assetRoot: CanonicalPreviewAssetRoot,
+): string {
+  if (sameFilesystemPath(path.resolve(directory), assetRoot.canonicalAssetDirectory)) {
+    return assetRoot.canonicalAssetDirectory;
+  }
+  const canonicalDirectory = requireCanonicalExistingPreviewPath(directory, assetRoot);
+  if (
+    !isInsideDirectory(assetRoot.canonicalAssetDirectory, canonicalDirectory)
+    || !fs.statSync(canonicalDirectory).isDirectory()
+  ) {
+    throw new Error('The generated preview directory is outside the active catalogue assets.');
+  }
+  return canonicalDirectory;
+}
+
+/**
+ * Create and verify only the three approved direct preview directories. This
+ * closes the child-directory symlink escape before FFmpeg receives a target.
+ */
+async function prepareCanonicalPreviewAssetDirectories(
+  assetRoot: CanonicalPreviewAssetRoot,
+  directory: string,
+): Promise<string> {
+  const currentAssetRoot = requireCurrentCanonicalPreviewAssetRoot();
+  requireSameCanonicalPreviewAssetRoot(currentAssetRoot, assetRoot);
+  const canonicalDirectory = requireCanonicalPreviewDirectory(directory, assetRoot);
+  await Promise.all(Array.from(PREVIEW_ASSET_DIRECTORIES).map(async (subdirectory: string) => {
+    const candidateDirectory = path.join(canonicalDirectory, subdirectory);
+    if (!fs.existsSync(candidateDirectory)) {
+      await fs.promises.mkdir(candidateDirectory, { recursive: true });
+    }
+    const canonicalSubdirectory = requireCanonicalExistingPreviewPath(candidateDirectory, assetRoot);
+    if (
+      !isInsideDirectory(canonicalDirectory, canonicalSubdirectory)
+      || !fs.statSync(canonicalSubdirectory).isDirectory()
+    ) {
+      throw new Error('The generated preview directory is outside the active catalogue assets.');
+    }
+  }));
+  return canonicalDirectory;
+}
+
+/**
+ * Resolve every FFmpeg/publish target at the point it is handed to extraction.
+ * A staging run is also limited to its own transaction directory, rather than
+ * merely to the broader asset root.
+ */
+function createCanonicalPreviewOutputPathResolver(
+  assetRoot: CanonicalPreviewAssetRoot,
+  outputDirectory: string,
+): PreviewOutputPathResolver {
+  const canonicalOutputDirectory = requireCanonicalPreviewDirectory(outputDirectory, assetRoot);
+  return (candidatePath: string): string => {
+    const currentAssetRoot = requireCurrentCanonicalPreviewAssetRoot();
+    requireSameCanonicalPreviewAssetRoot(currentAssetRoot, assetRoot);
+    const target = requireCanonicalPreviewWriteTarget(candidatePath, currentAssetRoot);
+    if (!isInsideDirectory(canonicalOutputDirectory, target)) {
+      throw new Error('A generated preview target is outside the active catalogue assets.');
+    }
+    const targetSegments = path.relative(canonicalOutputDirectory, target).split(path.sep);
+    const [assetDirectory, fileName] = targetSegments;
+    const extension = path.extname(fileName || '').toLowerCase();
+    if (
+      targetSegments.length !== 2
+      || !PREVIEW_ASSET_DIRECTORIES.has(assetDirectory)
+      || !fileName
+      || path.basename(fileName) !== fileName
+      || (assetDirectory === 'clips' ? !['.jpg', '.mp4'].includes(extension) : extension !== '.jpg')
+    ) {
+      throw new Error('The generated preview target is invalid.');
+    }
+    return target;
+  };
 }
 
 const thumbnailRegenerationStates: Map<string, ThumbnailRegenerationState> = new Map();
@@ -195,9 +465,12 @@ export interface FolderThumbnailRegenerationResult {
   videoCount: number;
 }
 
-// delete queue
-let deleteThumbQueue;   // QueueObject
-let numberOfThumbsDeleted = 0;
+interface PreviewDeletionTask {
+  assetDirectory: string;
+  canonicalAssetDirectory: string;
+  outputDirectory: string;
+  pathToFile: string;
+}
 
 // =====================================================================================================================
 
@@ -311,12 +584,25 @@ function knownPathsForSource(inputSource: number): Set<string> {
   return sourcePaths;
 }
 
+const compiledIgnoredScopesBySource = new WeakMap<object, CompiledIgnoredSubdirectories>();
+
+function compiledIgnoredScopesForSource(
+  sourceFolder: object & { ignoredSubdirectories?: string[] },
+): CompiledIgnoredSubdirectories {
+  let compiled = compiledIgnoredScopesBySource.get(sourceFolder);
+  if (!compiled) {
+    compiled = compileIgnoredSubdirectories(sourceFolder.ignoredSubdirectories);
+    compiledIgnoredScopesBySource.set(sourceFolder, compiled);
+  }
+  return compiled;
+}
+
 /** Match one catalogue-relative path against the current source exclusions. */
 function sourcePathIsCurrentlyIgnored(inputSource: number, relativePath: unknown): boolean {
   const sourceFolder = GLOBALS.selectedSourceFolders[inputSource];
   return Boolean(sourceFolder) && sourceFolderPathIsIgnored(
     relativePath,
-    sourceFolder.ignoredSubdirectories,
+    compiledIgnoredScopesForSource(sourceFolder),
   );
 }
 
@@ -347,10 +633,9 @@ let importCompletionSent = false;
 resetAllQueues();
 
 /**
- * Reset all three queues:
+ * Reset both extraction queues:
  *  - Meta queue
  *  - Thumb queue
- *  - Delet queue
  */
 export function resetAllQueues(): void {
 
@@ -371,10 +656,6 @@ export function resetAllQueues(): void {
   if (metadataQueue && typeof metadataQueue.kill === 'function') {
     metadataQueue.kill();
   }
-  if (deleteThumbQueue && typeof deleteThumbQueue.kill === 'function') {
-    deleteThumbQueue.kill();
-  }
-
   // Meta queue ========================================================================================================
   metaDone = 0;
   metaExtractionStartTime = 0;
@@ -410,13 +691,6 @@ export function resetAllQueues(): void {
     finishImport();
   });
 
-  // Delete queue ======================================================================================================
-  deleteThumbQueue = async.queue(deleteThumbQueueRunner, 1);
-
-  deleteThumbQueue.drain(() => {
-    console.log('all screenshots now deleted');
-    GLOBALS.angularApp.sender.send('number-of-screenshots-deleted', numberOfThumbsDeleted);
-  });
 }
 
 function finishImport(): void {
@@ -522,6 +796,19 @@ function reportFolderScanFailure(
  * @param done    -- callback to indicate the current extraction finished
  */
 function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
+  const previewPublicationEpoch = capturePreviewPublicationEpoch(element?.hash);
+  let safeQueueElement: SafeThumbnailQueueElement;
+  try {
+    if (!previewPublicationIsAllowed(element?.hash, previewPublicationEpoch)) {
+      throw new Error('Generated-preview cleanup is in progress for this item.');
+    }
+    safeQueueElement = requireSafeThumbnailQueueElement(element);
+  } catch (error) {
+    console.warn('Skipped an unsafe thumbnail queue item:', error);
+    automaticThumbnailHashesQueued.delete(element?.hash);
+    done();
+    return;
+  }
   const regenerationState = thumbnailRegenerationStates.get(element.hash);
   const hasRegenerationMarker = element.thumbnailRegenerationJobId !== undefined;
   const isRegenerationJob: boolean = Boolean(regenerationState && isActiveThumbnailRegenerationJob(
@@ -540,15 +827,38 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
     done();
     return;
   }
+  let previewAssetRoot: CanonicalPreviewAssetRoot;
+  if (isRegenerationJob) {
+    try {
+      previewAssetRoot = requireActiveCanonicalPreviewAssetRoot(regenerationState);
+    } catch (error) {
+      settleThumbnailRegeneration(
+        element.hash,
+        regenerationState.jobId,
+        error instanceof Error ? error : new Error('The preview asset directory is invalid.'),
+      );
+      done();
+      return;
+    }
+  } else {
+    try {
+      previewAssetRoot = requireCurrentCanonicalPreviewAssetRoot();
+    } catch (error) {
+      console.warn('Skipped preview extraction outside the active catalogue assets:', error);
+      automaticThumbnailHashesQueued.delete(element.hash);
+      done();
+      return;
+    }
+  }
   const screenshotOutputFolder: string = isRegenerationJob
     ? regenerationState.screenshotOutputFolder
-    : path.join(GLOBALS.selectedOutputFolder, 'vha-' + GLOBALS.hubName);
+    : previewAssetRoot.canonicalAssetDirectory;
   const screenshotSettings: ScreenshotSettings = isRegenerationJob
     ? regenerationState.screenshotSettings
     : GLOBALS.screenshotSettings;
-  const sourcePath: string = isRegenerationJob
-    ? regenerationState.sourcePath
-    : GLOBALS.selectedSourceFolders[element.inputSource].path;
+  const sourcePath: string = safeQueueElement.authorizedSourcePath;
+  const extractionQueueGeneration = initialScanQueueGeneration;
+  const extractionCataloguePath = GLOBALS.currentlyOpenVhaFile;
   const shouldExtractClips: boolean = screenshotSettings.clipSnippets > 0;
   if (isRegenerationJob) {
     activeThumbnailQueueRegenerationJobId = regenerationState.jobId;
@@ -560,7 +870,7 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
       return;
     }
     runnerFinished = true;
-    if (!isRegenerationJob) {
+    if (!isRegenerationJob && extractionQueueGeneration === initialScanQueueGeneration) {
       automaticThumbnailHashesQueued.delete(element.hash);
     }
     if (isRegenerationJob && regenerationState.cancelRunner === finishRunner) {
@@ -585,6 +895,40 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
       && (!regenerationState.stillOwned || regenerationState.stillOwned());
   };
 
+  const previewExtractionStillCurrent = (): boolean => {
+    if (
+      isRegenerationJob
+        ? !regenerationStillCurrent()
+        : extractionQueueGeneration !== initialScanQueueGeneration
+          || extractionCataloguePath !== GLOBALS.currentlyOpenVhaFile
+    ) {
+      return false;
+    }
+    const currentSource = GLOBALS.selectedSourceFolders[element.inputSource];
+    if (
+      !currentSource
+      || !configuredSourceRootsEqual(currentSource.path, sourcePath)
+      || !GLOBALS.authorizedCatalogueImageHashes.has(element.hash)
+      || !previewPublicationIsAllowed(element.hash, previewPublicationEpoch)
+      || !canonicalMediaStillMatches(safeQueueElement)
+    ) {
+      return false;
+    }
+    try {
+      requireCatalogueMediaLocationAuthority(
+        GLOBALS.authorizedCatalogueMediaLocations,
+        element,
+      );
+      requireSameCanonicalPreviewAssetRoot(
+        requireCurrentCanonicalPreviewAssetRoot(),
+        previewAssetRoot,
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const finishQueueItem = (
     generatedOutputFolder: string,
     extractionSucceeded: boolean,
@@ -597,6 +941,9 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
 
     const completeRegeneration = async (): Promise<void> => {
       try {
+        if (!previewExtractionStillCurrent()) {
+          throw new Error('Thumbnail regeneration was cancelled.');
+        }
         await hasAllThumbs(element, generatedOutputFolder, screenshotSettings, false);
         if (!extractionSucceeded && extractionError && GLOBALS.debug) {
           console.warn('Core previews recovered, but optional preview extraction was incomplete:', extractionError);
@@ -612,6 +959,7 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
           regenerationState.jobId,
           generatedOutputFolder,
           screenshotOutputFolder,
+          previewAssetRoot,
           includeGeneratedClips,
           regenerationStillCurrent,
         );
@@ -632,7 +980,10 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
       } finally {
         finishRunner();
         lingeringThumbnailInstallations.delete(element.hash);
-        void removeRegenerationStagingFolder(generatedOutputFolder);
+        void removeRegenerationStagingFolder(
+          generatedOutputFolder,
+          previewAssetRoot,
+        );
       }
     };
 
@@ -640,32 +991,72 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
   };
 
   const extractQueueItem = (generatedOutputFolder: string = screenshotOutputFolder): void => {
-    sendCurrentProgress( // TODO check whether sending data off by 1
-      thumbsDone,
-      thumbsDone + thumbQueue.length() + 1,
-      'importingScreenshots'
-    );
-    thumbsDone++;
+    if (!previewExtractionStillCurrent()) {
+      finishQueueItem(
+        generatedOutputFolder,
+        false,
+        new Error('Preview extraction was cancelled.'),
+      );
+      return;
+    }
+    void prepareCanonicalPreviewAssetDirectories(previewAssetRoot, generatedOutputFolder)
+      .then((canonicalGeneratedOutputFolder: string) => {
+        if (!previewExtractionStillCurrent()) {
+          throw new Error('Preview extraction was cancelled.');
+        }
+        sendCurrentProgress( // TODO check whether sending data off by 1
+          thumbsDone,
+          thumbsDone + thumbQueue.length() + 1,
+          'importingScreenshots'
+        );
+        thumbsDone++;
 
-    extractAll(
-      element,
-      sourcePath,
-      generatedOutputFolder,
-      screenshotSettings,
-      (success: boolean, error?: Error) => finishQueueItem(generatedOutputFolder, success, error),
-      createSystemThumbnail,
-    );
+        try {
+          extractAll(
+            element,
+            sourcePath,
+            canonicalGeneratedOutputFolder,
+            screenshotSettings,
+            (success: boolean, error?: Error) => {
+              finishQueueItem(canonicalGeneratedOutputFolder, success, error);
+            },
+            createSystemThumbnail,
+            createCanonicalPreviewOutputPathResolver(
+              previewAssetRoot,
+              canonicalGeneratedOutputFolder,
+            ),
+            {
+              canonicalMediaPath: safeQueueElement.canonicalMediaPath,
+              shouldContinue: previewExtractionStillCurrent,
+            },
+          );
+        } catch (error) {
+          finishQueueItem(
+            canonicalGeneratedOutputFolder,
+            false,
+            error instanceof Error ? error : new Error('The preview item could not be validated.'),
+          );
+        }
+      })
+      .catch((error: Error) => {
+        finishQueueItem(
+          generatedOutputFolder,
+          false,
+          error instanceof Error ? error : new Error('The preview output directory is invalid.'),
+        );
+      });
   };
 
   if (isRegenerationJob) {
-    const stagingFolder = path.join(
-      screenshotOutputFolder,
-      '.thumbnail-regeneration',
-      `${element.hash}-${process.pid}-${Date.now()}-${regenerationState.jobId}`,
-    );
-    prepareRegenerationStagingFolder(stagingFolder)
-      .then(() => {
-        if (!regenerationStillCurrent()) {
+    const stagingName = `${element.hash}-${process.pid}-${Date.now()}-${regenerationState.jobId}`;
+    let stagingFolder = '';
+    prepareRegenerationStagingFolder(
+      previewAssetRoot,
+      stagingName,
+    )
+      .then((preparedStagingFolder: string) => {
+        stagingFolder = preparedStagingFolder;
+        if (!previewExtractionStillCurrent()) {
           throw new Error('Thumbnail regeneration was cancelled.');
         }
         extractQueueItem(stagingFolder);
@@ -673,17 +1064,41 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
       .catch((error: Error) => {
         settleThumbnailRegeneration(element.hash, regenerationState.jobId, error);
         finishRunner();
-        void removeRegenerationStagingFolder(stagingFolder);
+        if (stagingFolder) {
+          void removeRegenerationStagingFolder(
+            stagingFolder,
+            previewAssetRoot,
+          );
+        }
       });
     return;
   }
 
-  hasAllThumbs(element, screenshotOutputFolder, screenshotSettings, shouldExtractClips)
-    .then(() => {
-      finishQueueItem(screenshotOutputFolder, true);
+  void prepareCanonicalPreviewAssetDirectories(previewAssetRoot, screenshotOutputFolder)
+    .then((canonicalScreenshotOutputFolder: string) => {
+      if (!previewExtractionStillCurrent()) {
+        throw new Error('Preview extraction was cancelled.');
+      }
+      return hasAllThumbs(
+        element,
+        canonicalScreenshotOutputFolder,
+        screenshotSettings,
+        shouldExtractClips,
+      )
+        .then(() => {
+          finishQueueItem(canonicalScreenshotOutputFolder, true);
+        })
+        .catch(() => {
+          extractQueueItem(canonicalScreenshotOutputFolder);
+        });
     })
-    .catch(() => {
-      extractQueueItem();
+    .catch((error: Error) => {
+      console.warn('Skipped preview extraction outside the active catalogue assets:', error);
+      finishQueueItem(
+        screenshotOutputFolder,
+        false,
+        error instanceof Error ? error : new Error('The preview output directory is invalid.'),
+      );
     });
 }
 
@@ -716,18 +1131,94 @@ function generatedPreviewRelativePaths(fileHash: string): string[] {
   ];
 }
 
-async function prepareRegenerationStagingFolder(stagingFolder: string): Promise<void> {
-  await fs.promises.rm(stagingFolder, { force: true, recursive: true });
-  await Promise.all([
-    fs.promises.mkdir(path.join(stagingFolder, 'thumbnails'), { recursive: true }),
-    fs.promises.mkdir(path.join(stagingFolder, 'filmstrips'), { recursive: true }),
-    fs.promises.mkdir(path.join(stagingFolder, 'clips'), { recursive: true }),
-  ]);
+async function prepareRegenerationStagingFolder(
+  assetRoot: CanonicalPreviewAssetRoot,
+  stagingName: string,
+): Promise<string> {
+  if (!/^[a-zA-Z0-9_-]+$/.test(stagingName)) {
+    throw new Error('The thumbnail regeneration staging path is invalid.');
+  }
+  const currentAssetRoot = requireCurrentCanonicalPreviewAssetRoot();
+  if (
+    !sameFilesystemPath(currentAssetRoot.outputDirectory, assetRoot.outputDirectory)
+    || !sameFilesystemPath(currentAssetRoot.assetDirectory, assetRoot.assetDirectory)
+    || !sameFilesystemPath(currentAssetRoot.canonicalAssetDirectory, assetRoot.canonicalAssetDirectory)
+  ) {
+    throw new Error('The catalogue preview asset directory changed during thumbnail regeneration.');
+  }
+
+  const transactionRoot = path.join(assetRoot.canonicalAssetDirectory, '.thumbnail-regeneration');
+  let canonicalTransactionRoot = resolveCanonicalTheatrumExistingAssetPath(
+    transactionRoot,
+    assetRoot.outputDirectory,
+    assetRoot.assetDirectory,
+  );
+  if (!canonicalTransactionRoot) {
+    await fs.promises.mkdir(transactionRoot, { recursive: true });
+    canonicalTransactionRoot = requireCanonicalExistingPreviewPath(transactionRoot, assetRoot);
+  }
+  if (
+    !isInsideDirectory(assetRoot.canonicalAssetDirectory, canonicalTransactionRoot)
+    || !fs.statSync(canonicalTransactionRoot).isDirectory()
+  ) {
+    throw new Error('The thumbnail regeneration transaction directory is invalid.');
+  }
+
+  const stagingFolder = path.join(canonicalTransactionRoot, stagingName);
+  if (fs.existsSync(stagingFolder)) {
+    const existingStagingFolder = requireCanonicalExistingPreviewPath(stagingFolder, assetRoot);
+    if (!isInsideDirectory(canonicalTransactionRoot, existingStagingFolder)) {
+      throw new Error('The thumbnail regeneration staging directory is invalid.');
+    }
+    await fs.promises.rm(existingStagingFolder, { force: true, recursive: true });
+  }
+
+  await fs.promises.mkdir(stagingFolder);
+  const canonicalStagingFolder = requireCanonicalExistingPreviewPath(stagingFolder, assetRoot);
+  if (
+    !isInsideDirectory(canonicalTransactionRoot, canonicalStagingFolder)
+    || !fs.statSync(canonicalStagingFolder).isDirectory()
+  ) {
+    throw new Error('The thumbnail regeneration staging directory is invalid.');
+  }
+  await Promise.all(['thumbnails', 'filmstrips', 'clips'].map(async (subdirectory: string) => {
+    const directory = path.join(canonicalStagingFolder, subdirectory);
+    await fs.promises.mkdir(directory);
+    const canonicalDirectory = requireCanonicalExistingPreviewPath(directory, assetRoot);
+    if (!isInsideDirectory(canonicalStagingFolder, canonicalDirectory)) {
+      throw new Error('The thumbnail regeneration staging directory is invalid.');
+    }
+  }));
+  return canonicalStagingFolder;
 }
 
-async function removeRegenerationStagingFolder(stagingFolder: string): Promise<void> {
+async function removeRegenerationStagingFolder(
+  stagingFolder: string,
+  assetRoot: CanonicalPreviewAssetRoot,
+): Promise<void> {
   try {
-    await fs.promises.rm(stagingFolder, { force: true, recursive: true });
+    const currentAssetRoot = requireCurrentCanonicalPreviewAssetRoot();
+    if (
+      !sameFilesystemPath(currentAssetRoot.outputDirectory, assetRoot.outputDirectory)
+      || !sameFilesystemPath(currentAssetRoot.assetDirectory, assetRoot.assetDirectory)
+      || !sameFilesystemPath(currentAssetRoot.canonicalAssetDirectory, assetRoot.canonicalAssetDirectory)
+    ) {
+      return;
+    }
+    const canonicalStagingFolder = resolveCanonicalTheatrumExistingAssetPath(
+      stagingFolder,
+      assetRoot.outputDirectory,
+      assetRoot.assetDirectory,
+    );
+    const transactionRoot = resolveCanonicalTheatrumExistingAssetPath(
+      path.join(assetRoot.canonicalAssetDirectory, '.thumbnail-regeneration'),
+      assetRoot.outputDirectory,
+      assetRoot.assetDirectory,
+    );
+    if (!canonicalStagingFolder || !transactionRoot || !isInsideDirectory(transactionRoot, canonicalStagingFolder)) {
+      return;
+    }
+    await fs.promises.rm(canonicalStagingFolder, { force: true, recursive: true });
   } catch (error) {
     console.warn('Unable to remove thumbnail regeneration staging folder:', stagingFolder, error);
   }
@@ -743,9 +1234,19 @@ async function commitRegeneratedPreviewFiles(
   jobId: number,
   stagingFolder: string,
   screenshotOutputFolder: string,
+  assetRoot: CanonicalPreviewAssetRoot,
   includeGeneratedClips: boolean,
   shouldContinue: () => boolean,
 ): Promise<void> {
+  const currentAssetRoot = requireCurrentCanonicalPreviewAssetRoot();
+  if (
+    !sameFilesystemPath(currentAssetRoot.outputDirectory, assetRoot.outputDirectory)
+    || !sameFilesystemPath(currentAssetRoot.assetDirectory, assetRoot.assetDirectory)
+    || !sameFilesystemPath(currentAssetRoot.canonicalAssetDirectory, screenshotOutputFolder)
+  ) {
+    throw new Error('The catalogue preview asset directory changed during thumbnail regeneration.');
+  }
+  const canonicalStagingFolder = requireCanonicalExistingPreviewPath(stagingFolder, assetRoot);
   const allRelativePaths = generatedPreviewRelativePaths(fileHash);
   const desiredRelativePaths = includeGeneratedClips
     ? allRelativePaths
@@ -759,7 +1260,7 @@ async function commitRegeneratedPreviewFiles(
     }
   };
   const transactionManifest = await beginPreviewTransaction(
-    stagingFolder,
+    canonicalStagingFolder,
     screenshotOutputFolder,
     desiredRelativePaths,
     backupSuffix,
@@ -768,8 +1269,14 @@ async function commitRegeneratedPreviewFiles(
   try {
     requireCurrentJob();
     for (const relativePath of desiredRelativePaths) {
-      const original = path.join(screenshotOutputFolder, relativePath);
-      const backup = original + backupSuffix;
+      const original = requireCanonicalPreviewWriteTarget(
+        path.join(screenshotOutputFolder, relativePath),
+        assetRoot,
+      );
+      const backup = requireCanonicalPreviewWriteTarget(
+        path.join(screenshotOutputFolder, relativePath) + backupSuffix,
+        assetRoot,
+      );
       try {
         await fs.promises.rename(original, backup);
         backups.push({ backup, original });
@@ -783,14 +1290,30 @@ async function commitRegeneratedPreviewFiles(
 
     for (const relativePath of desiredRelativePaths) {
       requireCurrentJob();
-      const generated = path.join(stagingFolder, relativePath);
-      const original = path.join(screenshotOutputFolder, relativePath);
+      const generated = requireCanonicalExistingPreviewPath(
+        path.join(canonicalStagingFolder, relativePath),
+        assetRoot,
+      );
+      const original = requireCanonicalPreviewWriteTarget(
+        path.join(screenshotOutputFolder, relativePath),
+        assetRoot,
+      );
       await fs.promises.rename(generated, original);
       installed.push(original);
       requireCurrentJob();
     }
     requireCurrentJob();
-    await markPreviewTransactionCommitted(stagingFolder, transactionManifest);
+    // The staging directory can outlive the extraction process. Re-resolve it
+    // immediately before the final manifest write so a symlink replacement
+    // cannot redirect the transaction marker outside this hub.
+    const committedStagingFolder = requireCanonicalExistingPreviewPath(
+      canonicalStagingFolder,
+      assetRoot,
+    );
+    if (!sameFilesystemPath(committedStagingFolder, canonicalStagingFolder)) {
+      throw new Error('The thumbnail regeneration staging directory changed during installation.');
+    }
+    await markPreviewTransactionCommitted(committedStagingFolder, transactionManifest);
   } catch (error) {
     await Promise.all(installed.map((installedPath: string) => {
       return fs.promises.unlink(installedPath).catch(() => undefined);
@@ -840,6 +1363,11 @@ function sendNewVideoMetadata(
   delete imageElement.fullPath; // downgrade to `ImageElement` from `ImageElementPlus`
 
   const elementForAngular = insertTemporaryFieldsSingle(imageElement);
+  GLOBALS.authorizedCatalogueImageHashes.add(imageElement.hash);
+  addCatalogueMediaLocationAuthority(
+    GLOBALS.authorizedCatalogueMediaLocations,
+    imageElement,
+  );
   GLOBALS.angularApp.sender.send('new-video-meta', elementForAngular, scannedSourcePath);
 
   if (
@@ -861,10 +1389,76 @@ function sendNewVideoMetadata(
  */
 export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
 
-  const scanStillCurrent = (): boolean => (
-    (!file.scanSession || folderScanCoordinator.isCurrent(file.scanSession))
-    && !sourcePathIsCurrentlyIgnored(file.inputSource, file.partialPath)
-  );
+  let authorizedFilePath: string | undefined;
+  let authorizedFileDevice: number | undefined;
+  let authorizedFileInode: number | undefined;
+  const scanStillCurrent = (): boolean => {
+    if (
+      (file.scanSession && !folderScanCoordinator.isCurrent(file.scanSession))
+      || sourcePathIsCurrentlyIgnored(file.inputSource, file.partialPath)
+    ) {
+      return false;
+    }
+
+    try {
+      const sourceFolder = GLOBALS.selectedSourceFolders[file.inputSource];
+      if (!sourceFolder?.path) {
+        return false;
+      }
+      const authorizedSourcePath = requireAuthorizedSourceRoot(
+        sourceFolder.path,
+        Array.from(GLOBALS.authorizedSourceFolderPaths),
+        GLOBALS.authorizedSourceFolderRealPaths,
+      );
+      if (
+        file.scanSession
+        && (
+          file.scanSession.inputSource !== file.inputSource
+          || !configuredSourceRootsEqual(file.scanSession.sourcePath, authorizedSourcePath)
+        )
+      ) {
+        return false;
+      }
+      const resolvedPath = resolveExistingMediaPath(
+        authorizedSourcePath,
+        file.partialPath,
+        file.name,
+      );
+      if (!sameFilesystemPath(path.resolve(resolvedPath), path.resolve(file.fullPath))) {
+        return false;
+      }
+      const logicalExtension = path.extname(file.name).slice(1).toLocaleLowerCase('en-US');
+      const allowedExtensions = new Set(
+        configuredMediaFileExtensions(GLOBALS.additionalExtensions),
+      );
+      const canonicalPath = fs.realpathSync.native(resolvedPath);
+      const canonicalExtension = path.extname(canonicalPath).slice(1).toLocaleLowerCase('en-US');
+      const canonicalStat = fs.statSync(canonicalPath);
+      if (
+        !logicalExtension
+        || !allowedExtensions.has(logicalExtension)
+        || canonicalExtension !== logicalExtension
+        || !allowedExtensions.has(canonicalExtension)
+        || !canonicalStat.isFile()
+      ) {
+        return false;
+      }
+      if (authorizedFilePath === undefined) {
+        authorizedFilePath = canonicalPath;
+        authorizedFileDevice = canonicalStat.dev;
+        authorizedFileInode = canonicalStat.ino;
+      } else if (
+        !sameFilesystemPath(canonicalPath, authorizedFilePath)
+        || canonicalStat.dev !== authorizedFileDevice
+        || canonicalStat.ino !== authorizedFileInode
+      ) {
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   if (!scanStillCurrent()) {
     pendingMetadataPaths.delete(file.fullPath);
@@ -879,13 +1473,19 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
   sendCurrentProgress(metaDone, metaDone + metadataQueue.length() + 1, 'importingMeta');
   metaDone++;
 
+  const pathToProbe = authorizedFilePath as string;
   runProbeWithOneRetry(
-    file.fullPath,
-    () => extractMetadataAsync(file.fullPath, GLOBALS.screenshotSettings),
+    pathToProbe,
+    () => {
+      if (!scanStillCurrent()) {
+        return Promise.reject(new Error('Metadata extraction was cancelled.'));
+      }
+      return extractMetadataAsync(pathToProbe, GLOBALS.screenshotSettings);
+    },
   )
     .catch((probeError) => {
-      console.warn('Metadata probe failed; adding path-only catalogue entry:', file.fullPath, probeError);
-      return createImportErrorElement(file.fullPath);
+      console.warn('Metadata probe failed; adding path-only catalogue entry:', pathToProbe, probeError);
+      return createImportErrorElement(pathToProbe);
     })
     .then((imageElement: ImageElementPlus) => {
       if (!scanStillCurrent()) {
@@ -894,7 +1494,7 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
       imageElement.cleanName = cleanUpFileName(file.name);
       imageElement.dateAdded = file.dateAdded;
       imageElement.fileName = file.name;
-      imageElement.fullPath = file.fullPath; // insert this converting `ImageElement` to `ImageElementPlus`
+      imageElement.fullPath = authorizedFilePath as string; // insert this converting `ImageElement` to `ImageElementPlus`
       imageElement.inputSource = file.inputSource;
       imageElement.partialPath = file.partialPath;
       sendNewVideoMetadata(
@@ -942,7 +1542,7 @@ function scanConfiguredFolderScope(
   if (!sourceFolder || !configuredSourceRootsEqual(sourceFolder.path, configuredRoot)) {
     throw new Error('The source folder is not configured for this catalogue.');
   }
-  const ignoredSubdirectories = normalizeIgnoredSubdirectories(
+  const ignoredSubdirectories = compileIgnoredSubdirectories(
     sourceFolder.ignoredSubdirectories,
   );
   if (sourceFolderPathIsIgnored(relativeScope, ignoredSubdirectories)) {
@@ -970,7 +1570,7 @@ function scanConfiguredFolderScope(
     finishInitialFolderScan(releaseScanQueues);
   };
 
-  const allAcceptableFiles: string[] = [...acceptableFiles, ...GLOBALS.additionalExtensions];
+  const allAcceptableFiles = configuredMediaFileExtensions(GLOBALS.additionalExtensions);
   let crawler;
   try {
     crawler = new fdir({
@@ -1171,14 +1771,19 @@ export function rescanSourceFolderScope(
   if (!sourceFolder || typeof sourceFolder.path !== 'string') {
     throw new Error('The source folder is not configured for this catalogue.');
   }
+  const authorizedSourcePath = requireAuthorizedSourceRoot(
+    sourceFolder.path,
+    Array.from(GLOBALS.authorizedSourceFolderPaths),
+    GLOBALS.authorizedSourceFolderRealPaths,
+  );
 
   // Resolve the renderer-supplied value before normalizing it. In particular,
   // this preserves the safety helper's rejection of leading path separators
   // instead of accidentally turning an absolute path into a relative one.
-  const scanRoot = resolveExistingSourceSubfolder(sourceFolder.path, requestedScope);
+  const scanRoot = resolveExistingSourceSubfolder(authorizedSourcePath, requestedScope);
   const relativeScope = normalizeSourceFolderRelativePath(requestedScope);
   scanConfiguredFolderScope(
-    sourceFolder.path,
+    authorizedSourcePath,
     scanRoot,
     inputSource,
     relativeScope,
@@ -1199,9 +1804,25 @@ export function startFileSystemWatching(
   generateAutomaticPreviews = true,
 ): void {
 
+  if (!Number.isSafeInteger(inputSource) || inputSource < 0) {
+    throw new Error('The source folder index is invalid.');
+  }
+  const sourceFolder = GLOBALS.selectedSourceFolders[inputSource];
+  if (!sourceFolder || !configuredSourceRootsEqual(sourceFolder.path, inputDir)) {
+    throw new Error('The source folder is not configured for this catalogue.');
+  }
+  const authorizedInputDir = requireAuthorizedSourceRoot(
+    sourceFolder.path,
+    Array.from(GLOBALS.authorizedSourceFolderPaths),
+    GLOBALS.authorizedSourceFolderRealPaths,
+  );
+  if (!configuredSourceRootsEqual(authorizedInputDir, inputDir)) {
+    throw new Error('The source folder does not match the configured catalogue entry.');
+  }
+
   // only run `chokidar` if `persistent`
   if (!persistent) {
-    superFastSystemScan(inputDir, inputSource, generateAutomaticPreviews);
+    superFastSystemScan(authorizedInputDir, inputSource, generateAutomaticPreviews);
     return;
   }
 
@@ -1210,27 +1831,23 @@ export function startFileSystemWatching(
   console.log('================================================================');
   console.log('SHOULD ONLY RUN ON PERSISTENT SCAN !!!');
 
-  console.log('starting watcher ', inputSource, typeof(inputSource), inputDir);
+  console.log('starting watcher ', inputSource, typeof(inputSource), authorizedInputDir);
 
-  const sourceFolder = GLOBALS.selectedSourceFolders[inputSource];
-  if (!sourceFolder || !configuredSourceRootsEqual(sourceFolder.path, inputDir)) {
-    throw new Error('The source folder is not configured for this catalogue.');
-  }
-  const ignoredSubdirectories = normalizeIgnoredSubdirectories(
+  const ignoredSubdirectories = compileIgnoredSubdirectories(
     sourceFolder.ignoredSubdirectories,
   );
   const scanSession = folderScanCoordinator.begin(
     inputSource,
-    inputDir,
+    authorizedInputDir,
     generateAutomaticPreviews,
   );
   GLOBALS.angularApp.sender.send('started-watching-this-dir', inputSource, '');
 
   // WARNING - there are other ways to have a network address that are not accounted here !!!
-  const isNetworkAddress: boolean =    inputDir.startsWith('//')
-                                    || inputDir.startsWith('\\\\');
+  const isNetworkAddress: boolean =    authorizedInputDir.startsWith('//')
+                                    || authorizedInputDir.startsWith('\\\\');
 
-  const allAcceptableFiles: string[] = [...acceptableFiles, ...GLOBALS.additionalExtensions];
+  const allAcceptableFiles = configuredMediaFileExtensions(GLOBALS.additionalExtensions);
   const generatedOutputRoot = physicalMediaPathKey(path.join(
     GLOBALS.selectedOutputFolder,
     'vha-' + GLOBALS.hubName,
@@ -1241,8 +1858,8 @@ export function startFileSystemWatching(
   ): boolean => {
     const resolvedCandidate = path.isAbsolute(candidatePath)
       ? path.resolve(candidatePath)
-      : path.resolve(inputDir, candidatePath);
-    const relativeCandidate = sourceRelativePathForAbsolutePath(inputDir, resolvedCandidate);
+      : path.resolve(authorizedInputDir, candidatePath);
+    const relativeCandidate = sourceRelativePathForAbsolutePath(authorizedInputDir, resolvedCandidate);
     if (relativeCandidate === undefined) {
       return true;
     }
@@ -1273,7 +1890,7 @@ export function startFileSystemWatching(
       pollInterval: 1000,
       stabilityThreshold: 5000,
     },
-    cwd: inputDir,
+    cwd: authorizedInputDir,
     disableGlobbing: true,
     // Chokidar 4 no longer treats string globs as patterns. Use an exact
     // descendant test so generated preview clips can never import themselves.
@@ -1283,13 +1900,51 @@ export function startFileSystemWatching(
     usePolling: isNetworkAddress ? true : false,
   };
 
-  const watcher: FSWatcher = chokidar.watch(inputDir, watcherConfig);
+  const watcher: FSWatcher = chokidar.watch(authorizedInputDir, watcherConfig);
   watcherMap.set(inputSource, watcher);
 
-  const releaseScanQueues = pauseQueuesForInitialScan(inputDir);
+  const releaseScanQueues = pauseQueuesForInitialScan(authorizedInputDir);
   const discoveredRelativeFolders = new Set<string>();
   let initialScanReady = false;
   let initialScanFailed = false;
+  let authorizationFailureReported = false;
+  const sourceStillAuthorized = (): boolean => {
+    const currentSourceFolder = GLOBALS.selectedSourceFolders[inputSource];
+    if (!currentSourceFolder || !configuredSourceRootsEqual(currentSourceFolder.path, authorizedInputDir)) {
+      return false;
+    }
+    try {
+      const currentAuthorizedRoot = requireAuthorizedSourceRoot(
+        currentSourceFolder.path,
+        Array.from(GLOBALS.authorizedSourceFolderPaths),
+        GLOBALS.authorizedSourceFolderRealPaths,
+      );
+      return configuredSourceRootsEqual(currentAuthorizedRoot, authorizedInputDir);
+    } catch {
+      return false;
+    }
+  };
+  const failClosedForUnauthorizedSource = (): boolean => {
+    if (!folderScanCoordinator.isCurrent(scanSession)) {
+      return true;
+    }
+    if (sourceStillAuthorized()) {
+      return false;
+    }
+    if (!authorizationFailureReported) {
+      authorizationFailureReported = true;
+      console.warn('Stopped a source watcher after its catalogue authorization changed:', inputSource);
+      closeWatcher(inputSource);
+      finishInitialFolderScan(releaseScanQueues);
+      GLOBALS.angularApp.sender.send(
+        'folder-scan-failed',
+        inputSource,
+        'The source folder is no longer authorized for this catalogue.',
+        '',
+      );
+    }
+    return true;
+  };
   const sendDirectoryDiscoveryUpdate = (): void => {
     GLOBALS.angularApp.sender.send(
       'source-folder-directories-updated',
@@ -1300,13 +1955,13 @@ export function startFileSystemWatching(
 
   watcher
     .on('addDir', (folderPath: string) => {
-      if (!folderScanCoordinator.isCurrent(scanSession)) {
+      if (failClosedForUnauthorizedSource()) {
         return;
       }
 
       try {
         const relativeFolder = normalizeSourceFolderRelativePath(
-          path.isAbsolute(folderPath) ? path.relative(inputDir, folderPath) : folderPath,
+          path.isAbsolute(folderPath) ? path.relative(authorizedInputDir, folderPath) : folderPath,
         );
         if (relativeFolder !== '') {
           const directoryWasNew = !discoveredRelativeFolders.has(relativeFolder);
@@ -1320,13 +1975,13 @@ export function startFileSystemWatching(
       }
     })
     .on('unlinkDir', (folderPath: string) => {
-      if (!folderScanCoordinator.isCurrent(scanSession)) {
+      if (failClosedForUnauthorizedSource()) {
         return;
       }
 
       try {
         const relativeFolder = normalizeSourceFolderRelativePath(
-          path.isAbsolute(folderPath) ? path.relative(inputDir, folderPath) : folderPath,
+          path.isAbsolute(folderPath) ? path.relative(authorizedInputDir, folderPath) : folderPath,
         );
         if (relativeFolder === '') {
           return;
@@ -1348,7 +2003,7 @@ export function startFileSystemWatching(
     })
     .on('add', (filePath: string) => {
 
-      if (!folderScanCoordinator.isCurrent(scanSession)) {
+      if (failClosedForUnauthorizedSource()) {
         return;
       }
 
@@ -1363,7 +2018,7 @@ export function startFileSystemWatching(
       const fileName = subPath.substring(subPath.lastIndexOf('/') + 1);
       let fullPath: string;
       try {
-        fullPath = resolveExistingMediaPath(inputDir, partialPath, fileName);
+        fullPath = resolveExistingMediaPath(authorizedInputDir, partialPath, fileName);
       } catch (error) {
         console.warn('Ignored media outside the configured source folder:', filePath, error);
         return;
@@ -1382,7 +2037,7 @@ export function startFileSystemWatching(
             'known-source-location-found',
             inputSource,
             fullPath,
-            inputDir,
+            authorizedInputDir,
           );
         }
         return;
@@ -1403,7 +2058,7 @@ export function startFileSystemWatching(
       enqueueMetadata(newItem);
     })
     .on('change', (filePath: string) => {
-      if (!folderScanCoordinator.isCurrent(scanSession)) {
+      if (failClosedForUnauthorizedSource()) {
         return;
       }
       const subPath = ('/' + filePath.replace(/\\/g, '/')).replace('//', '/');
@@ -1411,7 +2066,7 @@ export function startFileSystemWatching(
       const fileName = subPath.substring(subPath.lastIndexOf('/') + 1);
       let fullPath: string;
       try {
-        fullPath = resolveExistingMediaPath(inputDir, partialPath, fileName);
+        fullPath = resolveExistingMediaPath(authorizedInputDir, partialPath, fileName);
       } catch (error) {
         console.warn('Ignored changed media outside the configured source folder:', filePath, error);
         return;
@@ -1432,13 +2087,12 @@ export function startFileSystemWatching(
       });
     })
     .on('unlink', (partialFilePath: string) => {    // note: this happens even when file is renamed!
-      if (!folderScanCoordinator.isCurrent(scanSession)) {
+      if (failClosedForUnauthorizedSource()) {
         return;
       }
       console.log(' !!! FILE DELETED, updating Angular:', partialFilePath);
       GLOBALS.angularApp.sender.send('single-file-deleted', inputSource, partialFilePath);
-      const basePath: string = GLOBALS.selectedSourceFolders[inputSource].path;
-      const fullPath = path.join(basePath, partialFilePath);
+      const fullPath = path.join(authorizedInputDir, partialFilePath);
       folderScanCoordinator.remove(scanSession, fullPath);
       knownPathsForSource(inputSource).delete(fullPath);
       knownSuccessfulPhysicalPathCounts.delete(physicalMediaPathKey(fullPath));
@@ -1447,6 +2101,9 @@ export function startFileSystemWatching(
       // note: there is no need to watch for `unlinkDir` since `unlink` fires for every file anyway!
     })
     .on('ready', () => {
+      if (failClosedForUnauthorizedSource()) {
+        return;
+      }
       initialScanReady = true;
       console.log('Finished scanning', inputSource);
       const scanSnapshot = folderScanCoordinator.complete(scanSession);
@@ -1461,7 +2118,7 @@ export function startFileSystemWatching(
           'all-files-found-in-dir',
           inputSource,
           scanSnapshot,
-          inputDir,
+          authorizedInputDir,
           '',
           Array.from(discoveredRelativeFolders).sort(),
         );
@@ -1483,18 +2140,18 @@ export function startFileSystemWatching(
           return;
         }
         initialScanFailed = true;
-        reportFolderScanFailure(scanSession, inputDir, error, '');
+        reportFolderScanFailure(scanSession, authorizedInputDir, error, '');
         finishInitialFolderScan(releaseScanQueues);
         if (watcherMap.get(inputSource) === watcher) {
           watcherMap.delete(inputSource);
         }
         watcher.close().catch((closeError: Error) => {
-          console.warn('Unable to close a failed source-folder watcher:', inputDir, closeError);
+          console.warn('Unable to close a failed source-folder watcher:', authorizedInputDir, closeError);
         });
         return;
       }
 
-      console.error('Active folder watcher reported an error:', inputDir, error);
+      console.error('Active folder watcher reported an error:', authorizedInputDir, error);
       GLOBALS.angularApp.sender.send(
         'folder-watch-error',
         inputSource,
@@ -1523,7 +2180,7 @@ export function buildKnownCataloguePathsBySource(
           || location.missing === true
           || sourceFolderPathIsIgnored(
             location.partialPath,
-            sourceFolder.ignoredSubdirectories,
+            compiledIgnoredScopesForSource(sourceFolder),
           )
         ) {
           return;
@@ -1549,9 +2206,7 @@ export function buildKnownCataloguePathsBySource(
 export function resetWatchers(finalArray: ImageElement[]): void {
 
   // close every old watcher
-  Array.from(watcherMap.keys()).forEach((key: number) => {
-    closeWatcher(key);
-  });
+  closeAllWatchers();
 
   knownPathsBySource = buildKnownCataloguePathsBySource(
     finalArray,
@@ -1577,7 +2232,7 @@ export function resetWatchers(finalArray: ImageElement[]): void {
           sourceFolder?.path
           && !sourceFolderPathIsIgnored(
             location.partialPath,
-            sourceFolder.ignoredSubdirectories,
+            compiledIgnoredScopesForSource(sourceFolder),
           )
         ) {
           failedMetadataPaths.add(path.join(
@@ -1650,9 +2305,10 @@ export function updateSourceFolderIgnoredSubdirectories(
   if (!sourceFolder || typeof sourceFolder.path !== 'string') {
     throw new Error('The source folder is not configured for this catalogue.');
   }
-  const ignoredSubdirectories = normalizeIgnoredSubdirectories(
+  const compiledIgnoredSubdirectories = compileIgnoredSubdirectories(
     ignoredSubdirectoriesValue,
   );
+  const ignoredSubdirectories = [...compiledIgnoredSubdirectories.scopes];
   const sourcePath = sourceFolder.path;
   const shouldWatch = sourceFolder.watch === true;
   finalArray.forEach((element: ImageElement) => getImageLocations(element));
@@ -1683,7 +2339,7 @@ export function updateSourceFolderIgnoredSubdirectories(
   const removeIgnoredAbsolutePath = (absolutePath: string): boolean => {
     const relativePath = sourceRelativePathForAbsolutePath(sourcePath, absolutePath);
     return relativePath !== undefined
-      && sourceFolderPathIsIgnored(relativePath, ignoredSubdirectories);
+      && sourceFolderPathIsIgnored(relativePath, compiledIgnoredSubdirectories);
   };
   failedMetadataPaths = new Set(
     Array.from(failedMetadataPaths).filter(pathValue => !removeIgnoredAbsolutePath(pathValue)),
@@ -1721,6 +2377,18 @@ export function closeWatcher(inputSource: number): void {
   }
 }
 
+/** Close every active source watcher before a catalogue's capabilities change. */
+export function closeAllWatchers(): void {
+  const inputSources = new Set<number>([
+    ...Array.from(watcherMap.keys()),
+    ...Array.from(activeCrawlerAbortControllers.keys()),
+    ...Array.from(activeCrawlerScans.keys()),
+  ]);
+  Array.from(inputSources).forEach((inputSource: number) => {
+    closeWatcher(inputSource);
+  });
+}
+
 /**
  * Start old watcher
  * happens when user toggles the `watch` near folder
@@ -1735,23 +2403,42 @@ export function startWatcher(
 ): void {
   console.log('start watching !!!!', inputSource, typeof(inputSource), folderPath, persistent);
 
+  if (!Number.isSafeInteger(inputSource) || inputSource < 0) {
+    throw new Error('The source folder index is invalid.');
+  }
+  const configuredSource = GLOBALS.selectedSourceFolders[inputSource];
+  if (!configuredSource || !configuredSourceRootsEqual(configuredSource.path, folderPath)) {
+    throw new Error('The source folder is not configured for this catalogue.');
+  }
+  const authorizedSourcePath = requireAuthorizedSourceRoot(
+    configuredSource.path,
+    Array.from(GLOBALS.authorizedSourceFolderPaths),
+    GLOBALS.authorizedSourceFolderRealPaths,
+  );
+  if (!configuredSourceRootsEqual(authorizedSourcePath, folderPath)) {
+    throw new Error('The source folder does not match the configured catalogue entry.');
+  }
+  if (persistent && !GLOBALS.authorizedSourceWatchPaths.has(authorizedSourcePath)) {
+    throw new Error('Automatic watching has not been authorized for this source folder.');
+  }
+
   if (watcherMap.has(inputSource)) {
     closeWatcher(inputSource);
   }
 
   const ignoredSubdirectories = normalizeIgnoredSubdirectories(
-    GLOBALS.selectedSourceFolders[inputSource]?.ignoredSubdirectories,
+    configuredSource.ignoredSubdirectories,
   );
   GLOBALS.selectedSourceFolders[inputSource] = {
     ...(ignoredSubdirectories.length > 0 ? { ignoredSubdirectories } : {}),
-    path: folderPath,
+    path: authorizedSourcePath,
     watch: persistent,
   };
 
   importCompletionSent = false;
   preventSleep();
   startFileSystemWatching(
-    folderPath,
+    authorizedSourcePath,
     inputSource,
     persistent,
     generateAutomaticPreviews,
@@ -1824,10 +2511,23 @@ async function hasAllThumbs(
  */
 export function extractAnyMissingThumbs(fullArray: ImageElement[]): void {
   preventSleep();
+  const requestHashes = new Set<string>();
   fullArray.forEach((element: ImageElement) => {
-    if (!element.missing && shouldExtractThumbnails(element)) {
-      importCompletionSent = false;
-      thumbQueue.push(element);
+    if (
+      !element.missing
+      && shouldExtractThumbnails(element)
+      && !requestHashes.has(element.hash)
+      && !automaticThumbnailHashesQueued.has(element.hash)
+    ) {
+      try {
+        requireSafeThumbnailQueueElement(element);
+        requestHashes.add(element.hash);
+        automaticThumbnailHashesQueued.add(element.hash);
+        importCompletionSent = false;
+        thumbQueue.push(element);
+      } catch (error) {
+        console.warn('Skipped an unsafe missing-thumbnail request:', error);
+      }
     }
   });
 
@@ -1864,6 +2564,15 @@ export function regenerateThumbnails(
       return;
     }
 
+    let previewAssetRoot: CanonicalPreviewAssetRoot;
+    try {
+      requireSafeThumbnailQueueElement(element);
+      previewAssetRoot = requireCurrentCanonicalPreviewAssetRoot();
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error('The preview item is invalid.'));
+      return;
+    }
+
     if (lingeringThumbnailInstallations.has(fileHash)) {
       reject(new Error('The previous thumbnail installation for this item is still finishing.'));
       return;
@@ -1882,12 +2591,14 @@ export function regenerateThumbnails(
       thumbnailRegenerationJobId: jobId,
     };
     thumbnailRegenerationStates.set(fileHash, {
+      assetDirectory: previewAssetRoot.assetDirectory,
       folderBatchJobId,
       generation: folderThumbnailRegenerationGeneration,
       installing: false,
       jobId,
+      outputDirectory: previewAssetRoot.outputDirectory,
       screenshotCount: regenerationElement.screens,
-      screenshotOutputFolder: path.join(GLOBALS.selectedOutputFolder, 'vha-' + GLOBALS.hubName),
+      screenshotOutputFolder: previewAssetRoot.canonicalAssetDirectory,
       screenshotSettings,
       sourcePath: sourceFolder.path,
       stillOwned,
@@ -2017,8 +2728,14 @@ export async function regenerateFolderThumbnails(
     throw new Error('The selected source folder is not available.');
   }
 
-  const sourceScopePath = resolveExistingSourceSubfolder(
+  const authorizedSourcePath = requireAuthorizedSourceRoot(
     sourceFolder.path,
+    Array.from(GLOBALS.authorizedSourceFolderPaths),
+    GLOBALS.authorizedSourceFolderRealPaths,
+  );
+
+  const sourceScopePath = resolveExistingSourceSubfolder(
+    authorizedSourcePath,
     normalizedRelativePath,
   );
   const plan = planFolderThumbnailRegeneration(
@@ -2040,7 +2757,7 @@ export async function regenerateFolderThumbnails(
 
   const batchGeneration = folderThumbnailRegenerationGeneration;
   const jobId = nextFolderThumbnailRegenerationJobId++;
-  const sourcePath = sourceFolder.path;
+  const sourcePath = authorizedSourcePath;
   let sourceUnavailable = false;
   activeFolderThumbnailRegenerationJobId = jobId;
 
@@ -2128,49 +2845,156 @@ export async function regenerateFolderThumbnails(
  *
  * Scan the provided directory and delete any file not in `hashesPresent`
  * @param hashesPresent
- * @param directory
+ * @param outputDirectory
+ * @param assetDirectory
  */
-export function removeThumbnailsNotInHub(hashesPresent: Map<string, 1>, directory: string): void {
-
-  deleteThumbQueue.pause();
-  numberOfThumbsDeleted = 0;
-
-  const crawler = new fdir()
-    .withFullPaths()
-    .filter((file: string) => {
-      const  it: string = file.toLowerCase();
-      return it.endsWith('.jpg') || it.endsWith('.mp4');
-    })
-    .crawl(directory);
-
-  crawler.withPromise().then((files: string[]) => {
-
-    files.forEach((file: string) => {
-      const parsedPath = path.parse(file);
-      const fileNameHash = parsedPath.name;
-
-      if (!hashesPresent.has(fileNameHash)) {
-        deleteThumbQueue.push(file);
-        numberOfThumbsDeleted++;
+export async function removeThumbnailsNotInHub(
+  hashesPresent: ReadonlyMap<string, 1>,
+  outputDirectory: string,
+  assetDirectory: string,
+  shouldContinue: () => boolean = (): boolean => true,
+  shouldDeleteHash: (hash: string) => boolean = (hash: string): boolean => !hashesPresent.has(hash),
+): Promise<boolean> {
+  const canonicalAssetDirectory = resolveCanonicalTheatrumAssetDirectory(
+    outputDirectory,
+    assetDirectory,
+  );
+  if (!canonicalAssetDirectory) {
+    console.warn('Skipped preview cleanup outside the active catalogue assets.');
+    return false;
+  }
+  let numberOfThumbsDeleted = 0;
+  for (const previewDirectoryName of Array.from(PREVIEW_ASSET_DIRECTORIES)) {
+    if (!shouldContinue()) {
+      return false;
+    }
+    const previewDirectory = path.join(canonicalAssetDirectory, previewDirectoryName);
+    let canonicalPreviewDirectory: string;
+    try {
+      await fs.promises.access(previewDirectory);
+      canonicalPreviewDirectory = resolveCanonicalTheatrumExistingAssetPath(
+        previewDirectory,
+        outputDirectory,
+        assetDirectory,
+      ) as string;
+      if (
+        !canonicalPreviewDirectory
+        || !sameFilesystemPath(canonicalPreviewDirectory, previewDirectory)
+        || !fs.statSync(canonicalPreviewDirectory).isDirectory()
+      ) {
+        console.warn('Skipped an invalid generated-preview directory:', previewDirectory);
+        return false;
       }
-    });
-
-    if (numberOfThumbsDeleted === 0) {
-      GLOBALS.angularApp.sender.send('number-of-screenshots-deleted', 0);
-    } else {
-      deleteThumbQueue.resume(); // else only send message after the delete queue is finished
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        continue;
+      }
+      console.warn('Unable to open a generated-preview directory for cleanup:', error);
+      return false;
     }
 
-  });
+    try {
+      const directory = await fs.promises.opendir(canonicalPreviewDirectory);
+      for await (const entry of directory) {
+        if (!shouldContinue()) {
+          return false;
+        }
+        if (!entry.isFile() || path.basename(entry.name) !== entry.name) {
+          continue;
+        }
+        const extension = path.extname(entry.name).toLowerCase();
+        if (
+          previewDirectoryName === 'clips'
+            ? !['.jpg', '.mp4'].includes(extension)
+            : extension !== '.jpg'
+        ) {
+          continue;
+        }
+        const fileNameHash = path.parse(entry.name).name;
+        if (hashesPresent.has(fileNameHash)) {
+          continue;
+        }
+        const task: PreviewDeletionTask = {
+          assetDirectory,
+          canonicalAssetDirectory,
+          outputDirectory,
+          pathToFile: path.join(canonicalPreviewDirectory, entry.name),
+        };
+        if (await deletePreviewCleanupTask(task, shouldDeleteHash)) {
+          numberOfThumbsDeleted++;
+        }
+      }
+    } catch (error) {
+      console.warn('Unable to enumerate generated previews for cleanup:', error);
+      return false;
+    }
+  }
 
+  if (!shouldContinue()) {
+    return false;
+  }
+  if (GLOBALS.angularApp?.sender && !GLOBALS.angularApp.sender.isDestroyed()) {
+    GLOBALS.angularApp.sender.send('number-of-screenshots-deleted', numberOfThumbsDeleted);
+  }
+  return true;
 }
 
-function deleteThumbQueueRunner(pathToFile: string, done): void {
-  console.log('deleting:', pathToFile);
+async function deletePreviewCleanupTask(
+  task: PreviewDeletionTask,
+  shouldDeleteHash: (hash: string) => boolean,
+): Promise<boolean> {
+  const activeAssetDirectory = resolveTheatrumAssetDirectory(
+    GLOBALS.selectedOutputFolder,
+    GLOBALS.hubName,
+  );
+  const activeCanonicalAssetDirectory = activeAssetDirectory && resolveCanonicalTheatrumAssetDirectory(
+    GLOBALS.selectedOutputFolder,
+    activeAssetDirectory,
+  );
+  if (
+    !activeCanonicalAssetDirectory
+    || !sameFilesystemPath(activeCanonicalAssetDirectory, task.canonicalAssetDirectory)
+  ) {
+    return false;
+  }
 
-  fs.unlink(pathToFile, (err) => {
-    done();
-  });
+  const canonicalPathToFile = resolveCanonicalTheatrumExistingAssetPath(
+    task.pathToFile,
+    task.outputDirectory,
+    task.assetDirectory,
+  );
+  if (!canonicalPathToFile || !isInsideDirectory(task.canonicalAssetDirectory, canonicalPathToFile)) {
+    console.warn('Skipped a queued preview cleanup target outside the active catalogue assets.');
+    return false;
+  }
+  const relativePath = path.relative(task.canonicalAssetDirectory, canonicalPathToFile);
+  const pathSegments = relativePath.split(path.sep);
+  const [assetDirectoryName, fileName] = pathSegments;
+  const extension = path.extname(fileName || '').toLowerCase();
+  if (
+    pathSegments.length !== 2
+    || !PREVIEW_ASSET_DIRECTORIES.has(assetDirectoryName)
+    || !fileName
+    || path.basename(fileName) !== fileName
+    || (assetDirectoryName === 'clips' ? !['.jpg', '.mp4'].includes(extension) : extension !== '.jpg')
+  ) {
+    return false;
+  }
+  const fileNameHash = path.parse(fileName).name;
+  if (!shouldDeleteHash(fileNameHash)) {
+    return false;
+  }
+
+  console.log('deleting:', canonicalPathToFile);
+  try {
+    await fs.promises.unlink(canonicalPathToFile);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('Unable to delete a stale generated preview:', error);
+    }
+    return false;
+  }
 }
 
 /**

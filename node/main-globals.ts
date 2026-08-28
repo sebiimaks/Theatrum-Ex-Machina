@@ -7,11 +7,26 @@ export type CatalogueAccessMode = 'read-only' | 'read-write';
 export const GLOBALS: VhaGlobals = {
   angularApp: null,            // reference used to send messages back to Angular App
   catalogueAccessMode: 'read-write',
+  cataloguePersistenceActive: false,
+  catalogueSessionGeneration: 0,
+  catalogueTransitionActive: false,
   currentlyOpenVhaFile: '',    // OFFICAL DECREE IN NODE WHICH FILE IS CURRENTLY OPEN !!!
   debug: false,
   hubName: 'untitled',         // in case user doesn't name their hub any name
   macVersion: false,           // auto updated by `main.ts`
+  authorizedCataloguePaths: new Set<string>(),
+  authorizedCatalogueImageHashes: new Set<string>(),
+  authorizedCatalogueMediaLocations: new Set<string>(),
+  authorizedSourceFolderPaths: new Set<string>(),
+  authorizedSourceFolderRealPaths: new Map<string, string>(),
+  authorizedSourceWatchPaths: new Set<string>(),
+  pendingInputDirectorySelections: new Set<string>(),
+  pendingOutputDirectorySelections: new Set<string>(),
+  pendingUserFileSelections: new Set<string>(),
+  preferredVideoPlayer: '',
+  preferredVideoPlayerArguments: '',
   readyToQuit: false,          // hack to quit gracefully
+  requestCatalogueOpenDispatch: undefined,
   selectedOutputFolder: '',
   selectedSourceFolders: {},
   settingsPath: '',            // to differentiate between standard & Windows Portable settings location
@@ -32,12 +47,27 @@ export const GLOBALS: VhaGlobals = {
 export interface VhaGlobals {
   additionalExtensions: string[];
   angularApp: any;
+  authorizedCataloguePaths: Set<string>;
+  authorizedCatalogueImageHashes: Set<string>;
+  authorizedCatalogueMediaLocations: Set<string>;
+  authorizedSourceFolderPaths: Set<string>;
+  authorizedSourceFolderRealPaths: Map<string, string>;
+  authorizedSourceWatchPaths: Set<string>;
   catalogueAccessMode: CatalogueAccessMode;
+  cataloguePersistenceActive: boolean;
+  catalogueSessionGeneration: number;
+  catalogueTransitionActive: boolean;
   currentlyOpenVhaFile: string;
   debug: boolean;
   hubName: string;
   macVersion: boolean;
+  pendingInputDirectorySelections: Set<string>;
+  pendingOutputDirectorySelections: Set<string>;
+  pendingUserFileSelections: Set<string>;
+  preferredVideoPlayer: string;
+  preferredVideoPlayerArguments: string;
   readyToQuit: boolean;
+  requestCatalogueOpenDispatch?: () => void;
   screenshotSettings: ScreenshotSettings;
   selectedOutputFolder: string;
   selectedSourceFolders: InputSources;

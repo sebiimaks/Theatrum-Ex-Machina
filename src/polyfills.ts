@@ -22,6 +22,27 @@
 // import 'core-js/es6/reflect';
 // import 'core-js/es7/reflect';
 
+/**
+ * The browser build uses the small `path` compatibility package for display
+ * and catalogue-path calculations. Its implementation reads only
+ * `process.platform` during module initialization. Electron no longer exposes
+ * Node's process object to the renderer, so provide a frozen, data-only shim
+ * before the application bundle loads. It deliberately has no environment,
+ * filesystem, or process-control capabilities.
+ */
+const rendererGlobal = globalThis as unknown as {
+  process?: unknown;
+  theatrum?: { platform?: string };
+};
+if (rendererGlobal.process === undefined) {
+  Object.defineProperty(globalThis, 'process', {
+    configurable: false,
+    enumerable: false,
+    value: Object.freeze({ platform: rendererGlobal.theatrum?.platform || '' }),
+    writable: false,
+  });
+}
+
 
 /***************************************************************************************************
  * Zone JS is required by Angular itself.

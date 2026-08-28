@@ -117,4 +117,8 @@ export class WizardComponent {
     this.wizard.isFixedNumberOfScreenshots = bool;
   }
 
+  preventNumberInputKeyboard(event: KeyboardEvent): void {
+    event.preventDefault();
+  }
+
 }

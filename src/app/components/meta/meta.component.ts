@@ -268,19 +268,13 @@ export class MetaComponent implements OnInit, OnDestroy {
   tryRenamingFile() {
     this.renameError = false;
 
-    const sourceFolder = this.selectedSourceFolder();
-    const relativeFilePath = this.video.partialPath;
     const originalFile = this.video.fileName;
     const newFileName = this.renamingWIP + '.' + this.filePathService.getFileNameExtension(this.video.fileName);
-
-    console.log(sourceFolder);
 
     if (originalFile !== newFileName && this.renamingWIP.length !== 0) {
       this.electronService.ipcRenderer.send(
         'try-to-rename-this-file',
-        sourceFolder,
-        relativeFilePath,
-        originalFile,
+        this.video,
         newFileName,
         this.video.index
       );

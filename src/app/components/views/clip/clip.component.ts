@@ -86,6 +86,36 @@ export class ClipComponent implements OnInit {
     }
   }
 
+  playPreview(event: Event): void {
+    const preview = event.currentTarget as HTMLVideoElement | null;
+    if (!preview) {
+      return;
+    }
+    void preview.play().catch(() => preview.load());
+  }
+
+  mutePreview(event: Event): void {
+    const preview = event.currentTarget as HTMLVideoElement | null;
+    if (preview) {
+      preview.muted = true;
+    }
+  }
+
+  unmutePreview(event: Event): void {
+    const preview = event.currentTarget as HTMLVideoElement | null;
+    if (preview) {
+      preview.muted = false;
+    }
+  }
+
+  startAutoplayPreview(event: Event): void {
+    const preview = event.currentTarget as HTMLVideoElement | null;
+    if (!preview) {
+      return;
+    }
+    setTimeout(() => void preview.play().catch(() => undefined), Math.floor(Math.random() * 500));
+  }
+
   ngOnInit() {
 
     if (isMetadataImportFailure(this.video)) {

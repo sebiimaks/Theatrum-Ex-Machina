@@ -8,12 +8,23 @@ import {
   catalogueFileName,
   hasCatalogueOrAssetNameCollision,
   isCataloguePickerFilePath,
+  isSafeCatalogueHubName,
   isSupportedCatalogueFilePath,
 } from '../interfaces/catalogue-file.ts';
 
 test('uses the branded extension for new catalogue files', () => {
   assert.equal(CATALOGUE_FILE_EXTENSION, '.scaena');
   assert.equal(catalogueFileName('Archive'), 'Archive.scaena');
+});
+
+test('accepts only a single safe path segment for a new catalogue name', () => {
+  assert.equal(isSafeCatalogueHubName('Photography 2026'), true);
+  assert.equal(isSafeCatalogueHubName('..'), false);
+  assert.equal(isSafeCatalogueHubName('../outside'), false);
+  assert.equal(isSafeCatalogueHubName('nested/folder'), false);
+  assert.equal(isSafeCatalogueHubName('nested\\folder'), false);
+  assert.equal(isSafeCatalogueHubName(''), false);
+  assert.equal(isSafeCatalogueHubName('   '), false);
 });
 
 test('recognizes branded and legacy catalogue paths case-insensitively', () => {

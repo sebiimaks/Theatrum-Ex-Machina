@@ -2,13 +2,16 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { afterEach, test } from 'node:test';
 
 import { NewImageElement } from '../interfaces/final-object.interface.ts';
 import { buildFfprobeArguments } from './local-operation-safety.ts';
 import {
+  beginPreviewCleanupBarrier,
+  cancelActiveMediaProcesses,
+  capturePreviewPublicationEpoch,
   extractAll,
   extractConcealedFrameArgs,
   extractFilmstripWithRecovery,
@@ -17,10 +20,12 @@ import {
   extractSingleFrameArgs,
   extractThumbnailWithRecovery,
   fillMissingRecoveryFrames,
+  finishPreviewCleanupBarrier,
   FILMSTRIP_FRAME_CONCURRENCY,
   generatePreviewClipArgs,
   generateScreenshotStripArgs,
   readJpegDimensions,
+  previewPublicationIsAllowed,
   replaceThumbnailWithNewImage,
   runBoundedMediaWork,
   selectRecoveryFrameIndexes,
@@ -252,6 +257,219 @@ test('bounded media work waits for active peers before reporting an error', asyn
   releasePeer();
   await assert.rejects(work, /expected worker failure/);
   assert.equal(peerFinished, true);
+});
+
+test('cleanup barrier invalidates running preview publication and blocks replacement work', () => {
+  const hash = 'cleanup-race';
+  const runningEpoch = capturePreviewPublicationEpoch(hash);
+  assert.equal(previewPublicationIsAllowed(hash, runningEpoch), true);
+
+  const barrier = beginPreviewCleanupBarrier([hash]);
+  assert.equal(previewPublicationIsAllowed(hash, runningEpoch), false);
+  const replacementEpoch = capturePreviewPublicationEpoch(hash);
+  assert.equal(previewPublicationIsAllowed(hash, replacementEpoch), false);
+
+  finishPreviewCleanupBarrier(barrier);
+  assert.equal(previewPublicationIsAllowed(hash, runningEpoch), false);
+  assert.equal(previewPublicationIsAllowed(hash, replacementEpoch), true);
+});
+
+test('preview extraction keeps the validated canonical input after a source symlink swap', async () => {
+  const directory = createTemporaryDirectory();
+  const redMediaPath = path.join(directory, 'validated-red.mp4');
+  const blueMediaPath = path.join(directory, 'replacement-blue.mp4');
+  const linkedMediaPath = path.join(directory, 'catalogue-link.mp4');
+  const screenshotFolder = path.join(directory, 'previews');
+  fs.mkdirSync(path.join(screenshotFolder, 'thumbnails'), { recursive: true });
+  fs.mkdirSync(path.join(screenshotFolder, 'filmstrips'), { recursive: true });
+  fs.mkdirSync(path.join(screenshotFolder, 'clips'), { recursive: true });
+
+  for (const [colour, outputPath] of [['red', redMediaPath], ['blue', blueMediaPath]] as const) {
+    const generation = runTool(ffmpegPath, [
+      '-nostdin', '-hide_banner', '-loglevel', 'error',
+      '-f', 'lavfi', '-i', `color=c=${colour}:size=160x90:rate=5:duration=6`,
+      '-f', 'lavfi', '-i', 'sine=frequency=1000:duration=6',
+      '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-y', outputPath,
+    ], 60_000);
+    assert.equal(generation.status, 0, generation.stderr);
+  }
+
+  fs.symlinkSync(redMediaPath, linkedMediaPath);
+  const validatedCanonicalPath = fs.realpathSync.native(linkedMediaPath);
+  fs.unlinkSync(linkedMediaPath);
+  fs.symlinkSync(blueMediaPath, linkedMediaPath);
+
+  const launchedInputs: string[] = [];
+  const result = await new Promise<{ error?: Error; success: boolean }>((resolve) => {
+    extractAll(
+      {
+        ...NewImageElement(),
+        cleanName: 'catalogue link',
+        duration: 6,
+        fileName: path.basename(linkedMediaPath),
+        fileSize: 1,
+        fps: 5,
+        hash: 'canonical-input',
+        height: 90,
+        inputSource: 0,
+        partialPath: '',
+        screens: 3,
+        width: 160,
+      },
+      directory,
+      screenshotFolder,
+      {
+        clipHeight: 144,
+        clipSnippetLength: 1,
+        clipSnippets: 1,
+        fixed: true,
+        height: 144,
+        n: 3,
+      },
+      (success: boolean, error?: Error) => resolve({ error, success }),
+      undefined,
+      undefined,
+      {
+        canonicalMediaPath: validatedCanonicalPath,
+        spawnMediaProcess: (executablePath, args, options) => {
+          args.forEach((argument: string, index: number) => {
+            if (argument === '-i' && typeof args[index + 1] === 'string') {
+              launchedInputs.push(args[index + 1]);
+            }
+          });
+          return spawn(executablePath, args, options);
+        },
+      },
+    );
+  });
+
+  assert.equal(result.success, true, result.error?.message);
+  assert.ok(launchedInputs.includes(validatedCanonicalPath));
+  assert.equal(launchedInputs.includes(linkedMediaPath), false);
+  assert.equal(launchedInputs.includes(blueMediaPath), false);
+});
+
+test('catalogue reset stops thumbnail retry and prevents stale publication', async () => {
+  const directory = createTemporaryDirectory();
+  const thumbnailPath = path.join(directory, 'cancelled thumbnail.jpg');
+  const mediaProcesses: FakeMediaProcess[] = [];
+  let catalogueStillOwnsWork = true;
+  let spawnCount = 0;
+
+  const extraction = extractThumbnailWithRecovery(
+    path.join(directory, 'source.mp4'),
+    90,
+    30,
+    thumbnailPath,
+    5000,
+    {
+      shouldContinue: () => catalogueStillOwnsWork,
+      spawnMediaProcess: () => {
+        spawnCount++;
+        const mediaProcess = new FakeMediaProcess();
+        mediaProcesses.push(mediaProcess);
+        return mediaProcess;
+      },
+    },
+  );
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(spawnCount, 1);
+  assert.equal(mediaProcesses.length, 1);
+
+  catalogueStillOwnsWork = false;
+  cancelActiveMediaProcesses();
+  assert.deepEqual(mediaProcesses[0].killSignals, [undefined]);
+  mediaProcesses[0].exit(null, 'SIGTERM');
+  mediaProcesses[0].close(null, 'SIGTERM');
+
+  assert.equal(await extraction, false);
+  assert.equal(spawnCount, 1, 'a cancelled normal attempt must not start recovery FFmpeg');
+  assert.equal(fs.existsSync(thumbnailPath), false);
+  assert.equal(
+    fs.readdirSync(directory).some((fileName: string) => fileName.includes('.tmp.jpg')),
+    false,
+  );
+});
+
+test('catalogue switch guard prevents clip work after core previews finish', async () => {
+  const directory = createTemporaryDirectory();
+  const mediaPath = path.join(directory, 'guarded source.mp4');
+  const fixtureJpegPath = path.join(directory, 'valid frame.jpg');
+  const screenshotFolder = path.join(directory, 'previews');
+  const thumbnailPath = path.join(screenshotFolder, 'thumbnails', 'guarded-work.jpg');
+  const filmstripPath = path.join(screenshotFolder, 'filmstrips', 'guarded-work.jpg');
+  const clipPath = path.join(screenshotFolder, 'clips', 'guarded-work.mp4');
+  const clipThumbnailPath = path.join(screenshotFolder, 'clips', 'guarded-work.jpg');
+  fs.writeFileSync(mediaPath, 'fake media read by the injected process');
+  fs.mkdirSync(path.join(screenshotFolder, 'thumbnails'), { recursive: true });
+  fs.mkdirSync(path.join(screenshotFolder, 'filmstrips'), { recursive: true });
+  fs.mkdirSync(path.join(screenshotFolder, 'clips'), { recursive: true });
+
+  const fixture = runTool(ffmpegPath, [
+    '-nostdin', '-hide_banner', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'color=c=blue:size=256x144',
+    '-frames:v', '1', '-q:v', '2', '-y', fixtureJpegPath,
+  ]);
+  assert.equal(fixture.status, 0, fixture.stderr);
+
+  let spawnCount = 0;
+  const result = await new Promise<{ error?: Error; success: boolean }>((resolve) => {
+    extractAll(
+      {
+        ...NewImageElement(),
+        cleanName: 'guarded source',
+        duration: 30,
+        fileName: path.basename(mediaPath),
+        fileSize: 1,
+        fps: 24,
+        hash: 'guarded-work',
+        height: 144,
+        inputSource: 0,
+        partialPath: '',
+        screens: 1,
+        width: 256,
+      },
+      directory,
+      screenshotFolder,
+      {
+        clipHeight: 144,
+        clipSnippetLength: 1,
+        clipSnippets: 1,
+        fixed: true,
+        height: 144,
+        n: 1,
+      },
+      (success: boolean, error?: Error) => resolve({ error, success }),
+      undefined,
+      undefined,
+      {
+        // Model a catalogue hand-off immediately after the last core preview
+        // is installed. The next stage must observe revocation before FFmpeg.
+        shouldContinue: () => !fs.existsSync(filmstripPath),
+        spawnMediaProcess: (_executablePath, args) => {
+          spawnCount++;
+          const candidatePath = args[args.length - 1];
+          assert.equal(path.extname(candidatePath), '.jpg');
+          fs.copyFileSync(fixtureJpegPath, candidatePath);
+          const mediaProcess = new FakeMediaProcess();
+          queueMicrotask(() => {
+            mediaProcess.exit(0, null);
+            mediaProcess.close(0, null);
+          });
+          return mediaProcess;
+        },
+      },
+    );
+  });
+
+  assert.equal(result.success, false);
+  assert.match(result.error?.message || '', /cancelled/i);
+  assert.equal(spawnCount, 2, 'thumbnail and filmstrip may finish, but no clip process may start');
+  assert.equal(fs.existsSync(thumbnailPath), true);
+  assert.equal(fs.existsSync(filmstripPath), true);
+  assert.equal(fs.existsSync(clipPath), false);
+  assert.equal(fs.existsSync(clipThumbnailPath), false);
 });
 
 test('media extraction timeout settles even when the child never closes', async () => {
@@ -634,6 +852,50 @@ test('a later custom-thumbnail request cannot be overwritten by an older one', a
   assert.deepEqual(readJpegDimensions(fs.readFileSync(thumbnailPath)), { width: 160, height: 90 });
 });
 
+test('revoked catalogue ownership prevents a converted custom thumbnail from publishing', async () => {
+  const directory = createTemporaryDirectory();
+  const incomingImagePath = path.join(directory, 'pending request.png');
+  const decoderOutputPath = path.join(directory, 'decoded input.jpg');
+  const thumbnailPath = path.join(directory, 'revoked thumbnail.jpg');
+  fs.copyFileSync(path.join(__dirname, '../src/assets/logo.png'), incomingImagePath);
+
+  const decoderOutput = runTool(ffmpegPath, [
+    '-nostdin', '-hide_banner', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'color=c=orange:size=320x180',
+    '-frames:v', '1', '-q:v', '2', '-y', decoderOutputPath,
+  ]);
+  assert.equal(decoderOutput.status, 0, decoderOutput.stderr);
+  const jpegData = fs.readFileSync(decoderOutputPath);
+
+  let releaseDecoder: () => void = () => undefined;
+  let reportDecoderStarted: () => void = () => undefined;
+  const decoderGate = new Promise<void>((resolve) => {
+    releaseDecoder = resolve;
+  });
+  const decoderStarted = new Promise<void>((resolve) => {
+    reportDecoderStarted = resolve;
+  });
+  let stillOwned = true;
+  const replacement = replaceThumbnailWithNewImage(
+    thumbnailPath,
+    incomingImagePath,
+    90,
+    async () => {
+      reportDecoderStarted();
+      await decoderGate;
+      return jpegData;
+    },
+    () => stillOwned,
+  );
+
+  await decoderStarted;
+  stillOwned = false;
+  releaseDecoder();
+
+  assert.equal(await replacement, false);
+  assert.equal(fs.existsSync(thumbnailPath), false);
+});
+
 test('background extraction cannot publish over a custom thumbnail already in progress', async () => {
   const directory = createTemporaryDirectory();
   const pngPath = path.join(directory, 'custom request.png');
@@ -808,14 +1070,18 @@ test('reports explicit success and failure from the full extraction workflow', a
     '-loglevel', 'error',
     '-f', 'lavfi',
     '-i', 'testsrc=size=160x90:rate=5:duration=6',
+    '-f', 'lavfi',
+    '-i', 'sine=frequency=1000:duration=6',
+    '-shortest',
     '-c:v', 'libx264',
     '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac',
     '-y',
     mediaPath,
   ], 60_000);
   assert.equal(generation.status, 0, generation.stderr);
 
-  const extract = (fileName: string, hash: string): Promise<boolean> => {
+  const extract = (fileName: string, hash: string, clipSnippets = 0): Promise<boolean> => {
     return new Promise((resolve) => {
       extractAll(
         {
@@ -837,7 +1103,7 @@ test('reports explicit success and failure from the full extraction workflow', a
         {
           clipHeight: 144,
           clipSnippetLength: 1,
-          clipSnippets: 0,
+          clipSnippets,
           fixed: true,
           height: 144,
           n: 3,
@@ -850,5 +1116,8 @@ test('reports explicit success and failure from the full extraction workflow', a
   assert.equal(await extract(path.basename(mediaPath), 'successful-callback'), true);
   assert.ok(fs.statSync(path.join(screenshotFolder, 'thumbnails', 'successful-callback.jpg')).size > 0);
   assert.ok(fs.statSync(path.join(screenshotFolder, 'filmstrips', 'successful-callback.jpg')).size > 0);
+  assert.equal(await extract(path.basename(mediaPath), 'successful-clip-callback', 1), true);
+  assert.ok(fs.statSync(path.join(screenshotFolder, 'clips', 'successful-clip-callback.mp4')).size > 0);
+  assert.ok(fs.statSync(path.join(screenshotFolder, 'clips', 'successful-clip-callback.jpg')).size > 0);
   assert.equal(await extract('missing.mp4', 'failed-callback'), false);
 });

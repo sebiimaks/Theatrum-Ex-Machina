@@ -104,7 +104,7 @@ test('keeps setting actions, toolbar visibility, and Main Settings controls wire
   assert.match(template, /\(toggleButton\)="toggleButton\.emit\(\$event\)"/);
   assert.match(template, /\(click\)="toggleHideButton\.emit\(buttonKey\)"/);
   assert.match(template, /\(click\)="chooseDefaultVideoPlayer\.emit\(\)"/);
-  assert.match(template, /\[\(ngModel\)\]="appState\.videoPlayerArgs"/);
+  assert.doesNotMatch(template, /\[\(ngModel\)\]="appState\.videoPlayerArgs"/);
   assert.match(template, /\[\(ngModel\)\]="additionalInput"/);
   assert.match(template, /\(click\)="decreaseZoomLevel\.emit\(\)"/);
   assert.match(template, /\(click\)="resetZoomLevel\.emit\(\)"/);

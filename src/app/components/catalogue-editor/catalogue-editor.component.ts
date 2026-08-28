@@ -611,7 +611,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       this.hashCopiedIndex = item.index;
     } catch {
       try {
-        window.require('electron').clipboard.writeText(hash);
+        this.electronService.copyText(hash);
         this.hashCopiedIndex = item.index;
       } catch {
         this.hashCopyFailedIndex = item.index;

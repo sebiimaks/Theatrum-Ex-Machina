@@ -53,6 +53,9 @@ const activeMediaProcesses = new Set<any>();
 let mediaProcessCancellationGeneration = 0;
 const generatedImageVersions = new Map<string, number>();
 const imagePublicationLocks = new Map<string, Promise<void>>();
+const previewCleanupBlockCounts = new Map<string, number>();
+const previewPublicationEpochs = new Map<string, number>();
+let nextPreviewCleanupBarrierId = 1;
 let temporaryImageSequence = 0;
 
 import { ffmpegPath } from './media-tool-paths';
@@ -60,6 +63,7 @@ import { ffmpegPath } from './media-tool-paths';
 import { GLOBALS } from './main-globals';
 
 import type { ImageElement, ScreenshotSettings } from '../interfaces/final-object.interface';
+import { resolveExistingMediaPath } from './local-operation-safety';
 
 
 // ========================================================================================
@@ -102,9 +106,74 @@ export type SystemThumbnailCreator = (
   height: number,
 ) => Promise<Buffer>;
 
+/**
+ * Resolves one generated-preview output immediately before extraction starts.
+ * The main process supplies this for catalogue work so every FFmpeg target is
+ * canonicalized beneath the active catalogue asset tree.
+ */
+export type PreviewOutputPathResolver = (candidatePath: string) => string;
+
+/**
+ * Returns false once the catalogue/session that started preview work is no
+ * longer current. Generated-preview work checks this before spawning FFmpeg
+ * and before publishing a candidate file.
+ */
+export type PreviewWorkGuard = () => boolean;
+
+export interface PreviewExtractionOptions {
+  canonicalMediaPath?: string;
+  shouldContinue?: PreviewWorkGuard;
+  spawnMediaProcess?: SpawnMediaProcess;
+}
+
+export interface PreviewCleanupBarrier {
+  readonly hashes: ReadonlySet<string>;
+  readonly id: number;
+}
+
+export function capturePreviewPublicationEpoch(hash: string): number {
+  return previewPublicationEpochs.get(hash) ?? 0;
+}
+
+export function previewPublicationIsAllowed(hash: string, epoch: number): boolean {
+  return capturePreviewPublicationEpoch(hash) === epoch
+    && (previewCleanupBlockCounts.get(hash) ?? 0) === 0;
+}
+
+export function beginPreviewCleanupBarrier(hashes: Iterable<string>): PreviewCleanupBarrier {
+  const validatedHashes = new Set<string>();
+  Array.from(hashes).forEach((hash: string) => {
+    if (!/^[a-zA-Z0-9_-]{1,200}$/.test(hash)) {
+      throw new Error('The preview cleanup identifier is invalid.');
+    }
+    validatedHashes.add(hash);
+  });
+  validatedHashes.forEach((hash: string) => {
+    previewPublicationEpochs.set(hash, capturePreviewPublicationEpoch(hash) + 1);
+    previewCleanupBlockCounts.set(hash, (previewCleanupBlockCounts.get(hash) ?? 0) + 1);
+  });
+  return {
+    hashes: validatedHashes,
+    id: nextPreviewCleanupBarrierId++,
+  };
+}
+
+export function finishPreviewCleanupBarrier(barrier: PreviewCleanupBarrier): void {
+  barrier.hashes.forEach((hash: string) => {
+    const count = previewCleanupBlockCounts.get(hash) ?? 0;
+    if (count <= 1) {
+      previewCleanupBlockCounts.delete(hash);
+    } else {
+      previewCleanupBlockCounts.set(hash, count - 1);
+    }
+  });
+}
+
 export interface ThumbnailRecoveryOptions {
   createSystemThumbnail?: SystemThumbnailCreator;
   generationVersion?: number | null;
+  shouldContinue?: PreviewWorkGuard;
+  spawnMediaProcess?: SpawnMediaProcess;
 }
 
 /**
@@ -378,24 +447,71 @@ export function extractAll(
   screenshotSettings: ScreenshotSettings,
   done: (success: boolean, error?: Error) => void,
   createSystemThumbnail?: SystemThumbnailCreator,
+  resolvePreviewOutputPath?: PreviewOutputPathResolver,
+  options: PreviewExtractionOptions = {},
 ): void {
+
+  const shouldContinue = options.shouldContinue ?? alwaysContinuePreviewWork;
+  const spawnMediaProcess: SpawnMediaProcess = options.spawnMediaProcess ?? spawn;
+  const assertPreviewWorkCurrent = (): void => {
+    if (!previewWorkIsCurrent(shouldContinue)) {
+      throw new Error('Preview extraction was cancelled.');
+    }
+  };
+
+  try {
+    assertPreviewWorkCurrent();
+  } catch (error) {
+    done(false, error instanceof Error ? error : new Error('Preview extraction was cancelled.'));
+    return;
+  }
 
   const clipHeight:       number = screenshotSettings.clipHeight;        // -- number in px how tall each clip should be
   const clipSnippets:     number = screenshotSettings.clipSnippets;      // -- number of clip snippets to extract; 0 == do not extract clip
   const screenshotHeight: number = screenshotSettings.height;            // -- number in px how tall each screenshot should be
   const snippetLength:    number = screenshotSettings.clipSnippetLength; // -- length of each snippet in the clip
 
-  const pathToVideo: string = path.join(videoFolderPath, currentElement.partialPath, currentElement.fileName);
-
   const duration:     number = currentElement.duration;
   const fileHash:     string = currentElement.hash;
   const numOfScreens: number = currentElement.screens;
   const sourceHeight: number = currentElement.height;
-
-  const thumbnailSavePath: string = path.normalize(screenshotFolder + '/thumbnails/' + fileHash + '.jpg');
-  const filmstripSavePath: string = path.normalize(screenshotFolder + '/filmstrips/' + fileHash + '.jpg');
-  const clipSavePath:      string = path.normalize(screenshotFolder + '/clips/' +      fileHash + '.mp4');
-  const clipThumbSavePath: string = path.normalize(screenshotFolder + '/clips/' +      fileHash + '.jpg');
+  let pathToVideo: string;
+  let thumbnailSavePath: string;
+  let filmstripSavePath: string;
+  let clipSavePath: string;
+  let clipThumbSavePath: string;
+  try {
+    assertPreviewWorkCurrent();
+    pathToVideo = options.canonicalMediaPath
+      ? fs.realpathSync.native(options.canonicalMediaPath)
+      : resolveExistingMediaPath(
+        videoFolderPath,
+        currentElement.partialPath,
+        currentElement.fileName,
+      );
+    if (!fs.statSync(pathToVideo).isFile()) {
+      throw new Error('The preview media path is not a file.');
+    }
+    if (!/^[a-zA-Z0-9_-]{1,200}$/.test(fileHash)) {
+      throw new Error('The preview item identifier is invalid.');
+    }
+    const resolveOutputPath = resolvePreviewOutputPath || ((candidatePath: string): string => candidatePath);
+    thumbnailSavePath = resolveOutputPath(
+      path.join(screenshotFolder, 'thumbnails', fileHash + '.jpg'),
+    );
+    filmstripSavePath = resolveOutputPath(
+      path.join(screenshotFolder, 'filmstrips', fileHash + '.jpg'),
+    );
+    clipSavePath = resolveOutputPath(
+      path.join(screenshotFolder, 'clips', fileHash + '.mp4'),
+    );
+    clipThumbSavePath = resolveOutputPath(
+      path.join(screenshotFolder, 'clips', fileHash + '.jpg'),
+    );
+  } catch (error) {
+    done(false, error instanceof Error ? error : new Error('The preview paths could not be validated.'));
+    return;
+  }
   const screenshotWidth: number = Math.round(screenshotHeight * (16 / 9));
   const thumbnailGenerationVersion = activeCustomImages.has(thumbnailSavePath)
     ? null
@@ -407,6 +523,7 @@ export function extractAll(
 
   checkFileExists(pathToVideo)                                                            // (1)
     .then((videoFileExists: boolean) => {
+      assertPreviewWorkCurrent();
       // console.log('01 - video file live = ' + videoFileExists);
 
       if (!videoFileExists) {
@@ -416,6 +533,7 @@ export function extractAll(
       }
     })
     .then((thumbExists: boolean) => {
+      assertPreviewWorkCurrent();
       // console.log('02 - thumbnail already present = ' + thumbExists);
 
       if (thumbExists) {
@@ -430,11 +548,14 @@ export function extractAll(
           {
             createSystemThumbnail,
             generationVersion: thumbnailGenerationVersion,
+            shouldContinue,
+            spawnMediaProcess,
           },
         );
       }
     })
     .then((thumbSuccess: boolean) => {
+      assertPreviewWorkCurrent();
       // console.log('03 - single screenshot now present = ' + thumbSuccess);
 
       if (!thumbSuccess) {
@@ -448,6 +569,7 @@ export function extractAll(
       }
     })
     .then((filmstripExists: boolean) => {
+      assertPreviewWorkCurrent();
       // console.log('04 - filmstrip already present = ' + filmstripExists);
 
       if (filmstripExists) {
@@ -461,10 +583,15 @@ export function extractAll(
           thumbnailSavePath,
           filmstripSavePath,
           maxRunTime.filmstrip,
+          {
+            shouldContinue,
+            spawnMediaProcess,
+          },
         );
       }
     })
     .then((filmstripSuccess: boolean) => {
+      assertPreviewWorkCurrent();
       // console.log('05 - filmstrip now present = ' + filmstripSuccess);
 
       if (!filmstripSuccess) {
@@ -476,21 +603,33 @@ export function extractAll(
       }
     })
     .then((clipExists: boolean) => {
+      assertPreviewWorkCurrent();
       // console.log('04 - preview clip already present = ' + clipExists);
 
       if (clipExists) {
         return true;
       } else {
 
-        const ffmpegArgs: string[] = generatePreviewClipArgs(
-          pathToVideo, duration, clipHeight, clipSnippets, snippetLength, clipSavePath
+        return generatePublishedPreviewFile(
+          clipSavePath,
+          maxRunTime.clip,
+          'clip',
+          (candidatePath: string) => generatePreviewClipArgs(
+            pathToVideo,
+            duration,
+            clipHeight,
+            clipSnippets,
+            snippetLength,
+            candidatePath,
+          ),
+          () => previewWorkIsCurrent(shouldContinue),
+          spawnMediaProcess,
         );
-
-        return spawn_ffmpeg_and_run(ffmpegArgs, maxRunTime.clip, 'clip');                 // (7)
       }
 
     })
     .then((clipGenerationSuccess: boolean) => {
+      assertPreviewWorkCurrent();
       // console.log('07 - preview clip now present = ' + clipGenerationSuccess);
 
       if (clipGenerationSuccess) {
@@ -500,17 +639,24 @@ export function extractAll(
       }
     })
     .then((clipThumbExists: boolean) => {
+      assertPreviewWorkCurrent();
       // console.log('05 - preview clip thumb already present = ' + clipThumbExists);
 
       if (clipThumbExists) {
         return true;
       } else {
-        const ffmpegArgs: string[] = extractFirstFrameArgs(clipSavePath, clipThumbSavePath);
-
-        return spawn_ffmpeg_and_run(ffmpegArgs, maxRunTime.clipThumb, 'clip thumb');      // (9)
+        return generatePublishedPreviewFile(
+          clipThumbSavePath,
+          maxRunTime.clipThumb,
+          'clip thumb',
+          (candidatePath: string) => extractFirstFrameArgs(clipSavePath, candidatePath),
+          () => previewWorkIsCurrent(shouldContinue),
+          spawnMediaProcess,
+        );
       }
     })
     .then((success: boolean) => {
+      assertPreviewWorkCurrent();
       // console.log('09 - preview clip thumb now exists = ' + success);
 
       if (success) {
@@ -524,7 +670,11 @@ export function extractAll(
     })
     .catch((err) => {
       if (err instanceof Error && err.message === 'USER DOES NOT WANT CLIPS') {
-        done(true);
+        if (previewWorkIsCurrent(shouldContinue)) {
+          done(true);
+        } else {
+          done(false, new Error('Preview extraction was cancelled.'));
+        }
       } else {
         if (GLOBALS.debug) {
           console.error('Preview extraction stopped:', err);
@@ -697,11 +847,25 @@ export async function isExpectedJpeg(
   }
 }
 
+const alwaysContinuePreviewWork: PreviewWorkGuard = (): boolean => true;
+
+function previewWorkIsCurrent(shouldContinue: PreviewWorkGuard | undefined): boolean {
+  try {
+    return (shouldContinue ?? alwaysContinuePreviewWork)();
+  } catch {
+    return false;
+  }
+}
+
 function createTemporaryImagePath(finalPath: string): string {
   temporaryImageSequence++;
+  const extension = path.extname(finalPath);
+  if (!extension) {
+    throw new Error('A generated preview file must have an extension.');
+  }
   return path.join(
     path.dirname(finalPath),
-    `.${path.basename(finalPath)}.${process.pid}-${Date.now()}-${temporaryImageSequence}.tmp.jpg`,
+    `.${path.basename(finalPath)}.${process.pid}-${Date.now()}-${temporaryImageSequence}.tmp${extension}`,
   );
 }
 
@@ -710,7 +874,7 @@ async function removeFileIfPresent(filePath: string): Promise<void> {
     await fs.promises.unlink(filePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && GLOBALS.debug) {
-      console.error('Unable to remove incomplete preview image:', filePath, error);
+      console.error('Unable to remove incomplete preview file:', filePath, error);
     }
   }
 }
@@ -781,16 +945,24 @@ async function generateValidatedJpeg(
   buildArgs: (candidatePath: string) => string[],
   canPublish: () => boolean = () => true,
   preserveValidDestination = false,
+  spawnMediaProcess: SpawnMediaProcess = spawn,
 ): Promise<boolean> {
   const candidatePath = createTemporaryImagePath(finalPath);
   let published = false;
 
   try {
+    if (!canPublish()) {
+      return false;
+    }
     const processResult = await spawn_ffmpeg_and_run_detailed(
       buildArgs(candidatePath),
       maxRunningTime,
       description,
+      spawnMediaProcess,
     );
+    if (!canPublish()) {
+      return false;
+    }
     const candidateIsValid = await isExpectedJpeg(candidatePath, expectedWidth, expectedHeight);
 
     if (!candidateIsValid || processResult.timedOut || processResult.processError) {
@@ -809,6 +981,69 @@ async function generateValidatedJpeg(
         && await isExpectedJpeg(finalPath, expectedWidth, expectedHeight)
       ) {
         return true;
+      }
+      await publishImage(candidatePath, finalPath);
+      published = true;
+      return true;
+    });
+  } catch (error) {
+    if (GLOBALS.debug) {
+      console.error(`${description} failed`, error);
+    }
+    return false;
+  } finally {
+    if (!published) {
+      await removeFileIfPresent(candidatePath);
+    }
+  }
+}
+
+async function generatedPreviewFileHasContent(filePath: string): Promise<boolean> {
+  try {
+    const fileStats = await fs.promises.stat(filePath);
+    return fileStats.isFile() && fileStats.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * FFmpeg writes clips and clip thumbnails to a same-directory candidate. The
+ * candidate is promoted atomically only while the starting catalogue session
+ * still owns the job, preventing cancellation from leaving a partial final.
+ */
+async function generatePublishedPreviewFile(
+  finalPath: string,
+  maxRunningTime: number,
+  description: string,
+  buildArgs: (candidatePath: string) => string[],
+  canPublish: () => boolean,
+  spawnMediaProcess: SpawnMediaProcess = spawn,
+): Promise<boolean> {
+  const candidatePath = createTemporaryImagePath(finalPath);
+  let published = false;
+
+  try {
+    if (!canPublish()) {
+      return false;
+    }
+    const processSucceeded = await spawn_ffmpeg_and_run(
+      buildArgs(candidatePath),
+      maxRunningTime,
+      description,
+      spawnMediaProcess,
+    );
+    if (
+      !processSucceeded
+      || !canPublish()
+      || !await generatedPreviewFileHasContent(candidatePath)
+    ) {
+      return false;
+    }
+
+    return await withImagePublicationLock(finalPath, async () => {
+      if (!canPublish()) {
+        return false;
       }
       await publishImage(candidatePath, finalPath);
       published = true;
@@ -869,6 +1104,7 @@ async function extractSystemThumbnail(
   savePath: string,
   createSystemThumbnail: SystemThumbnailCreator,
   canPublish: () => boolean,
+  spawnMediaProcess: SpawnMediaProcess = spawn,
 ): Promise<boolean> {
   const expectedWidth = Math.round(screenshotHeight * (16 / 9));
   let temporaryDirectory: string | undefined;
@@ -905,6 +1141,7 @@ async function extractSystemThumbnail(
       ],
       canPublish,
       true,
+      spawnMediaProcess,
     );
   } catch (error) {
     if (GLOBALS.debug) {
@@ -933,18 +1170,31 @@ export async function extractThumbnailWithRecovery(
   options: ThumbnailRecoveryOptions = {},
 ): Promise<boolean> {
   const expectedWidth = Math.round(screenshotHeight * (16 / 9));
+  const shouldContinue = options.shouldContinue ?? alwaysContinuePreviewWork;
+  const extractionStillCurrent = (): boolean => previewWorkIsCurrent(shouldContinue);
   const generationVersion = options.generationVersion === undefined
     ? currentGeneratedImageVersion(savePath)
     : options.generationVersion;
   const canPublish = (): boolean => {
-    return generationVersion !== null
+    return extractionStillCurrent()
+      && generationVersion !== null
       && currentGeneratedImageVersion(savePath) === generationVersion
       && !activeCustomImages.has(savePath);
   };
-
-  if (!canPublish()) {
+  const waitForCurrentCustomImage = async (): Promise<boolean> => {
+    if (!extractionStillCurrent()) {
+      return false;
+    }
     await waitForActiveCustomImage(savePath);
-    return isExpectedJpeg(savePath, expectedWidth, screenshotHeight);
+    return extractionStillCurrent()
+      && await isExpectedJpeg(savePath, expectedWidth, screenshotHeight);
+  };
+
+  if (!extractionStillCurrent()) {
+    return false;
+  }
+  if (!canPublish()) {
+    return waitForCurrentCustomImage();
   }
 
   const normalSucceeded = await generateValidatedJpeg(
@@ -961,13 +1211,16 @@ export async function extractThumbnailWithRecovery(
     ),
     canPublish,
     true,
+    options.spawnMediaProcess,
   );
   if (normalSucceeded) {
     return true;
   }
+  if (!extractionStillCurrent()) {
+    return false;
+  }
   if (!canPublish()) {
-    await waitForActiveCustomImage(savePath);
-    return isExpectedJpeg(savePath, expectedWidth, screenshotHeight);
+    return waitForCurrentCustomImage();
   }
 
   const recoveryDeadline = Date.now() + THUMBNAIL_RECOVERY_BUDGET_MS;
@@ -975,7 +1228,7 @@ export async function extractThumbnailWithRecovery(
 
   for (let index = 0; index < attempts.length; index++) {
     const remainingRecoveryTime = recoveryDeadline - Date.now();
-    if (remainingRecoveryTime <= 0 || !canPublish()) {
+    if (remainingRecoveryTime <= 0 || !extractionStillCurrent() || !canPublish()) {
       break;
     }
     const attempt = attempts[index];
@@ -994,6 +1247,7 @@ export async function extractThumbnailWithRecovery(
       ),
       canPublish,
       true,
+      options.spawnMediaProcess,
     );
     if (recovered) {
       return true;
@@ -1015,6 +1269,7 @@ export async function extractThumbnailWithRecovery(
           ),
           canPublish,
           true,
+          options.spawnMediaProcess,
         );
         if (concealedFrameRecovered) {
           return true;
@@ -1023,9 +1278,11 @@ export async function extractThumbnailWithRecovery(
     }
   }
 
+  if (!extractionStillCurrent()) {
+    return false;
+  }
   if (!canPublish()) {
-    await waitForActiveCustomImage(savePath);
-    return isExpectedJpeg(savePath, expectedWidth, screenshotHeight);
+    return waitForCurrentCustomImage();
   }
   if (options.createSystemThumbnail) {
     const systemThumbnailRecovered = await extractSystemThumbnail(
@@ -1034,13 +1291,13 @@ export async function extractThumbnailWithRecovery(
       savePath,
       options.createSystemThumbnail,
       canPublish,
+      options.spawnMediaProcess,
     );
     if (systemThumbnailRecovered) {
       return true;
     }
     if (!canPublish()) {
-      await waitForActiveCustomImage(savePath);
-      return isExpectedJpeg(savePath, expectedWidth, screenshotHeight);
+      return waitForCurrentCustomImage();
     }
   }
   return false;
@@ -1127,20 +1384,26 @@ export async function extractFilmstripWithRecovery(
   thumbnailPath: string,
   savePath: string,
   maxRunningTime: number,
+  options: PreviewExtractionOptions = {},
 ): Promise<boolean> {
   if (!Number.isInteger(numberOfScreenshots) || numberOfScreenshots <= 0) {
     return false;
   }
 
+  const shouldContinue = options.shouldContinue ?? alwaysContinuePreviewWork;
+  const cancellationGeneration = mediaProcessCancellationGeneration;
+  const extractionStillCurrent = (): boolean => (
+    cancellationGeneration === mediaProcessCancellationGeneration
+    && previewWorkIsCurrent(shouldContinue)
+  );
+  if (!extractionStillCurrent()) {
+    return false;
+  }
   const safeDuration = Number.isFinite(duration) ? Math.max(0, duration) : 0;
   const frameWidth = Math.round(screenshotHeight * (16 / 9));
   const stripWidth = frameWidth * numberOfScreenshots;
 
   const recoveryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'vha-filmstrip-recovery-'));
-  const cancellationGeneration = mediaProcessCancellationGeneration;
-  const extractionStillCurrent = (): boolean => (
-    cancellationGeneration === mediaProcessCancellationGeneration
-  );
   const recoveredFrames = new Map<number, string>();
   const step = safeDuration / (numberOfScreenshots + 1);
   const thumbnailIndex = Math.max(
@@ -1158,6 +1421,9 @@ export async function extractFilmstripWithRecovery(
   );
 
   try {
+    if (!extractionStillCurrent()) {
+      return false;
+    }
     const indexesToRecover = selectRecoveryFrameIndexes(numberOfScreenshots)
       .filter((index: number) => index !== thumbnailIndex);
 
@@ -1186,6 +1452,9 @@ export async function extractFilmstripWithRecovery(
             candidatePath,
             'fast',
           ),
+          extractionStillCurrent,
+          false,
+          options.spawnMediaProcess,
         );
         if (recovered && extractionStillCurrent()) {
           recoveredFrames.set(frameIndex, recoveredPath);
@@ -1214,6 +1483,9 @@ export async function extractFilmstripWithRecovery(
       remainingAssemblyTime,
       'filmstrip assembly',
       (candidatePath: string) => stackRecoveredFramesArgs(framePaths, candidatePath),
+      extractionStillCurrent,
+      false,
+      options.spawnMediaProcess,
     );
   } finally {
     try {
@@ -1239,6 +1511,7 @@ export async function replaceThumbnailWithNewImage(
   newFile: string,
   height: number,
   convertPngToJpeg?: (imagePath: string) => Buffer | Promise<Buffer>,
+  stillOwned: () => boolean = () => true,
 ): Promise<boolean> {
 
   console.log('Resizing new image and replacing old thumbnail');
@@ -1248,7 +1521,10 @@ export async function replaceThumbnailWithNewImage(
   let temporaryDirectory: string | undefined;
   invalidateGeneratedImage(oldFile);
   const replacementVersion = currentGeneratedImageVersion(oldFile);
-  const canPublish = (): boolean => currentGeneratedImageVersion(oldFile) === replacementVersion;
+  const canPublish = (): boolean => (
+    currentGeneratedImageVersion(oldFile) === replacementVersion
+    && stillOwned()
+  );
   let releaseCustomImage: () => void = () => undefined;
   const activeCustomImage: ActiveCustomImage = {
     release: () => releaseCustomImage(),
@@ -1324,7 +1600,7 @@ function scaleAndPadString(width: number, height: number): string {
  * @param maxRunningTime  maximum time to run ffmpeg
  * @param description     log for console.log
  */
-type SpawnMediaProcess = (
+export type SpawnMediaProcess = (
   executablePath: string,
   args: string[],
   options: { windowsHide: boolean },

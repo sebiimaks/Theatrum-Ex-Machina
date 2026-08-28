@@ -243,7 +243,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   // App state to save -- so it can be exported and saved when closing the app
   appState = AppState;
 
-  macVersion = window.process?.platform === 'darwin' || GLOBALS.macVersion;
+  macVersion = GLOBALS.macVersion;
   versionNumber = GLOBALS.version;
 
   vhaFileHistory: HistoryItem[] = [];
@@ -421,6 +421,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   currentClickedItemName = '';
   currentPlayingFolder = '';
   fullPathToCurrentFile = '';
+  currentMediaOperationItem: ImageElement | null = null;
 
   catalogueEditorOpen = false;
   catalogueEditorSaveStatus = '';
@@ -571,7 +572,9 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     public translate: TranslateService,
     public wordFrequencyService: WordFrequencyService,
     public zone: NgZone,
-  ) { }
+  ) {
+    this.macVersion = this.electronService.platform === 'darwin' || GLOBALS.macVersion;
+  }
 
   ngOnInit() {
     this.translate.setDefaultLang('en');
@@ -809,6 +812,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.electronService.ipcRenderer.on('preferred-video-player-returning', (event, filePath) => {
 
       this.appState.preferredVideoPlayer = filePath;
+      this.appState.videoPlayerArgs = '';
 
       // Hardcode for MAC & VLC
       if (this.macVersion && this.appState.preferredVideoPlayer.toLowerCase().includes('vlc')) {
@@ -1570,7 +1574,9 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
   private normalizePhysicalPathKey(value: string): string {
     const resolvedPath = path.normalize(value);
-    return process.platform === 'win32' ? resolvedPath.toLocaleLowerCase('en-US') : resolvedPath;
+    return this.electronService.platform === 'win32'
+      ? resolvedPath.toLocaleLowerCase('en-US')
+      : resolvedPath;
   }
 
   // =======================================================================================================================================
@@ -1641,9 +1647,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       this.modalService.openSnackbar(this.translate.instant('SETTINGS.rootFolderNotLive'));
       return;
     }
-    const fullPath = this.filePathService.getPathFromImageElement(projectedItem);
-    const imgPath = path.join(this.appState.selectedOutputFolder, 'vha-' + this.appState.hubName, 'thumbnails', item.hash + '.jpg');
-    this.electronService.ipcRenderer.send('drag-video-out-of-electron', fullPath, imgPath);
+    this.electronService.ipcRenderer.send('drag-video-out-of-electron', projectedItem);
   }
 
   /**
@@ -2520,20 +2524,24 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
     this.currentPlayingFolder = location.partialPath;
     this.currentClickedItemName = item.cleanName;
+    const projectedItem = this.filePathService.projectToAvailableImageLocation(item);
+    if (!projectedItem) {
+      this.modalService.openSnackbar(this.translate.instant('SETTINGS.rootFolderNotLive'));
+      return;
+    }
     const fullPath = this.filePathService.getPathFromImageLocation(location);
     this.fullPathToCurrentFile = fullPath;
+    this.currentMediaOperationItem = projectedItem;
 
     if (this.appState.preferredVideoPlayer) {
       const time: number = clickedThumbnailIndex
         ? item.duration / (item.screens + 1) * ((clickedThumbnailIndex) + 1)
         : 0;
 
-      const execPath: string = this.appState.preferredVideoPlayer;
-
-      const finalArgs = `${this.getVideoPlayerArgs(execPath, time)} ${this.appState.videoPlayerArgs}`;
-      this.electronService.ipcRenderer.send('open-media-file-at-timestamp', execPath, fullPath, finalArgs);
+      const timestamp = this.settingsButtons['openAtTimestamp'].toggled ? time : 0;
+      this.electronService.ipcRenderer.send('open-media-file-at-timestamp', projectedItem, timestamp);
     } else {
-      this.electronService.ipcRenderer.send('open-media-file', fullPath);
+      this.electronService.ipcRenderer.send('open-media-file', projectedItem);
     }
   }
 
@@ -2547,35 +2555,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
     this.fullPathToCurrentFile = this.filePathService.getPathFromImageLocation(location);
+    this.currentMediaOperationItem = this.filePathService.projectToAvailableImageLocation(
+      this.currentRightClickedItem,
+    ) || null;
     this.openInExplorer();
-  }
-
-  /**
-   * Determine the required arguments to open video player at particular time
-   * @param playerPath  full path to user's preferred video player
-   * @param time        time in seconds
-   */
-  public getVideoPlayerArgs(playerPath: string, time: number): string {
-    // if user doesn't want to open at timestamp, don't!
-    let args = '';
-
-    if (this.settingsButtons['openAtTimestamp'].toggled) {
-      if (playerPath.toLowerCase().includes('vlc')) {
-        args = '--start-time=' + time.toString();    // in seconds
-
-      } else if (playerPath.toLowerCase().includes('mpc')) {
-        args = '/start ' + (1000 * time).toString(); // in milliseconds
-
-      } else if (playerPath.toLowerCase().includes('pot')) {
-        args = '/seek=' + time.toString();           // in seconds
-
-      } else if (playerPath.toLowerCase().includes('mpv')) {
-        args = '--start=' + time.toString();          // in seconds
-
-      }
-    }
-
-    return args;
   }
 
   public increaseZoomLevel(): void {
@@ -2807,7 +2790,9 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * Open folder that contains the (current) clicked file
    */
   openInExplorer(): void {
-    this.electronService.ipcRenderer.send('open-in-explorer', this.fullPathToCurrentFile);
+    if (this.currentMediaOperationItem) {
+      this.electronService.ipcRenderer.send('open-in-explorer', this.currentMediaOperationItem);
+    }
   }
 
   /**
@@ -3134,7 +3119,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       }
       this.toggleButtonOpposite('showTags');
     } else if (uniqueKey === 'playPlaylist') {
-      const execPath: string = this.appState.preferredVideoPlayer;
       const availablePlaylist = this.pipeSideEffectService.galleryShowing
         .map((item: ImageElement): ImageElement | undefined => {
           try {
@@ -3147,8 +3131,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       this.electronService.ipcRenderer.send(
         'please-create-playlist',
         availablePlaylist,
-        this.sourceFolderService.selectedSourceFolder,
-        execPath
       );
     } else if (uniqueKey === 'sortOrder') {
       this.toggleButtonOpposite(uniqueKey);
@@ -4279,8 +4261,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         this.modalService.openSnackbar(this.translate.instant('SETTINGS.rootFolderNotLive'));
         return;
       }
-      const base = this.sourceFolderService.selectedSourceFolder[projectedItem.inputSource].path;
-      this.electronService.ipcRenderer.send('delete-video-file', base, projectedItem, dangerously);
+      this.electronService.ipcRenderer.send('delete-video-file', projectedItem, dangerously);
     });
   }
 

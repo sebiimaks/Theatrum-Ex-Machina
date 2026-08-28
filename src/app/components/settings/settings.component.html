@@ -86,20 +86,6 @@
               }
               </div>
             </div>
-
-          @if (appState.preferredVideoPlayer) {
-            <label
-              class="settings-ledger__detail-row settings-ledger__detail-row--input"
-              [ngStyle]="{ opacity: appState.videoPlayerArgs ? 1 : '0.7' }"
-            >
-              <span class="settings-ledger__detail-label">{{ 'SETTINGS.playerArgs' | translate }}</span>
-              <input
-                class="filter-general input-filter player-args-input"
-                [(ngModel)]="appState.videoPlayerArgs"
-                type="text"
-              >
-            </label>
-          }
           }
             </div>
           </div>

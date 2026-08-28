@@ -26,7 +26,7 @@ export interface KnownLocationAttachmentResult {
 /** Compare physical paths consistently without treating name prefixes as matches. */
 export function physicalMediaPathKey(value: string): string {
   const normalized = path.normalize(path.resolve(value));
-  return process.platform === 'win32'
+  return typeof process !== 'undefined' && process.platform === 'win32'
     ? normalized.toLocaleLowerCase('en-US')
     : normalized;
 }

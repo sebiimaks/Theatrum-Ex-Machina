@@ -32,3 +32,113 @@ export const acceptableFiles = [
   'webm',
   'wmv'
 ];
+
+/**
+ * Custom media extensions are user-configurable, but an untrusted renderer
+ * must never be able to turn a media-open request into an OS launcher.
+ */
+const blockedCustomMediaExtensions = new Set([
+  'action',
+  'app',
+  'appinstaller',
+  'appimage',
+  'appx',
+  'appxbundle',
+  'applescript',
+  'apk',
+  'bash',
+  'bat',
+  'bin',
+  'chm',
+  'cjs',
+  'cmd',
+  'com',
+  'command',
+  'cpl',
+  'csh',
+  'deb',
+  'desktop',
+  'dmg',
+  'dll',
+  'dylib',
+  'elf',
+  'exe',
+  'fish',
+  'hta',
+  'inf',
+  'inetloc',
+  'iso',
+  'jar',
+  'js',
+  'jse',
+  'ksh',
+  'lnk',
+  'mjs',
+  'mobileconfig',
+  'msh',
+  'msh1',
+  'msh1xml',
+  'msh2',
+  'msh2xml',
+  'mshxml',
+  'msc',
+  'msix',
+  'msixbundle',
+  'msi',
+  'msp',
+  'mst',
+  'pkg',
+  'pl',
+  'pif',
+  'profile',
+  'ps1',
+  'psc1',
+  'psc2',
+  'psd1',
+  'psm1',
+  'py',
+  'pyw',
+  'rb',
+  'reg',
+  'rpm',
+  'run',
+  'scf',
+  'scpt',
+  'scptd',
+  'scr',
+  'sct',
+  'sh',
+  'so',
+  'tcsh',
+  'terminal',
+  'tool',
+  'url',
+  'vbe',
+  'vbs',
+  'webloc',
+  'workflow',
+  'wsf',
+  'wsh',
+  'zsh',
+  'application',
+  'gadget',
+  'xbap',
+]);
+
+export function configuredMediaFileExtensions(additionalExtensions: unknown): string[] {
+  const customExtensions = Array.isArray(additionalExtensions) ? additionalExtensions : [];
+  return Array.from(new Set(
+    [...acceptableFiles, ...customExtensions]
+      .filter((value: unknown): value is string => (
+        typeof value === 'string' && /^[a-zA-Z0-9]{1,16}$/.test(value)
+      ))
+      .map((value: string) => value.toLocaleLowerCase('en-US'))
+      .filter((value: string) => !blockedCustomMediaExtensions.has(value)),
+  ));
+}
+
+/** Only built-in media types may be delegated to the operating-system default association. */
+export function isDefaultOpenMediaExtension(extension: unknown): boolean {
+  return typeof extension === 'string'
+    && acceptableFiles.includes(extension.replace(/^\./, '').toLocaleLowerCase('en-US'));
+}

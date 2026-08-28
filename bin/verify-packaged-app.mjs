@@ -229,6 +229,7 @@ assert.equal(
 );
 const appOwnedTextFiles = archivedFiles.filter((entry) => (
   entry === '/main.js'
+  || entry === '/preload.js'
   || entry.startsWith('/node/')
   || entry.startsWith('/interfaces/')
   || entry.startsWith('/dist/')
@@ -269,6 +270,10 @@ for (const themedAsset of [
 assert.ok(
   archivedFiles.includes('/node/media-tool-paths.js'),
   'The packaged app is missing its fork-owned media-tool resolver.',
+);
+assert.ok(
+  archivedFileSet.has('/preload.js'),
+  'The packaged application is missing its context-isolation preload bridge.',
 );
 for (const packagePath of collectRuntimePackagePaths(packageLock)) {
   const requiredRuntimeFile = `/${packagePath}/package.json`;

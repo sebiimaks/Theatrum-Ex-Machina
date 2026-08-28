@@ -28,7 +28,11 @@ import {
 import { shouldStartSourceOnCatalogueSetup } from '../interfaces/folder-scan-startup';
 import { startFileSystemWatching, resetWatchers } from './main-extract-async';
 import { writeVhaJsonAtomically } from './vha-file-persistence';
-import { buildFfprobeArguments } from './local-operation-safety';
+import {
+  buildFfprobeArguments,
+  isUsablePersistedSourcePath,
+  requireAuthorizedSourceRoot,
+} from './local-operation-safety';
 import { getFfprobeTimeoutMs } from './media-import-resilience';
 import { calculateScreenshotCount } from './thumbnail-count';
 
@@ -313,10 +317,26 @@ function stripOutTemporaryFields(imagesArray: ImageElement[]): ImageElement[] {
 /**
  * Format .pls file and write to hard drive
  * @param savePath -- location to save the temp.pls file
- * @param playlist -- array of ImageElements
+ * @param playlist -- main-resolved canonical media paths and display names
  * @param done     -- callback
  */
-export function createDotPlsFile(savePath: string, playlist: ImageElement[], sourceFolderMap: InputSources, done): void {
+export function createDotPlsFile(
+  savePath: string,
+  playlist: { cleanName: string; fullPath: string }[],
+  done: (error?: Error) => void,
+): void {
+
+  if (playlist.some(entry => (
+    !entry
+    || typeof entry.cleanName !== 'string'
+    || typeof entry.fullPath !== 'string'
+    || !path.isAbsolute(entry.fullPath)
+    || /[\0\r\n]/.test(entry.fullPath)
+    || /[\0\r\n]/.test(entry.cleanName)
+  ))) {
+    done(new Error('The playlist contains an invalid media entry.'));
+    return;
+  }
 
   const writeArray: string[] = [];
 
@@ -325,13 +345,7 @@ export function createDotPlsFile(savePath: string, playlist: ImageElement[], sou
 
   for (let i = 0; i < playlist.length; i++) {
 
-    const fullPath: string = path.join(
-      sourceFolderMap[playlist[i].inputSource].path,
-      playlist[i].partialPath,
-      playlist[i].fileName
-    );
-
-    writeArray.push('File' + (i + 1) + '=' + fullPath );
+    writeArray.push('File' + (i + 1) + '=' + playlist[i].fullPath );
     writeArray.push('Title' + (i + 1) + '=' + playlist[i].cleanName);
   }
 
@@ -339,7 +353,11 @@ export function createDotPlsFile(savePath: string, playlist: ImageElement[], sou
 
   const singleString: string = writeArray.join('\n');
 
-  fs.writeFile(savePath, singleString, 'utf8', done);
+  fs.writeFile(savePath, singleString, {
+    encoding: 'utf8',
+    flag: 'wx',
+    mode: 0o600,
+  }, done);
 }
 
 /**
@@ -678,6 +696,21 @@ export function setUpDirectoryWatchers(
 
     console.log(key, 'watch =', shouldWatch, ':', pathToDir);
 
+    if (!isUsablePersistedSourcePath(pathToDir)) {
+      console.warn('Skipping an invalid persisted source-folder path.');
+      return;
+    }
+    try {
+      requireAuthorizedSourceRoot(
+        pathToDir,
+        Array.from(GLOBALS.authorizedSourceFolderPaths),
+        GLOBALS.authorizedSourceFolderRealPaths,
+      );
+    } catch {
+      console.warn('Skipping a source folder that has not been authorized for this session.');
+      return;
+    }
+
     // check if directory connected
     // Reading is sufficient for catalogue scans and playback. A read-only
     // external or network volume should still be treated as connected.
@@ -689,6 +722,7 @@ export function setUpDirectoryWatchers(
         if (
           allowWatchingAndScanning
           && shouldStartSourceOnCatalogueSetup(shouldWatch, scanNonWatchingSources)
+          && (!shouldWatch || GLOBALS.authorizedSourceWatchPaths.has(pathToDir))
         ) {
 
           // Temp logging

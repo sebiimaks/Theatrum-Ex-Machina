@@ -2,8 +2,7 @@
 // see Video-Hub-App/pull/299
 // This code was once in `main.ts` but was moved to keep the `main.ts` file smaller
 
-import { TouchBar } from 'electron';
-const ipc = require('electron').ipcMain;
+import { app, TouchBar } from 'electron';
 import * as path from 'path';
 import { GLOBALS } from './main-globals';
 
@@ -12,7 +11,7 @@ import { AllSupportedViews, SupportedView } from '../interfaces/shared-interface
 // TODO -- deduplicate the imports code
 const codeRunningOnMac: boolean = process.platform === 'darwin';
 const args = process.argv.slice(1);
-const serve: boolean = args.some(val => val === '--serve');
+const serve: boolean = !app.isPackaged && args.some(val => val === '--serve');
 
 // =================================================================================================
 const nativeImage = require('electron').nativeImage;
@@ -28,21 +27,29 @@ let touchBar,
     segmentedViewControl,
     zoomSegmented;
 
-ipc.on('app-to-touchBar', (event, changesFromApp) => {
-  if (codeRunningOnMac) {
-    if (AllSupportedViews.includes(<SupportedView>changesFromApp)) {
-      segmentedViewControl.selectedIndex = AllSupportedViews.indexOf(changesFromApp);
-    } else if (changesFromApp === 'showFreq') {
-      segmentedFolderControl.selectedIndex = 0;
-    } else if (changesFromApp === 'showRecent') {
-      segmentedFolderControl.selectedIndex = 1;
-    } else if (changesFromApp === 'compactView') {
-      segmentedAnotherViewsControl.selectedIndex = 0;
-    } else if (changesFromApp === 'showMoreInfo') {
-      segmentedAnotherViewsControl.selectedIndex = 1;
-    }
+/**
+ * Synchronize the optional macOS Touch Bar after the main process has already
+ * verified that the update came from the active renderer. Keeping this as an
+ * ordinary function prevents the Touch Bar from creating an unchecked second
+ * IPC entry point.
+ */
+export function updateTouchBarFromApp(changesFromApp: unknown): void {
+  if (!codeRunningOnMac || typeof changesFromApp !== 'string') {
+    return;
   }
-});
+
+  if (AllSupportedViews.includes(<SupportedView>changesFromApp) && segmentedViewControl) {
+    segmentedViewControl.selectedIndex = AllSupportedViews.indexOf(<SupportedView>changesFromApp);
+  } else if (changesFromApp === 'showFreq' && segmentedFolderControl) {
+    segmentedFolderControl.selectedIndex = 0;
+  } else if (changesFromApp === 'showRecent' && segmentedFolderControl) {
+    segmentedFolderControl.selectedIndex = 1;
+  } else if (changesFromApp === 'compactView' && segmentedAnotherViewsControl) {
+    segmentedAnotherViewsControl.selectedIndex = 0;
+  } else if (changesFromApp === 'showMoreInfo' && segmentedAnotherViewsControl) {
+    segmentedAnotherViewsControl.selectedIndex = 1;
+  }
+}
 
 /**
  * Void function for creating touchBar for MAC OS X

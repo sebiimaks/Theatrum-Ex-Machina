@@ -8,6 +8,7 @@
   "files": [
     "dist/**/*",
     "main.js",
+    "preload.js",
     "node/**/*.js",
     "interfaces/**/*.js",
     "!node/server.js",

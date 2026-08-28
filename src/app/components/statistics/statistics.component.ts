@@ -535,7 +535,13 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
    * @param itemSourceKey from InputSources
    */
   tellNodeStartWatching(itemSourceKey: number, path: string, persistent: boolean) {
-    this.electronService.ipcRenderer.send('start-watching-folder', itemSourceKey, path, persistent);
+    this.electronService.ipcRenderer.send(
+      'start-watching-folder',
+      itemSourceKey,
+      path,
+      persistent,
+      this.appState().generatePreviewsOnFolderAddition,
+    );
   }
 
   trackByFn(index, item) {

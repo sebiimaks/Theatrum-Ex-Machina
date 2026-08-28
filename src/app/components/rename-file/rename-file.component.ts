@@ -77,8 +77,6 @@ export class RenameFileComponent implements OnInit, OnDestroy {
     this.nodeRenamingFile = true;
     this.renameErrMsg = '';
 
-    const sourceFolder: string = this.selectedSourceFolder();
-    const relativeFilePath: string = this.currentRightClickedItem().partialPath;
     const originalFile: string = this.currentRightClickedItem().fileName;
     const newFileName: string = this.renamingWIP + '.' + this.renamingExtension;
     // check if different first !!!
@@ -91,14 +89,9 @@ export class RenameFileComponent implements OnInit, OnDestroy {
     } else {
       // try renaming
 
-      console.log(this.selectedSourceFolder());
-      console.log(sourceFolder);
-
       this.electronService.ipcRenderer.send(
         'try-to-rename-this-file',
-        sourceFolder,
-        relativeFilePath,
-        originalFile,
+        this.currentRightClickedItem(),
         newFileName,
         this.currentRightClickedItem().index
       );

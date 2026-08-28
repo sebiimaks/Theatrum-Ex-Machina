@@ -197,7 +197,7 @@
                     value="{{ wizard.ssConstant }}"
                     min="3"
                     max="30"
-                    onKeyDown="event.preventDefault()"
+                    (keydown)="preventNumberInputKeyboard($event)"
                     [disabled]="wizard.selectedOutputFolder === ''
                       || wizard.selectedSourceFolder[0].path === ''
                       || wizard.futureHubName === ''
@@ -228,7 +228,7 @@
                     value="{{ wizard.ssVariable }}"
                     min="1"
                     max="20"
-                    onKeyDown="event.preventDefault()"
+                    (keydown)="preventNumberInputKeyboard($event)"
                     [disabled]="wizard.selectedOutputFolder === ''
                       || wizard.selectedSourceFolder[0].path === ''
                       || wizard.futureHubName === ''
@@ -314,7 +314,7 @@
                   value="5"
                   min="3"
                   max="15"
-                  onKeyDown="event.preventDefault()"
+                  (keydown)="preventNumberInputKeyboard($event)"
                   [disabled]="wizard.selectedOutputFolder === ''
                     || wizard.selectedSourceFolder[0].path === ''
                     || wizard.futureHubName === ''
@@ -333,7 +333,7 @@
                   value="1"
                   min="1"
                   max="5"
-                  onKeyDown="event.preventDefault()"
+                  (keydown)="preventNumberInputKeyboard($event)"
                   [disabled]="wizard.selectedOutputFolder === ''
                     || wizard.selectedSourceFolder[0].path === ''
                     || wizard.futureHubName === ''

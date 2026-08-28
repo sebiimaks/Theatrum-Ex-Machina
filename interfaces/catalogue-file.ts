@@ -6,6 +6,22 @@ export const SUPPORTED_CATALOGUE_FILE_EXTENSIONS = [
 ] as const;
 export const CATALOGUE_PICKER_EXTENSIONS = ['scaena', 'vha2', 'json'] as const;
 
+/**
+ * A new catalogue name becomes both a filename and a generated-assets folder
+ * name. Keep it to one ordinary path segment before the main process creates
+ * anything on disk.
+ */
+export function isSafeCatalogueHubName(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.trim().length > 0
+    && value.length <= 200
+    && value !== '.'
+    && value !== '..'
+    && !value.includes('\0')
+    && !value.includes('/')
+    && !value.includes('\\');
+}
+
 export function catalogueFileName(hubName: string): string {
   return `${hubName}${CATALOGUE_FILE_EXTENSION}`;
 }

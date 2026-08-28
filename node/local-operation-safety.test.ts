@@ -7,15 +7,51 @@ import { test } from 'node:test';
 import {
   buildFfprobeArguments,
   buildPlayerLaunch,
+  buildTimestampPlayerArguments,
+  disablePersistedSourceWatches,
   isAllowedExternalUrl,
+  isUsablePersistedSourcePath,
   normalizeAbsolutePath,
   parsePlayerArguments,
   requireConfiguredSourceRoot,
+  requireAuthorizedSourceRoot,
+  resolveAuthorizedSourceDirectory,
+  resolveExistingMediaPathWithinConfiguredRoots,
   resolveExistingSourceSubfolder,
   resolveExistingMediaPath,
   resolveMediaPath,
   resolveNewMediaPath,
+  reviewPersistedSourceAccessRequests,
 } from './local-operation-safety.ts';
+
+test('requires usable persisted source paths before connectivity checks', () => {
+  assert.equal(isUsablePersistedSourcePath('/Volumes/Videos'), true);
+  assert.equal(isUsablePersistedSourcePath('../Videos'), false);
+  assert.equal(isUsablePersistedSourcePath('/Volumes/Vid\0eos'), false);
+  assert.equal(isUsablePersistedSourcePath(''), false);
+});
+
+test('requires confirmation for ordinary persisted watches and disables unsafe roots', () => {
+  const inputDirs = {
+    0: { path: '/Volumes/Videos', watch: true },
+    1: { path: '/', watch: true },
+    2: { path: '../relative', watch: true },
+    3: { path: '/Volumes/Archive', watch: false },
+  };
+
+  const review = reviewPersistedSourceAccessRequests(inputDirs);
+  assert.equal(review.changed, true);
+  assert.deepEqual(review.requestedPaths, ['/Volumes/Videos', '/Volumes/Archive']);
+  assert.deepEqual(review.requestedSourceKeys, [0, 3]);
+  assert.deepEqual(review.watchSourceKeys, [0]);
+  assert.equal(inputDirs[1].watch, false);
+  assert.equal(inputDirs[2].watch, false);
+  assert.equal(inputDirs[3].watch, false);
+
+  assert.equal(disablePersistedSourceWatches(inputDirs, review.watchSourceKeys), true);
+  assert.equal(inputDirs[0].watch, false);
+  assert.equal(disablePersistedSourceWatches(inputDirs, review.watchSourceKeys), false);
+});
 
 test('allows ordinary HTTP and HTTPS links only', () => {
   assert.equal(isAllowedExternalUrl('https://github.com/sebiimaks/Theatrum-Ex-Machina'), true);
@@ -30,6 +66,19 @@ test('requires absolute paths without embedded NUL bytes', () => {
   assert.equal(normalizeAbsolutePath('/Volumes/Videos/test.mp4', 'Media file'), '/Volumes/Videos/test.mp4');
   assert.throws(() => normalizeAbsolutePath('../test.mp4', 'Media file'), /absolute path/);
   assert.throws(() => normalizeAbsolutePath('/Volumes/Videos/test\0.mp4', 'Media file'), /absolute path/);
+});
+
+test('rejects filesystem roots and symlinks to roots as media sources', () => {
+  assert.throws(() => resolveAuthorizedSourceDirectory(path.parse(process.cwd()).root), /filesystem root/);
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-source-root-'));
+  try {
+    const rootLink = path.join(temporaryDirectory, 'root-link');
+    fs.symlinkSync(path.parse(temporaryDirectory).root, rootLink, 'dir');
+    assert.throws(() => resolveAuthorizedSourceDirectory(rootLink), /filesystem root/);
+    assert.equal(resolveAuthorizedSourceDirectory(temporaryDirectory), temporaryDirectory);
+  } finally {
+    fs.rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
 });
 
 test('resolves catalogue paths within their source folder', () => {
@@ -64,6 +113,33 @@ test('authorizes destructive operations only for configured source roots', () =>
     () => requireConfiguredSourceRoot('/Volumes/Private', ['/Volumes/Videos']),
     /not part of the currently open catalogue/,
   );
+});
+
+test('revokes a source capability when a symlink target changes', () => {
+  const container = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-source-identity-'));
+  try {
+    const firstTarget = path.join(container, 'first');
+    const secondTarget = path.join(container, 'second');
+    const sourceLink = path.join(container, 'source');
+    fs.mkdirSync(firstTarget);
+    fs.mkdirSync(secondTarget);
+    fs.symlinkSync(firstTarget, sourceLink, 'dir');
+    const normalizedLink = path.normalize(sourceLink);
+    const identities = new Map([[normalizedLink, fs.realpathSync.native(sourceLink)]]);
+    assert.equal(
+      requireAuthorizedSourceRoot(normalizedLink, [normalizedLink], identities),
+      normalizedLink,
+    );
+
+    fs.unlinkSync(sourceLink);
+    fs.symlinkSync(secondTarget, sourceLink, 'dir');
+    assert.throws(
+      () => requireAuthorizedSourceRoot(normalizedLink, [normalizedLink], identities),
+      /identity has changed/,
+    );
+  } finally {
+    fs.rmSync(container, { force: true, recursive: true });
+  }
 });
 
 test('resolves only existing root-relative source subfolders', () => {
@@ -166,6 +242,36 @@ test('rejects existing files and rename destinations that escape through symlink
   }
 });
 
+test('accepts only existing media files beneath main-owned source roots', () => {
+  const rootDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-root-'));
+  const outsideDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-outside-'));
+  try {
+    const mediaDirectory = path.join(rootDirectory, 'media');
+    fs.mkdirSync(mediaDirectory);
+    const safeFile = path.join(mediaDirectory, 'safe.mp4');
+    const outsideFile = path.join(outsideDirectory, 'outside.mp4');
+    fs.writeFileSync(safeFile, 'safe');
+    fs.writeFileSync(outsideFile, 'outside');
+    fs.symlinkSync(outsideFile, path.join(mediaDirectory, 'linked-outside.mp4'));
+
+    assert.equal(
+      resolveExistingMediaPathWithinConfiguredRoots(safeFile, [rootDirectory]),
+      fs.realpathSync.native(safeFile),
+    );
+    assert.throws(
+      () => resolveExistingMediaPathWithinConfiguredRoots(outsideFile, [rootDirectory]),
+      /not within a configured source folder/,
+    );
+    assert.throws(
+      () => resolveExistingMediaPathWithinConfiguredRoots(path.join(mediaDirectory, 'linked-outside.mp4'), [rootDirectory]),
+      /not within a configured source folder/,
+    );
+  } finally {
+    fs.rmSync(rootDirectory, { force: true, recursive: true });
+    fs.rmSync(outsideDirectory, { force: true, recursive: true });
+  }
+});
+
 test('parses custom-player arguments without interpreting shell syntax', () => {
   assert.deepEqual(
     parsePlayerArguments('--start-time 90 --title "A quoted title"'),
@@ -177,6 +283,25 @@ test('parses custom-player arguments without interpreting shell syntax', () => {
   );
   assert.deepEqual(parsePlayerArguments('--empty ""'), ['--empty', '']);
   assert.throws(() => parsePlayerArguments('--title "unfinished'), /unmatched quote/);
+});
+
+test('derives timestamp arguments from the main-owned player and a bounded offset', () => {
+  assert.equal(
+    buildTimestampPlayerArguments('/Applications/VLC.app', 42.5),
+    '--start-time=42.5',
+  );
+  assert.equal(
+    buildTimestampPlayerArguments('/Applications/mpv.app', 10),
+    '--start=10',
+  );
+  assert.equal(
+    buildTimestampPlayerArguments('/Applications/VLC.app', 0),
+    '',
+  );
+  assert.equal(
+    buildTimestampPlayerArguments('/Applications/VLC.app', Number.POSITIVE_INFINITY),
+    '',
+  );
 });
 
 test('keeps a hostile-looking media filename as one player argument', () => {

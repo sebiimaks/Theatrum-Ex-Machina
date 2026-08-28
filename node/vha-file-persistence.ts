@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import type { FinalObject } from '../interfaces/final-object.interface';
+import { isSafeCatalogueHubName } from '../interfaces/catalogue-file';
 import { normalizeIgnoredSubdirectories } from '../interfaces/source-folder-path';
 import {
   imageLocationKey,
@@ -31,6 +32,8 @@ interface VhaFileCandidate {
 
 const writeQueues = new Map<string, Promise<unknown>>();
 let temporaryFileCounter = 0;
+export const CATALOGUE_FILE_MAX_BYTES = 256 * 1024 * 1024;
+const CATALOGUE_SOURCE_MAX_COUNT = 4096;
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
@@ -51,7 +54,7 @@ export function parseVhaJson(raw: string | Buffer): FinalObject {
   if (!isObject(parsed)) {
     throw new Error('The catalogue root must be a JSON object.');
   }
-  if (typeof parsed.hubName !== 'string') {
+  if (!isSafeCatalogueHubName(parsed.hubName)) {
     throw new Error('The catalogue does not contain a valid hub name.');
   }
   if (!Array.isArray(parsed.images)) {
@@ -112,6 +115,9 @@ export function parseVhaJson(raw: string | Buffer): FinalObject {
 
   if (hasCurrentInputDirectories) {
     const configuredSourceKeys = Object.keys(parsed.inputDirs);
+    if (configuredSourceKeys.length > CATALOGUE_SOURCE_MAX_COUNT) {
+      throw new Error('The catalogue contains too many video folder entries.');
+    }
     configuredSourceKeys.forEach((sourceKey: string) => {
       if (!/^(0|[1-9]\d*)$/.test(sourceKey) || !Number.isSafeInteger(Number(sourceKey))) {
         throw new Error('The catalogue contains an invalid video folder key.');
@@ -175,7 +181,34 @@ export function parseVhaJson(raw: string | Buffer): FinalObject {
 async function readCandidate(filePath: string): Promise<VhaFileCandidate> {
   let raw: string;
   try {
+    const stats = await fs.promises.stat(filePath);
+    if (!stats.isFile()) {
+      return {
+        error: new Error('The catalogue path is not a file.'),
+        failure: 'invalid',
+      };
+    }
+    if (stats.size > CATALOGUE_FILE_MAX_BYTES) {
+      return {
+        error: new Error('The catalogue file is larger than the 256 MB safety limit.'),
+        failure: 'invalid',
+      };
+    }
+  } catch (error) {
+    const fileError = error as NodeJS.ErrnoException;
+    return {
+      error: asError(error),
+      failure: fileError.code === 'ENOENT' ? 'missing' : 'unreadable',
+    };
+  }
+  try {
     raw = await fs.promises.readFile(filePath, 'utf8');
+    if (Buffer.byteLength(raw, 'utf8') > CATALOGUE_FILE_MAX_BYTES) {
+      return {
+        error: new Error('The catalogue file grew beyond the 256 MB safety limit while it was being read.'),
+        failure: 'invalid',
+      };
+    }
   } catch (error) {
     const fileError = error as NodeJS.ErrnoException;
     return {

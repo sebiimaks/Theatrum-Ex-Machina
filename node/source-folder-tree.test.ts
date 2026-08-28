@@ -8,6 +8,7 @@ import {
   normalizeSourceFolderRelativePath,
 } from '../interfaces/source-folder-tree';
 import {
+  compileIgnoredSubdirectories,
   configuredSourceRootsEqual,
   normalizeIgnoredSubdirectories,
   sourceFolderPathIsIgnored,
@@ -79,6 +80,30 @@ test('normalizes ignored subdirectories to minimal safe source-relative scopes',
   assert.throws(() => normalizeIgnoredSubdirectories('Camera'), /are invalid/);
   assert.throws(() => normalizeIgnoredSubdirectories(['/']), /root cannot be ignored/);
   assert.throws(() => normalizeIgnoredSubdirectories(['Camera/../Private']), /cannot leave/);
+  assert.throws(
+    () => normalizeIgnoredSubdirectories(Array.from({ length: 4097 }, (_value, index) => `Folder-${index}`)),
+    /too many ignored source subdirectories/,
+  );
+});
+
+test('compiled ignored scopes perform work proportional to folder depth', () => {
+  const compiled = compileIgnoredSubdirectories(
+    Array.from({ length: 4096 }, (_value, index) => `Folder-${index}`),
+  );
+  let membershipChecks = 0;
+  const countedScopeSet = {
+    has: (scope: string): boolean => {
+      membershipChecks++;
+      return compiled.scopeSet.has(scope);
+    },
+  } as ReadonlySet<string>;
+  const countedCompiled = { scopes: compiled.scopes, scopeSet: countedScopeSet };
+
+  assert.equal(sourceFolderPathIsIgnored('Folder-2048/Nested/Deep', countedCompiled), true);
+  assert.equal(membershipChecks, 1);
+  membershipChecks = 0;
+  assert.equal(sourceFolderPathIsIgnored('Missing/Nested/Deep', countedCompiled), false);
+  assert.equal(membershipChecks, 3);
 });
 
 test('builds a stable display-only tree with recursive video and thumbnail counts', () => {
