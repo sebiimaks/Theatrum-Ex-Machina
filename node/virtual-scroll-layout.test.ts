@@ -142,6 +142,6 @@ test('restored compact layout renders before measurement and stabilizes after ca
   );
   assert.match(
     finalObject,
-    /this\.cd\.detectChanges\(\);\s*this\.scheduleGalleryLayoutRefresh\(GALLERY_LAYOUT_TRANSITION_MS\);\s*this\.markRendererStartupComplete\(\)/,
+    /this\.cd\.detectChanges\(\);\s*this\.scheduleGalleryLayoutRefresh\(GALLERY_LAYOUT_TRANSITION_MS\);\s*this\.catalogueOpenCoordinator\.markRendererStartupComplete\(\)/,
   );
 });

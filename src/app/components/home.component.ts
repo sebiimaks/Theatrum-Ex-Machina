@@ -10,8 +10,12 @@ import { VirtualScrollerComponent } from '@iharbeck/ngx-virtual-scroller';
 
 // Services
 import { AutoTagsSaveService } from './tags-auto/tags-save.service';
+import { CatalogueOpenCoordinatorService } from '../services/catalogue-open-coordinator.service';
+import { CataloguePersistenceIpcService } from '../services/catalogue-persistence-ipc.service';
+import { CatalogueSessionDocumentService } from '../services/catalogue-session-document.service';
 import { ElectronService } from '../providers/electron.service';
 import { FilePathService } from './views/file-path.service';
+import { GalleryLayoutService } from '../services/gallery-layout.service';
 import { ImageElementService } from '../services/image-element.service';
 import { ManualTagsService } from './tags-manual/manual-tags.service';
 import { ModalService } from './modal/modal.service';
@@ -93,10 +97,9 @@ import {
 import type { SettingsButtonSavedProperties, SettingsObject } from '../../../interfaces/settings-object.interface';
 import type { SortType } from '../pipes/sorting.pipe';
 import type { WizardOptions } from '../../../interfaces/wizard-options.interface';
-import {
-  isLegacyCatalogueFilePath,
-  isSupportedCatalogueFilePath,
-} from '../../../interfaces/catalogue-file';
+import { isSupportedCatalogueFilePath } from '../../../interfaces/catalogue-file';
+import type { CatalogueAccessMode } from '../../../interfaces/catalogue-session';
+import type { LegacyCatalogueOpenChoice } from '../common/catalogue-open-coordinator';
 import type {
   HistoryItem,
   RenameFileResponse,
@@ -162,18 +165,10 @@ interface IndividualThumbnailRegenerationStatus {
   fileName: string;
 }
 
-type CatalogueAccessMode = 'read-only' | 'read-write';
-type LegacyCatalogueOpenChoice = 'duplicate-scaena' | 'read-only';
-
 interface Vha2ExportResult {
   error?: string;
   fileName?: string;
   status: 'cancelled' | 'error' | 'exported' | 'read-only';
-}
-
-interface CatalogueOpenRequest {
-  acknowledgeExternalRequest: boolean;
-  fullPath: string;
 }
 
 interface CatalogueLoadedFromBackupDetails {
@@ -267,7 +262,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   flickerReduceOverlay = true;
   isFirstRunEver = false;
   private hasResolvedInitialTheme = false;
-  private rendererStartupComplete = false;
 
   // Tag color picker state
   showTagColorPicker = false;
@@ -427,11 +421,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   catalogueEditorSaveStatus = '';
   catalogueEditorSaving = false;
   catalogueAccessMode: CatalogueAccessMode = 'read-write';
-  private backupNoticeOpen = false;
-  private catalogueOpenInFlight = false;
-  private catalogueOpenQueueScheduled = false;
-  private legacyOpenDialogPath: string | null = null;
-  private pendingCatalogueOpenRequests: CatalogueOpenRequest[] = [];
 
   get catalogueReadOnly(): boolean {
     return this.catalogueAccessMode === 'read-only';
@@ -558,9 +547,13 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
   constructor(
     public autoTagsSaveService: AutoTagsSaveService,
+    public catalogueOpenCoordinator: CatalogueOpenCoordinatorService,
+    public cataloguePersistenceIpc: CataloguePersistenceIpcService,
+    public catalogueSessionDocument: CatalogueSessionDocumentService,
     public cd: ChangeDetectorRef,
     public electronService: ElectronService,
     public filePathService: FilePathService,
+    public galleryLayoutService: GalleryLayoutService,
     public imageElementService: ImageElementService,
     public manualTagsService: ManualTagsService,
     public modalService: ModalService,
@@ -577,6 +570,45 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnInit() {
+    this.catalogueOpenCoordinator.connect({
+      canBeginOpen: () => !this.blockActionDuringFolderThumbnailRegeneration(),
+      chooseLegacyCatalogueOpen: (fullPath: string) => this.chooseLegacyCatalogueOpen(fullPath),
+      getCurrentCatalogueForSave: () => this.getFinalObjectForSaving(),
+    });
+    this.cataloguePersistenceIpc.connect({
+      closeCancelled: (): void => {
+        this.isClosing = false;
+        this.cd.detectChanges();
+      },
+      closeRequested: (): void => {
+        if (!this.isClosing) {
+          this.initiateClose();
+        }
+      },
+      closeSaveFailed: (errorMessage?: string): void => {
+        this.isClosing = false;
+        this.catalogueEditorSaving = false;
+        this.catalogueEditorSaveStatus = errorMessage ? 'Save failed: ' + errorMessage : 'Save failed';
+        this.cd.detectChanges();
+      },
+      saveFailed: (errorMessage?: string): void => {
+        this.catalogueEditorSaving = false;
+        this.catalogueEditorSaveStatus = errorMessage ? 'Save failed: ' + errorMessage : 'Save failed';
+        this.catalogueOpenCoordinator.finishOpen();
+        this.cd.detectChanges();
+      },
+      saveSucceeded: (): void => {
+        this.catalogueEditorSaving = false;
+        this.catalogueEditorSaveStatus = 'Saved';
+        this.imageElementService.finalArrayNeedsSaving = false;
+        this.autoTagsSaveService.restoreSavedTags(
+          this.autoTagsSaveService.getAddTags(),
+          this.autoTagsSaveService.getRemoveTags()
+        );
+        this.cd.detectChanges();
+      },
+    });
+
     this.translate.setDefaultLang('en');
     this.changeLanguage('en');
 
@@ -1208,8 +1240,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
       this.cd.detectChanges();
       this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
-      this.markRendererStartupComplete();
-      this.finishCatalogueOpenRequest();
+      this.catalogueOpenCoordinator.markRendererStartupComplete();
+      this.catalogueOpenCoordinator.finishOpen();
     });
 
     // If no previously saved settings exist, this gets sent over
@@ -1252,7 +1284,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         this.loadThisVhaFile(cataloguePathToOpen);
       } else {
         this.showOpeningWizard(false);
-        this.markRendererStartupComplete();
+        this.catalogueOpenCoordinator.markRendererStartupComplete();
       }
       if (settingsObject.shortcuts) {
         this.shortcutService.initializeFromSaved(settingsObject.shortcuts);
@@ -1264,15 +1296,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       // Can happen when no settings present
       // Can happen when trying to open a catalogue file that no longer exists
       this.showOpeningWizard(firstRun, failedPath);
-      this.markRendererStartupComplete();
-      this.finishCatalogueOpenRequest();
-    });
-
-    this.electronService.ipcRenderer.on('open-catalogue-from-system', (event, fullPath: string) => {
-      this.handleCatalogueOpenRequest({
-        acknowledgeExternalRequest: true,
-        fullPath,
-      });
+      this.catalogueOpenCoordinator.markRendererStartupComplete();
+      this.catalogueOpenCoordinator.finishOpen();
     });
 
     this.electronService.ipcRenderer.on('legacy-catalogue-duplicated', (event, fileName: string) => {
@@ -1298,18 +1323,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       });
     });
 
-    this.electronService.ipcRenderer.on('catalogue-open-request-finished', () => {
-      this.finishCatalogueOpenRequest();
-    });
-
-    // This happens when the computer is about to SHUT DOWN
-    // or user closed the app through taskbar or title bar
-    this.electronService.ipcRenderer.on('please-shut-down-ASAP', (event) => {
-      if (!this.isClosing) {
-        this.initiateClose();
-      }
-    });
-
     // gets called if `trash` successfully removed the file
     this.electronService.ipcRenderer.on('file-deleted', (event, element: ImageElement) => {
       // spot check it's the same element
@@ -1320,36 +1333,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         this.imageElementService.finalArrayNeedsSaving = true;
         this.cd.detectChanges();
       }
-    });
-
-    this.electronService.ipcRenderer.on('current-vha-file-saved', () => {
-      this.catalogueEditorSaving = false;
-      this.catalogueEditorSaveStatus = 'Saved';
-      this.imageElementService.finalArrayNeedsSaving = false;
-      this.autoTagsSaveService.restoreSavedTags(
-        this.autoTagsSaveService.getAddTags(),
-        this.autoTagsSaveService.getRemoveTags()
-      );
-      this.cd.detectChanges();
-    });
-
-    this.electronService.ipcRenderer.on('current-vha-file-save-failed', (event, errorMessage: string) => {
-      this.catalogueEditorSaving = false;
-      this.catalogueEditorSaveStatus = errorMessage ? 'Save failed: ' + errorMessage : 'Save failed';
-      this.finishCatalogueOpenRequest();
-      this.cd.detectChanges();
-    });
-
-    this.electronService.ipcRenderer.on('close-window-save-failed', (event, errorMessage: string) => {
-      this.isClosing = false;
-      this.catalogueEditorSaving = false;
-      this.catalogueEditorSaveStatus = errorMessage ? 'Save failed: ' + errorMessage : 'Save failed';
-      this.cd.detectChanges();
-    });
-
-    this.electronService.ipcRenderer.on('close-window-cancelled', () => {
-      this.isClosing = false;
-      this.cd.detectChanges();
     });
 
     // gets called for every element that node extracted metadata for (screenshots not yet extracted)
@@ -1628,6 +1611,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.catalogueOpenCoordinator.disconnect();
+    this.cataloguePersistenceIpc.disconnect();
     this.galleryResizeObserver?.disconnect();
     clearTimeout(this.galleryLayoutRefreshTimeout);
     if (this.galleryLayoutRefreshFrame !== undefined) {
@@ -2136,40 +2121,13 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   public loadThisVhaFile(fullPath: string): void {
-    this.handleCatalogueOpenRequest({
-      acknowledgeExternalRequest: false,
-      fullPath,
-    });
+    this.catalogueOpenCoordinator.requestOpen(fullPath);
   }
 
-  private handleCatalogueOpenRequest(request: CatalogueOpenRequest): void {
-    if (this.blockActionDuringFolderThumbnailRegeneration()) {
-      this.acknowledgeExternalCatalogueOpen(request);
-      return;
-    }
-
-    if (
-      this.catalogueOpenInFlight
-      || this.catalogueOpenQueueScheduled
-      || this.legacyOpenDialogPath !== null
-      || this.backupNoticeOpen
-    ) {
-      this.pendingCatalogueOpenRequests.push(request);
-      return;
-    }
-
-    if (!isLegacyCatalogueFilePath(request.fullPath)) {
-      this.catalogueOpenInFlight = true;
-      this.requestCatalogueOpen(request.fullPath, 'read-write');
-      this.acknowledgeExternalCatalogueOpen(request);
-      return;
-    }
-
-    this.legacyOpenDialogPath = request.fullPath;
-    // Startup is ready once the first decision is visible. This avoids leaving
-    // Finder/second-instance open requests stranded if the user cancels it.
-    this.markRendererStartupComplete();
-    this.zone.run(() => {
+  private chooseLegacyCatalogueOpen(
+    fullPath: string,
+  ): Promise<LegacyCatalogueOpenChoice | undefined> {
+    return this.zone.run(() => firstValueFrom(
       this.modalService.openChoiceDialog<LegacyCatalogueOpenChoice>({
         cancelLabel: this.translate.instant('SYSTEM.cancel'),
         choices: [
@@ -2186,81 +2144,12 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
           },
         ],
         summary: this.translate.instant('SYSTEM.legacyCatalogueDialogSummary', {
-          fileName: path.basename(request.fullPath),
+          fileName: path.basename(fullPath),
         }),
         supportingText: this.translate.instant('SYSTEM.legacyCatalogueDialogSupportingText'),
         title: this.translate.instant('SYSTEM.legacyCatalogueDialogTitle'),
-      }).subscribe((choice: LegacyCatalogueOpenChoice | undefined) => {
-        this.legacyOpenDialogPath = null;
-        if (choice) {
-          this.catalogueOpenInFlight = true;
-          this.requestCatalogueOpen(request.fullPath, choice);
-        }
-        this.acknowledgeExternalCatalogueOpen(request);
-        if (!choice) {
-          this.continuePendingCatalogueOpen();
-        }
-      });
-    });
-  }
-
-  private acknowledgeExternalCatalogueOpen(request: CatalogueOpenRequest): void {
-    if (request.acknowledgeExternalRequest) {
-      this.electronService.ipcRenderer.send('catalogue-open-request-consumed');
-    }
-  }
-
-  private finishCatalogueOpenRequest(): void {
-    this.catalogueOpenInFlight = false;
-    this.continuePendingCatalogueOpen();
-  }
-
-  private continuePendingCatalogueOpen(): void {
-    if (
-      this.catalogueOpenInFlight
-      || this.catalogueOpenQueueScheduled
-      || this.legacyOpenDialogPath !== null
-      || this.backupNoticeOpen
-      || this.pendingCatalogueOpenRequests.length === 0
-    ) {
-      return;
-    }
-
-    this.catalogueOpenQueueScheduled = true;
-    setTimeout(() => {
-      this.catalogueOpenQueueScheduled = false;
-      if (
-        this.catalogueOpenInFlight
-        || this.legacyOpenDialogPath !== null
-        || this.backupNoticeOpen
-      ) {
-        return;
-      }
-      const nextRequest = this.pendingCatalogueOpenRequests.shift();
-      if (nextRequest) {
-        this.handleCatalogueOpenRequest(nextRequest);
-      }
-    }, 0);
-  }
-
-  private requestCatalogueOpen(
-    fullPath: string,
-    intent: CatalogueAccessMode | 'duplicate-scaena',
-  ): void {
-    this.electronService.ipcRenderer.send(
-      'load-this-vha-file',
-      fullPath,
-      this.getFinalObjectForSaving(),
-      intent,
-    );
-  }
-
-  private markRendererStartupComplete(): void {
-    if (this.rendererStartupComplete) {
-      return;
-    }
-    this.rendererStartupComplete = true;
-    this.electronService.ipcRenderer.send('renderer-startup-complete');
+      }),
+    ));
   }
 
   public loadFromFile(): void {
@@ -2317,7 +2206,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
     this.catalogueEditorSaving = true;
     this.catalogueEditorSaveStatus = '';
-    this.electronService.ipcRenderer.send('save-current-vha-file', finalObjectToSave);
+    this.cataloguePersistenceIpc.saveCatalogue(finalObjectToSave);
   }
 
   public selectSourceDirectory(): void {
@@ -2364,7 +2253,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.isClosing = true;
     this.savePreviousViewSize();
     this.appState.imgsPerRow = this.imgsPerRow;
-    this.electronService.ipcRenderer.send('close-window', this.getSettingsForSave(), this.getFinalObjectForSaving());
+    this.cataloguePersistenceIpc.requestClose(
+      this.getSettingsForSave(),
+      this.getFinalObjectForSaving(),
+    );
   }
 
   /**
@@ -2372,30 +2264,12 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * completely depends on global variable `finalArrayNeedsSaving` or if any tags were added/removed in auto-tag-service
    */
   public getFinalObjectForSaving(): FinalObject | null {
-    if (this.catalogueReadOnly) {
-      return null;
-    }
-    if (this.imageElementService.finalArrayNeedsSaving || this.autoTagsSaveService.needToSave()) {
-      return this.buildCurrentFinalObject();
-    }
-    return null;
-  }
-
-  private buildCurrentFinalObject(): FinalObject {
-    const propsToReturn: FinalObject = {
-        addTags: this.autoTagsSaveService.getAddTags(),
-        hubName: this.appState.hubName,
-        images: this.imageElementService.imageElements,
-        // TODO -- rename `selectedSourceFolder` and make sure to update `finalArrayNeedsSaving` when inputDirs changes
-        inputDirs: this.sourceFolderService.selectedSourceFolder,
-        numOfFolders: this.appState.numOfFolders,
-        removeTags: this.autoTagsSaveService.getRemoveTags(),
-        screenshotSettings: this.currentScreenshotSettings,
-        tagColors: this.manualTagsService.getTagColors(),
-        tagDefinitions: this.manualTagsService.getTagDefinitions(),
-        version: 3,
-    };
-    return propsToReturn;
+    return this.catalogueSessionDocument.documentForSave({
+      accessMode: this.catalogueAccessMode,
+      hubName: this.appState.hubName,
+      numOfFolders: this.appState.numOfFolders,
+      screenshotSettings: this.currentScreenshotSettings,
+    });
   }
 
   public async exportVha2Catalogue(): Promise<void> {
@@ -2434,7 +2308,12 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     try {
       const result = await this.electronService.ipcRenderer.invoke(
         'export-vha2-catalogue',
-        this.buildCurrentFinalObject(),
+        this.catalogueSessionDocument.buildDocument({
+          accessMode: this.catalogueAccessMode,
+          hubName: this.appState.hubName,
+          numOfFolders: this.appState.numOfFolders,
+          screenshotSettings: this.currentScreenshotSettings,
+        }),
       ) as Vha2ExportResult;
       if (result.status === 'exported' && result.fileName) {
         this.modalService.openSnackbar(this.translate.instant('SYSTEM.exportVha2Success', {
@@ -3262,33 +3141,36 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * Computes the preview width for thumbnails view
    */
   public computePreviewWidth(): void {
-    // Subtract 14 -- it is a bit more than the scrollbar on the right
-    this.galleryWidth = document.getElementById('scrollDiv').getBoundingClientRect().width - 14;
-
-    if (
-         this.appState.currentView === 'showClips'
-      || this.appState.currentView === 'showThumbnails'
-      || this.appState.currentView === 'showDetails'
-      || this.appState.currentView === 'showDetails2'
-    ) {
-      const margin: number = (this.settingsButtons['compactView'].toggled ? 4 : 40);
-      this.previewWidth = (this.galleryWidth / this.currentImgsPerRow) - margin;
-    } else if (
-         this.appState.currentView === 'showFilmstrip'
-      || this.appState.currentView === 'showFullView'
-    ) {
-      this.previewWidth = ((this.galleryWidth - 30) / this.currentImgsPerRow);
+    const gallery = document.getElementById('scrollDiv');
+    if (!gallery) {
+      return;
     }
 
-    this.previewHeight = this.previewWidth * (9 / 16);
+    const geometry = this.galleryLayoutService.calculateGeometry({
+      compactView: this.settingsButtons.compactView.toggled,
+      containerWidth: gallery.getBoundingClientRect().width,
+      currentPreviewWidth: this.previewWidth,
+      imagesPerRow: this.currentImgsPerRow,
+      relatedTrayVisible:
+           this.settingsButtons.showRelatedVideosTray.toggled
+        || this.settingsButtons.showRecentlyPlayed.toggled,
+      view: this.appState.currentView,
+    });
 
-    // compute preview dimensions for thumbs in the most similar tab:
-    if (
-         this.settingsButtons['showRelatedVideosTray'].toggled
-      || this.settingsButtons['showRecentlyPlayed'].toggled
-    ) {
-      this.previewWidthRelated = Math.min((this.galleryWidth / 5) - 40, 176);
-      this.previewHeightRelated = Math.min(this.previewWidthRelated * (9 / 16), 144);
+    if (geometry.galleryWidth !== undefined) {
+      this.galleryWidth = geometry.galleryWidth;
+    }
+    if (geometry.previewWidth !== undefined) {
+      this.previewWidth = geometry.previewWidth;
+    }
+    if (geometry.previewHeight !== undefined) {
+      this.previewHeight = geometry.previewHeight;
+    }
+    if (geometry.previewWidthRelated !== undefined) {
+      this.previewWidthRelated = geometry.previewWidthRelated;
+    }
+    if (geometry.previewHeightRelated !== undefined) {
+      this.previewHeightRelated = geometry.previewHeightRelated;
     }
   }
 
@@ -3300,42 +3182,13 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   public computeTextBufferAmount(): void {
     this.computePreviewWidth();
 
-    switch (this.appState.currentView) {
-      case 'showThumbnails':
-        if (this.settingsButtons.compactView.toggled) {
-          this.textPaddingHeight = 0;
-        } else if (this.settingsButtons.showMoreInfo.toggled) {
-          this.textPaddingHeight = 55;
-        } else {
-          this.textPaddingHeight = 20;
-        }
-        break;
-
-      case 'showFilmstrip':
-        if (this.settingsButtons.compactView.toggled) {
-          this.textPaddingHeight = 0;
-        } else if (this.settingsButtons.showMoreInfo.toggled) {
-          this.textPaddingHeight = 20;
-        } else {
-          this.textPaddingHeight = 0;
-        }
-        break;
-
-      case 'showFiles':
-        this.textPaddingHeight = 20;
-        break;
-
-      case 'showClips':
-        if (this.settingsButtons.compactView.toggled) {
-          this.textPaddingHeight = 0;
-        } else if (this.settingsButtons.showMoreInfo.toggled) {
-          this.textPaddingHeight = 55;
-        } else {
-          this.textPaddingHeight = 20;
-        }
-        break;
-
-      // default case not needed
+    const textPaddingHeight = this.galleryLayoutService.calculateTextPadding({
+      compactView: this.settingsButtons.compactView.toggled,
+      showMoreInfo: this.settingsButtons.showMoreInfo.toggled,
+      view: this.appState.currentView,
+    });
+    if (textPaddingHeight !== undefined) {
+      this.textPaddingHeight = textPaddingHeight;
     }
   }
 
@@ -3539,7 +3392,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private showCatalogueLoadedFromBackup(details: CatalogueLoadedFromBackupDetails): void {
-    this.backupNoticeOpen = true;
+    this.catalogueOpenCoordinator.setBackupNoticeOpen(true);
     const readOnly = details.readOnly === true;
     const sourcePath = details.sourcePath || this.appState.currentVhaFile || 'Unknown';
     const openedPath = details.openedPath || this.appState.currentVhaFile || sourcePath;
@@ -3560,8 +3413,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         sourcePath,
       }),
     ).subscribe(() => {
-      this.backupNoticeOpen = false;
-      this.continuePendingCatalogueOpen();
+      this.catalogueOpenCoordinator.setBackupNoticeOpen(false);
     });
   }
 

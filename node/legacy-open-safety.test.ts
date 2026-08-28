@@ -7,6 +7,10 @@ const mainSource = fs.readFileSync('main.ts', 'utf8');
 const ipcSource = fs.readFileSync('node/main-ipc.ts', 'utf8');
 const globalsSource = fs.readFileSync('node/main-globals.ts', 'utf8');
 const homeSource = fs.readFileSync('src/app/components/home.component.ts', 'utf8');
+const catalogueOpenServiceSource = fs.readFileSync(
+  'src/app/services/catalogue-open-coordinator.service.ts',
+  'utf8',
+);
 
 test('routes native catalogue choices through the renderer and validates explicit open modes', () => {
   assert.match(mainSource, /const authorizedPath = rememberCataloguePath\(chosenFile/);
@@ -64,7 +68,8 @@ test('dispatches startup opens after settings failure and serializes renderer ow
   assert.match(mainSource, /trustedIpcOn\('catalogue-open-request-consumed'/);
   assert.match(mainSource, /catalogueOpenOperationActive = true/);
   assert.match(mainSource, /sender\.send\('catalogue-open-request-finished'\)/);
-  assert.match(homeSource, /ipcRenderer\.on\('catalogue-open-request-finished'/);
+  assert.match(catalogueOpenServiceSource, /ipcRenderer\.on\(\s*'catalogue-open-request-finished'/);
+  assert.doesNotMatch(homeSource, /ipcRenderer\.on\('catalogue-open-request-finished'/);
   assert.match(
     mainSource,
     /catalogueOpenOperationActive = false;\s*GLOBALS\.catalogueTransitionActive = false;\s*activeCatalogueOpenGeneration = undefined;\s*dispatchNextCatalogueOpenRequest\(\);/,

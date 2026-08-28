@@ -210,6 +210,8 @@ test('keeps the legacy catalogue choices, read-only state, and compatibility exp
   const statisticsComponent = source('src/app/components/statistics/statistics.component.ts');
   const homeTemplate = source('src/app/components/home.component.html');
   const homeComponent = source('src/app/components/home.component.ts');
+  const catalogueOpenCoordinator = source('src/app/common/catalogue-open-coordinator.ts');
+  const catalogueSession = source('interfaces/catalogue-session.ts');
   const translations = source('i18n/en.json');
   const identitySectionStart = statisticsTemplate.indexOf(
     '<section class="ledger-section identity-section">',
@@ -233,7 +235,11 @@ test('keeps the legacy catalogue choices, read-only state, and compatibility exp
   assert.match(homeTemplate, /@if \(catalogueReadOnly\)[\s\S]*class="catalogue-read-only-badge"[\s\S]*role="status"/);
   assert.match(homeTemplate, /SYSTEM\.catalogueReadOnly/);
 
-  assert.match(homeComponent, /type LegacyCatalogueOpenChoice = 'duplicate-scaena' \| 'read-only'/);
+  assert.match(catalogueSession, /CatalogueAccessMode = 'read-only' \| 'read-write'/);
+  assert.match(
+    catalogueOpenCoordinator,
+    /CatalogueOpenIntent = CatalogueAccessMode \| 'duplicate-scaena'/,
+  );
   assert.match(homeComponent, /openChoiceDialog<LegacyCatalogueOpenChoice>/);
   const readOnlyChoice = homeComponent.indexOf("id: 'read-only'");
   const duplicateChoice = homeComponent.indexOf("id: 'duplicate-scaena'");
@@ -254,13 +260,16 @@ test('keeps the legacy catalogue choices, read-only state, and compatibility exp
 test('queues external catalogue opens and visibly blocks read-only context mutations', () => {
   const homeTemplate = source('src/app/components/home.component.html');
   const homeComponent = source('src/app/components/home.component.ts');
+  const catalogueOpenCoordinator = source('src/app/common/catalogue-open-coordinator.ts');
+  const catalogueOpenService = source('src/app/services/catalogue-open-coordinator.service.ts');
   const translations = source('i18n/en.json');
 
-  assert.match(homeComponent, /pendingCatalogueOpenRequests: CatalogueOpenRequest\[\]/);
-  assert.match(homeComponent, /legacyOpenDialogPath !== null[\s\S]*pendingCatalogueOpenRequests\.push\(request\)/);
-  assert.match(homeComponent, /send\('catalogue-open-request-consumed'\)/);
-  assert.match(homeComponent, /markRendererStartupComplete\(\);[\s\S]*openChoiceDialog<LegacyCatalogueOpenChoice>/);
-  assert.match(homeComponent, /finishCatalogueOpenRequest\(\)/);
+  assert.match(catalogueOpenCoordinator, /pendingRequests: CatalogueOpenRequest\[\]/);
+  assert.match(catalogueOpenCoordinator, /this\.isBusy\(\)[\s\S]*this\.pendingRequests\.push\(request\)/);
+  assert.match(catalogueOpenService, /send\('catalogue-open-request-consumed'\)/);
+  assert.match(catalogueOpenCoordinator, /this\.markRendererStartupComplete\(\)/);
+  assert.match(homeComponent, /openChoiceDialog<LegacyCatalogueOpenChoice>/);
+  assert.match(homeComponent, /catalogueOpenCoordinator\.finishOpen\(\)/);
   assert.match(homeComponent, /catalogue-loaded-from-backup/);
   assert.match(homeComponent, /showCatalogueLoadedFromBackup/);
   assert.match(homeComponent, /unwindReadOnlyMutationState\(channel\)/);

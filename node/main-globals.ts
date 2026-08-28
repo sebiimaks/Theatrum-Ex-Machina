@@ -1,6 +1,7 @@
 import type { ScreenshotSettings, InputSources } from '../interfaces/final-object.interface';
+import type { CatalogueAccessMode } from '../interfaces/catalogue-session';
 
-export type CatalogueAccessMode = 'read-only' | 'read-write';
+export type { CatalogueAccessMode } from '../interfaces/catalogue-session';
 
 // For release, update the version below and in package.json in tandem.
 
