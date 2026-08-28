@@ -45,7 +45,15 @@ import {
   planFolderThumbnailRegeneration,
   prepareThumbnailRegeneration,
 } from './thumbnail-count';
-import type { ThumbnailCoreStatus } from './thumbnail-count';
+import type {
+  FolderThumbnailRegenerationProgress,
+  FolderThumbnailRegenerationResult,
+  ThumbnailCoreStatus,
+} from '../interfaces/thumbnail-regeneration';
+export type {
+  FolderThumbnailRegenerationProgress,
+  FolderThumbnailRegenerationResult,
+} from '../interfaces/thumbnail-regeneration';
 import { runSequentialBatch } from './sequential-batch';
 import {
   requireAuthorizedSourceRoot,
@@ -444,26 +452,6 @@ let thumbnailRegenerationBlocked = false;
 let initialScanQueueGeneration = 0;
 const activeInitialScanQueueTokens: Set<symbol> = new Set();
 const INITIAL_SCAN_QUEUE_PAUSE_LIMIT_MS = 5 * 60 * 1000;
-
-export interface FolderThumbnailRegenerationProgress {
-  completed: number;
-  failed: number;
-  fileHash: string;
-  screenshotCount?: number;
-  succeeded: number;
-  success: boolean;
-  total: number;
-}
-
-export interface FolderThumbnailRegenerationResult {
-  cancelled: boolean;
-  completed: number;
-  failed: number;
-  skippedVideos: number;
-  succeeded: number;
-  total: number;
-  videoCount: number;
-}
 
 interface PreviewDeletionTask {
   assetDirectory: string;

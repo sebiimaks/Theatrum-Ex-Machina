@@ -1,4 +1,5 @@
 import type { ImageElement, ScreenshotSettings } from '../interfaces/final-object.interface';
+import type { ThumbnailCoreStatus } from '../interfaces/thumbnail-regeneration';
 import { isMetadataImportFailure } from '../interfaces/final-object.interface';
 import { getImageLocations, imageElementAtLocation } from '../interfaces/media-locations';
 import {
@@ -16,10 +17,7 @@ export interface FolderThumbnailRegenerationPlan {
   videoCountsByHash: Map<string, number>;
 }
 
-export interface ThumbnailCoreStatus {
-  filmstrip: boolean;
-  thumbnail: boolean;
-}
+export type { ThumbnailCoreStatus } from '../interfaces/thumbnail-regeneration';
 
 export interface FilmstripHoverPosition {
   frameIndex: number;

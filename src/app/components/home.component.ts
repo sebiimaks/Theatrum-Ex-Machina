@@ -24,6 +24,7 @@ import { ResolutionFilterService } from '../pipes/resolution-filter.service';
 import { ShortcutsService, CustomShortcutAction } from './shortcuts/shortcuts.service';
 import { SourceFolderService } from './statistics/source-folder.service';
 import { StarFilterService } from '../pipes/star-filter.service';
+import { ThumbnailRegenerationIpcService } from '../services/thumbnail-regeneration-ipc.service';
 import { WordFrequencyService, WordFreqAndHeight } from '../pipes/word-frequency.service';
 
 // Components
@@ -74,7 +75,8 @@ import type { ImportStage } from '../../../node/main-support';
 import type {
   FolderThumbnailRegenerationProgress,
   FolderThumbnailRegenerationResult,
-} from '../../../node/main-extract-async';
+  ThumbnailCoreStatus,
+} from '../../../interfaces/thumbnail-regeneration';
 import {
   applyCustomThumbnailReplacement,
   applyRegeneratedScreenshotCount,
@@ -84,11 +86,7 @@ import {
   planFolderThumbnailRegeneration,
   withThumbnailRefreshId,
 } from '../../../node/thumbnail-count';
-import type { ThumbnailCoreStatus } from '../../../node/thumbnail-count';
-import type {
-  FolderScopeTarget,
-  FolderThumbnailRegenerationStatus,
-} from './statistics/statistics.component';
+import type { FolderScopeTarget } from './statistics/statistics.component';
 import type { TagHierarchyMoveEmission } from './tag-tray/tag-tray.component';
 import {
   CURRENT_SETTINGS_SCHEMA_VERSION,
@@ -100,6 +98,18 @@ import type { WizardOptions } from '../../../interfaces/wizard-options.interface
 import { isSupportedCatalogueFilePath } from '../../../interfaces/catalogue-file';
 import type { CatalogueAccessMode } from '../../../interfaces/catalogue-session';
 import type { LegacyCatalogueOpenChoice } from '../common/catalogue-open-coordinator';
+import {
+  classifyIndividualThumbnailRegenerationTerminal,
+} from '../common/thumbnail-regeneration-ipc';
+import type {
+  IndividualThumbnailRegenerationStatus,
+} from '../common/thumbnail-regeneration-ipc';
+import {
+  FolderThumbnailRegenerationSession,
+} from '../common/folder-thumbnail-regeneration-session';
+import type {
+  FolderThumbnailRegenerationStatus,
+} from '../common/folder-thumbnail-regeneration-session';
 import type {
   HistoryItem,
   RenameFileResponse,
@@ -145,25 +155,6 @@ import {
   slowFadeOut,
   topAnimation
 } from '../common/animations';
-
-interface FolderThumbnailRegenerationRequest {
-  failedVideos: number;
-  hubFile: string;
-  processedHashes: Set<string>;
-  relativePath: string;
-  requestId: number;
-  skippedVideos: number;
-  sourceIndex: number;
-  succeededVideos: number;
-  updatedHashes: Set<string>;
-  videoCountsByHash: Map<string, number>;
-}
-
-interface IndividualThumbnailRegenerationStatus {
-  cancelling: boolean;
-  fileHash: string;
-  fileName: string;
-}
 
 interface Vha2ExportResult {
   error?: string;
@@ -293,11 +284,13 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   previewWidthRelated: number;          // For the Related Videos tab:
   textPaddingHeight: number;            // for text padding below filmstrip or thumbnail element
 
-  folderThumbnailRegenerationStatus: FolderThumbnailRegenerationStatus | null = null;
+  private readonly folderThumbnailRegenerationSession = new FolderThumbnailRegenerationSession();
+  get folderThumbnailRegenerationStatus(): FolderThumbnailRegenerationStatus | null {
+    return this.folderThumbnailRegenerationSession.status;
+  }
   individualThumbnailRegenerationStatus: IndividualThumbnailRegenerationStatus | null = null;
+  private catalogueSessionGeneration = 0;
   thumbnailRegenerationElapsedSeconds = 0;
-  private folderThumbnailRegenerationRequest: FolderThumbnailRegenerationRequest | null = null;
-  private nextFolderThumbnailRegenerationRequestId = 1;
   private thumbnailRegenerationStartedAt = 0;
   private thumbnailRegenerationTimer: number | null = null;
 
@@ -562,6 +555,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     public shortcutService: ShortcutsService,
     public sourceFolderService: SourceFolderService,
     public starFilterService: StarFilterService,
+    public thumbnailRegenerationIpc: ThumbnailRegenerationIpcService,
     public translate: TranslateService,
     public wordFrequencyService: WordFrequencyService,
     public zone: NgZone,
@@ -738,11 +732,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
     });
 
-    // happens when user replaced a thumbnail and process is done
-    this.electronService.ipcRenderer.on('thumbnail-replaced', (event) => {
-      this.electronService.webFrame.clearCache();
-    });
-
     this.electronService.ipcRenderer.on('custom-thumbnail-replaced', (event, fileHash: string) => {
       this.zone.run(() => {
         const catalogueChanged = applyCustomThumbnailReplacement(
@@ -763,21 +752,50 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       });
     });
 
-    this.electronService.ipcRenderer.on(
-      'thumbnail-regeneration-complete',
-      (event, fileHash: string, screenshotCount: number) => {
-      this.zone.run(() => {
-        this.clearIndividualThumbnailRegeneration(fileHash);
-        this.applyThumbnailRegenerationResult(fileHash, screenshotCount, true);
-        this.modalService.openSnackbar(this.translate.instant('RIGHTCLICK.thumbnailRegenerationComplete'));
-      });
-    });
-
-    this.electronService.ipcRenderer.on(
-      'thumbnail-regeneration-failed',
-      (event, fileHash: string, reason?: string, coreStatus?: ThumbnailCoreStatus) => {
+    this.thumbnailRegenerationIpc.connect({
+      folderCompleted: (requestId, sourceIndex, result): void => {
         this.zone.run(() => {
-          this.clearIndividualThumbnailRegeneration(fileHash);
+          this.handleFolderThumbnailRegenerationComplete(requestId, sourceIndex, result);
+        });
+      },
+      folderFailed: (requestId, sourceIndex): void => {
+        this.zone.run(() => {
+          this.handleFolderThumbnailRegenerationFailure(requestId, sourceIndex);
+        });
+      },
+      folderProgress: (requestId, sourceIndex, progress): void => {
+        this.zone.run(() => {
+          this.handleFolderThumbnailRegenerationProgress(requestId, sourceIndex, progress);
+        });
+      },
+      folderProgressRejected: (requestId, sourceIndex): void => {
+        this.zone.run(() => {
+          this.handleFolderThumbnailRegenerationProgressRejected(requestId, sourceIndex);
+        });
+      },
+      individualAssetsReplaced: (): void => {
+        this.electronService.webFrame.clearCache();
+      },
+      individualCompleted: (fileHash, screenshotCount): void => {
+        this.zone.run(() => {
+          if (!this.clearIndividualThumbnailRegeneration(fileHash)) {
+            return;
+          }
+          this.applyThumbnailRegenerationResult(fileHash, screenshotCount, true);
+          this.modalService.openSnackbar(
+            this.translate.instant('RIGHTCLICK.thumbnailRegenerationComplete'),
+          );
+        });
+      },
+      individualFailed: (
+        fileHash: string,
+        reason?: string,
+        coreStatus?: ThumbnailCoreStatus,
+      ): void => {
+        this.zone.run(() => {
+          if (!this.clearIndividualThumbnailRegeneration(fileHash)) {
+            return;
+          }
           const catalogueChanged = applyThumbnailRegenerationFailure(
             this.imageElementService.imageElements,
             fileHash,
@@ -796,44 +814,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
           const message = this.translate.instant('RIGHTCLICK.thumbnailRegenerationFailed');
           this.modalService.openSnackbar(reason ? `${message}: ${reason}` : message);
         });
-      });
-
-    this.electronService.ipcRenderer.on(
-      'folder-thumbnail-regeneration-progress',
-      (
-        event,
-        requestId: number,
-        sourceIndex: number,
-        progress: FolderThumbnailRegenerationProgress,
-      ) => {
-        this.zone.run(() => {
-          this.handleFolderThumbnailRegenerationProgress(requestId, sourceIndex, progress);
-        });
       },
-    );
-
-    this.electronService.ipcRenderer.on(
-      'folder-thumbnail-regeneration-complete',
-      (
-        event,
-        requestId: number,
-        sourceIndex: number,
-        result: FolderThumbnailRegenerationResult,
-      ) => {
-        this.zone.run(() => {
-          this.handleFolderThumbnailRegenerationComplete(requestId, sourceIndex, result);
-        });
-      },
-    );
-
-    this.electronService.ipcRenderer.on(
-      'folder-thumbnail-regeneration-failed',
-      (event, requestId: number, sourceIndex: number) => {
-        this.zone.run(() => {
-          this.handleFolderThumbnailRegenerationFailure(requestId, sourceIndex);
-        });
-      },
-    );
+    });
 
     this.electronService.ipcRenderer.on('touchBar-to-app', (event, changesFromTouchBar: SettingsButtonKey | SupportedView) => {
       if (changesFromTouchBar) {
@@ -1176,6 +1158,13 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       catalogueSettingsNormalized = false,
       catalogueAccessMode: CatalogueAccessMode = 'read-write',
     ) => {
+
+      // Treat every returned document as a new session, even when reloading
+      // the same path. Keep any cancelled regeneration as a blocking
+      // tombstone until its terminal callback arrives, because the existing
+      // main-process protocol does not echo an individual request ID.
+      this.catalogueSessionGeneration += 1;
+      this.cancelIndividualThumbnailRegenerationForCatalogueLoad();
 
       // console.log('input dirs', finalObject.inputDirs);
       // reset to initial
@@ -1613,6 +1602,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     this.catalogueOpenCoordinator.disconnect();
     this.cataloguePersistenceIpc.disconnect();
+    this.thumbnailRegenerationIpc.disconnect();
+    this.folderThumbnailRegenerationSession.clear();
+    this.individualThumbnailRegenerationStatus = null;
+    this.stopThumbnailRegenerationClockIfIdle();
     this.galleryResizeObserver?.disconnect();
     clearTimeout(this.galleryLayoutRefreshTimeout);
     if (this.galleryLayoutRefreshFrame !== undefined) {
@@ -3673,12 +3666,14 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
     this.individualThumbnailRegenerationStatus = {
+      catalogueSessionGeneration: this.catalogueSessionGeneration,
       cancelling: false,
       fileHash: item.hash,
       fileName: projectedItem.fileName,
+      hubFile: this.appState.currentVhaFile,
     };
     this.startThumbnailRegenerationClock();
-    this.electronService.ipcRenderer.send('regenerate-thumbnails', projectedItem);
+    this.thumbnailRegenerationIpc.regenerateIndividual(projectedItem);
   }
 
   /**
@@ -3758,7 +3753,11 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       if (!confirmed || this.appState.currentVhaFile !== hubFile) {
         return;
       }
-      if (this.folderThumbnailRegenerationRequest) {
+      if (this.catalogueReadOnly) {
+        this.showReadOnlyActionBlocked();
+        return;
+      }
+      if (this.thumbnailRegenerationActive) {
         this.modalService.openSnackbar(
           this.translate.instant('STATISTICS.folderThumbnailRegenerationBusy'),
         );
@@ -3795,50 +3794,42 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         return;
       }
 
-      const requestId = this.nextFolderThumbnailRegenerationRequestId++;
-      this.folderThumbnailRegenerationRequest = {
-        failedVideos: 0,
+      const start = this.folderThumbnailRegenerationSession.begin({
         hubFile,
-        processedHashes: new Set<string>(),
         relativePath,
-        requestId,
         skippedVideos: currentPlan.skippedVideos,
-        sourceIndex,
-        succeededVideos: 0,
-        updatedHashes: new Set<string>(),
-        videoCountsByHash: currentPlan.videoCountsByHash,
-      };
-      this.folderThumbnailRegenerationStatus = {
-        completedJobs: 0,
-        relativePath,
+        sourceFolderPath,
         sourceIndex,
         totalJobs: currentPlan.targets.length,
-      };
+        videoCountsByHash: currentPlan.videoCountsByHash,
+      });
+      if (!start) {
+        this.modalService.openSnackbar(
+          this.translate.instant('STATISTICS.folderThumbnailRegenerationBusy'),
+        );
+        return;
+      }
       this.startThumbnailRegenerationClock();
-      this.electronService.ipcRenderer.send(
-        'regenerate-folder-thumbnails',
-        requestId,
-        sourceIndex,
+      this.thumbnailRegenerationIpc.regenerateFolder({
+        cataloguePath: hubFile,
+        eligibleVideos: currentPlan.eligibleVideos,
         relativePath,
-        hubFile,
-        currentPlan.eligibleVideos,
-      );
+        requestId: start.requestId,
+        sourceIndex,
+      });
     });
   }
 
   cancelFolderThumbnailRegeneration(): void {
-    if (!this.folderThumbnailRegenerationRequest || !this.folderThumbnailRegenerationStatus) {
+    const cancellation = this.folderThumbnailRegenerationSession.markCancelling();
+    if (!cancellation.changed) {
       return;
     }
-    this.folderThumbnailRegenerationStatus = {
-      ...this.folderThumbnailRegenerationStatus,
-      cancelling: true,
-    };
-    this.electronService.ipcRenderer.send('cancel-folder-thumbnail-regeneration');
+    this.thumbnailRegenerationIpc.cancelFolder();
   }
 
   cancelThumbnailRegeneration(): void {
-    if (this.folderThumbnailRegenerationRequest) {
+    if (this.folderThumbnailRegenerationSession.active) {
       this.cancelFolderThumbnailRegeneration();
       return;
     }
@@ -3849,12 +3840,12 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       ...this.individualThumbnailRegenerationStatus,
       cancelling: true,
     };
-    this.electronService.ipcRenderer.send('cancel-thumbnail-regeneration');
+    this.thumbnailRegenerationIpc.cancelIndividual();
   }
 
   get thumbnailRegenerationActive(): boolean {
     return this.individualThumbnailRegenerationStatus !== null
-      || this.folderThumbnailRegenerationRequest !== null;
+      || this.folderThumbnailRegenerationSession.active;
   }
 
   get thumbnailRegenerationCancelling(): boolean {
@@ -3880,7 +3871,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private blockActionDuringFolderThumbnailRegeneration(): boolean {
-    if (!this.folderThumbnailRegenerationRequest) {
+    if (!this.folderThumbnailRegenerationSession.active) {
       return false;
     }
     this.modalService.openSnackbar(
@@ -3924,32 +3915,49 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     sourceIndex: number,
     progress: FolderThumbnailRegenerationProgress,
   ): void {
-    const request = this.getActiveFolderThumbnailRegenerationRequest(requestId, sourceIndex);
-    if (!request || request.processedHashes.has(progress.fileHash)) {
+    const decision = this.folderThumbnailRegenerationSession.acceptProgress({
+      currentHubFile: this.appState.currentVhaFile,
+      currentSourceFolderPath: this.sourceFolderService.selectedSourceFolder[sourceIndex]?.path,
+      progress,
+      requestId,
+      sourceIndex,
+    });
+    if (!decision.accepted) {
+      this.stopThumbnailRegenerationClockIfIdle();
       return;
     }
 
-    request.processedHashes.add(progress.fileHash);
-    const matchingVideos = request.videoCountsByHash.get(progress.fileHash) || 0;
-    if (
-      progress.success
-      && Number.isInteger(progress.screenshotCount)
-      && progress.screenshotCount > 0
-    ) {
-      this.applyThumbnailRegenerationResult(progress.fileHash, progress.screenshotCount, false);
-      request.succeededVideos += matchingVideos;
-      request.updatedHashes.add(progress.fileHash);
-    } else {
-      request.failedVideos += matchingVideos;
+    if (decision.successfulUpdate) {
+      this.applyThumbnailRegenerationResult(
+        decision.successfulUpdate.fileHash,
+        decision.successfulUpdate.screenshotCount,
+        false,
+      );
+    }
+  }
+
+  private handleFolderThumbnailRegenerationProgressRejected(
+    requestId: number,
+    sourceIndex: number,
+  ): void {
+    const accepted = this.folderThumbnailRegenerationSession.fail({
+      currentHubFile: this.appState.currentVhaFile,
+      currentSourceFolderPath: this.sourceFolderService.selectedSourceFolder[sourceIndex]?.path,
+      requestId,
+      sourceIndex,
+    });
+    if (!accepted) {
+      return;
     }
 
-    this.folderThumbnailRegenerationStatus = {
-      cancelling: this.folderThumbnailRegenerationStatus?.cancelling,
-      completedJobs: Math.min(progress.completed, progress.total),
-      relativePath: request.relativePath,
-      sourceIndex,
-      totalJobs: progress.total,
-    };
+    // Only a malformed event correlated to the active local session may
+    // cancel the global main-process batch. Send cancellation synchronously
+    // before returning control to the UI after releasing local state.
+    this.thumbnailRegenerationIpc.cancelFolder();
+    this.stopThumbnailRegenerationClockIfIdle();
+    this.modalService.openSnackbar(
+      this.translate.instant('STATISTICS.folderThumbnailRegenerationFailed'),
+    );
   }
 
   private handleFolderThumbnailRegenerationComplete(
@@ -3957,88 +3965,106 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     sourceIndex: number,
     result: FolderThumbnailRegenerationResult,
   ): void {
-    const request = this.getActiveFolderThumbnailRegenerationRequest(requestId, sourceIndex);
-    if (!request) {
+    const completion = this.folderThumbnailRegenerationSession.complete({
+      cancelled: result.cancelled,
+      currentHubFile: this.appState.currentVhaFile,
+      currentSourceFolderPath: this.sourceFolderService.selectedSourceFolder[sourceIndex]?.path,
+      requestId,
+      sourceIndex,
+    });
+    if (!completion.accepted) {
+      this.stopThumbnailRegenerationClockIfIdle();
       return;
     }
 
-    if (request.updatedHashes.size > 0) {
+    if (completion.updatedHashes.size > 0) {
       this.electronService.webFrame.clearCache();
       this.imageElementService.imageElements = this.imageElementService.imageElements.slice();
-      if (this.currentClickedItem && request.updatedHashes.has(this.currentClickedItem.hash)) {
+      if (this.currentClickedItem && completion.updatedHashes.has(this.currentClickedItem.hash)) {
         this.updateCurrentClickedItem(this.currentClickedItem);
       }
     }
 
-    const succeededVideos = request.succeededVideos;
-    const failedVideos = request.failedVideos;
-    const skippedVideos = request.skippedVideos;
-    this.clearFolderThumbnailRegenerationRequest();
+    this.stopThumbnailRegenerationClockIfIdle();
 
-    if (result.cancelled) {
+    if (completion.outcome === 'cancelled') {
       this.modalService.openSnackbar(
         this.translate.instant('STATISTICS.folderThumbnailRegenerationCancelled'),
       );
-    } else if (failedVideos > 0 || skippedVideos > 0) {
+    } else if (completion.outcome === 'partial') {
       this.modalService.openSnackbar(
         this.translate.instant('STATISTICS.folderThumbnailRegenerationSummary', {
-          failed: failedVideos,
-          skipped: skippedVideos,
-          succeeded: succeededVideos,
+          failed: completion.failedVideos,
+          skipped: completion.skippedVideos,
+          succeeded: completion.succeededVideos,
         }),
       );
     } else {
       this.modalService.openSnackbar(
         this.translate.instant('STATISTICS.folderThumbnailRegenerationComplete', {
-          count: succeededVideos,
+          count: completion.succeededVideos,
         }),
       );
     }
   }
 
   private handleFolderThumbnailRegenerationFailure(requestId: number, sourceIndex: number): void {
-    const request = this.getActiveFolderThumbnailRegenerationRequest(requestId, sourceIndex);
-    if (!request) {
+    const accepted = this.folderThumbnailRegenerationSession.fail({
+      currentHubFile: this.appState.currentVhaFile,
+      currentSourceFolderPath: this.sourceFolderService.selectedSourceFolder[sourceIndex]?.path,
+      requestId,
+      sourceIndex,
+    });
+    if (!accepted) {
+      this.stopThumbnailRegenerationClockIfIdle();
       return;
     }
 
-    this.clearFolderThumbnailRegenerationRequest();
+    this.stopThumbnailRegenerationClockIfIdle();
     this.modalService.openSnackbar(
       this.translate.instant('STATISTICS.folderThumbnailRegenerationFailed'),
     );
   }
 
-  private getActiveFolderThumbnailRegenerationRequest(
-    requestId: number,
-    sourceIndex: number,
-  ): FolderThumbnailRegenerationRequest | null {
-    const request = this.folderThumbnailRegenerationRequest;
-    if (
-      !request
-      || request.requestId !== requestId
-      || request.sourceIndex !== sourceIndex
-    ) {
-      return null;
-    }
-    if (request.hubFile !== this.appState.currentVhaFile) {
-      this.clearFolderThumbnailRegenerationRequest();
-      return null;
-    }
-    return request;
-  }
-
   private clearFolderThumbnailRegenerationRequest(): void {
-    this.folderThumbnailRegenerationRequest = null;
-    this.folderThumbnailRegenerationStatus = null;
+    this.folderThumbnailRegenerationSession.clear();
     this.stopThumbnailRegenerationClockIfIdle();
   }
 
-  private clearIndividualThumbnailRegeneration(fileHash: string): void {
-    if (this.individualThumbnailRegenerationStatus?.fileHash !== fileHash) {
-      return;
+  private clearIndividualThumbnailRegeneration(fileHash: string): boolean {
+    const status = this.individualThumbnailRegenerationStatus;
+    if (!status) {
+      return false;
+    }
+    const disposition = classifyIndividualThumbnailRegenerationTerminal(
+      status,
+      fileHash,
+      this.appState.currentVhaFile,
+      this.catalogueSessionGeneration,
+    );
+    if (disposition === 'ignore') {
+      return false;
+    }
+    if (disposition === 'stale-session') {
+      this.individualThumbnailRegenerationStatus = null;
+      this.stopThumbnailRegenerationClockIfIdle();
+      return false;
     }
     this.individualThumbnailRegenerationStatus = null;
     this.stopThumbnailRegenerationClockIfIdle();
+    return true;
+  }
+
+  private cancelIndividualThumbnailRegenerationForCatalogueLoad(): void {
+    const status = this.individualThumbnailRegenerationStatus;
+    if (!status || status.cancelling) {
+      return;
+    }
+    this.individualThumbnailRegenerationStatus = {
+      ...status,
+      cancelling: true,
+    };
+    this.thumbnailRegenerationIpc.cancelIndividual();
   }
 
   private startThumbnailRegenerationClock(): void {

@@ -9,6 +9,9 @@ import { ImageElementService } from './../../services/image-element.service';
 import { SourceFolderService } from './source-folder.service';
 
 import type { AppStateInterface } from '../../common/app-state';
+import type {
+  FolderThumbnailRegenerationStatus,
+} from '../../common/folder-thumbnail-regeneration-session';
 import type { ImageElement, ScreenshotSettings, InputSources } from '../../../../interfaces/final-object.interface';
 import { isMetadataImportFailure } from '../../../../interfaces/final-object.interface';
 import { getImageLocations } from '../../../../interfaces/media-locations';
@@ -23,14 +26,6 @@ import {
 import type { SourceFolderTreeNode } from '../../../../interfaces/source-folder-tree';
 
 import { metaAppear, breadcrumbWordAppear } from '../../common/animations';
-
-export interface FolderThumbnailRegenerationStatus {
-  cancelling?: boolean;
-  completedJobs: number;
-  relativePath?: string;
-  sourceIndex: number;
-  totalJobs: number;
-}
 
 export interface FolderScopeTarget {
   relativePath: string;

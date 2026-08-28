@@ -17,6 +17,7 @@
     "interfaces/media-locations.ts",
     "interfaces/preload-bridge.ts",
     "interfaces/theatrum-protocol.ts",
+    "interfaces/thumbnail-regeneration.ts",
     "interfaces/folder-rescan.ts",
     "interfaces/folder-scan-startup.ts",
     "interfaces/tag-hierarchy.ts",
@@ -33,6 +34,8 @@
     "node/demo-removal.test.ts",
     "node/electron-security.test.ts",
     "node/folder-rescan.test.ts",
+    "node/folder-thumbnail-regeneration-session.test.ts",
+    "node/thumbnail-regeneration-ipc.test.ts",
     "node/gallery-layout.test.ts",
     "node/settings-startup.test.ts",
     "node/tag-hierarchy.test.ts",
@@ -65,6 +68,8 @@
     "src/app/common/catalogue-persistence-coordinator.ts",
     "src/app/common/catalogue-session-document.ts",
     "src/app/common/gallery-layout.ts",
+    "src/app/common/folder-thumbnail-regeneration-session.ts",
+    "src/app/common/thumbnail-regeneration-ipc.ts",
     "src/app/common/virtual-scroll-layout.ts",
     "src/app/components/catalogue-editor/catalogue-editor.logic.ts"
   ]
