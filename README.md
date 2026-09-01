@@ -6,8 +6,8 @@
 
 **Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
-- Current fork version: `v1.1.1`
-- Change summary updated: 28/08/2026
+- Current fork version: `v1.1.2`
+- Change summary updated: 01/09/2026
 
 # Fork Changelog
 
@@ -17,6 +17,11 @@ This changelog covers material fork-specific changes made after the upstream bas
 
 <details>
 <summary><strong>Unreleased</strong></summary>
+
+</details>
+
+<details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v1.1.2">v1.1.2</a> — 1 September 2026</strong></summary>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/b8f36e43af7649308ed8293e2103acd9f9441952"><code>b8f36e43</code></a> — <strong>Refactor thumbnail regeneration state and IPC</strong></summary>
