@@ -395,9 +395,7 @@ const requiredExactAttributions = new Map([
   ['@iharbeck/ngx-virtual-scroller@19.0.1', 'Copyright (c) 2016 Rinto Jose (rintoj)'],
   ['assert-plus@1.0.0', 'Copyright (c) 2012 Mark Cavage'],
   ['emoji-regex@8.0.0', 'Copyright Mathias Bynens <https://mathiasbynens.be/>'],
-  ['ignore@3.3.10', 'Copyright (c) 2013 Kael Zhang <i@kael.me>, contributors'],
   ['punycode@2.3.1', 'Copyright Mathias Bynens <https://mathiasbynens.be/>'],
-  ['slash@1.0.0', 'Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com)'],
 ]);
 for (const [identity, copyrightNotice] of requiredExactAttributions) {
   assert.ok(

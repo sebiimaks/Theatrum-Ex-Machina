@@ -15,5 +15,3 @@ never silently reused for another version.
 | --- | --- | --- |
 | `@iharbeck/ngx-virtual-scroller@19.0.1` | [v19.0.1 project source](https://github.com/iharbeck/ngx-virtual-scroller/tree/v19.0.1) | The npm archive places the full MIT notice in its README rather than a standalone licence file. |
 | `assert-plus@1.0.0` | [v1.0.0 project source](https://github.com/TritonDataCenter/node-assert-plus/tree/v1.0.0) | The exact-version npm archive places its full MIT notice in the README rather than a standalone licence file. |
-| `ignore@3.3.10` | [3.3.10 `LICENSE-MIT`](https://github.com/kaelzhang/node-ignore/blob/3.3.10/LICENSE-MIT) | The nested npm archive installed for this build omits upstream's standalone licence file. |
-| `slash@1.0.0` | [v1.0.0 `license`](https://github.com/sindresorhus/slash/blob/v1.0.0/license) | The nested npm archive installed for this build omits the exact-version licence file. |

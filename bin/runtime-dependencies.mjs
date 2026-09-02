@@ -17,7 +17,7 @@ function resolveLockedPackagePath(packages, parentPackagePath, dependencyName) {
   return packages[rootCandidate] ? rootCandidate : null;
 }
 
-export function collectRuntimePackagePaths(packageLock) {
+function collectPackagePaths(packageLock, includeRootOptionalDependencies) {
   const packages = packageLock.packages || {};
   const rootPackage = packages[''];
   if (!rootPackage) {
@@ -30,6 +30,15 @@ export function collectRuntimePackagePaths(packageLock) {
     optional: false,
     parentPackagePath: '',
   }));
+  if (includeRootOptionalDependencies) {
+    for (const dependencyName of Object.keys(rootPackage.optionalDependencies || {})) {
+      dependencyQueue.push({
+        dependencyName,
+        optional: true,
+        parentPackagePath: '',
+      });
+    }
+  }
 
   while (dependencyQueue.length > 0) {
     const dependency = dependencyQueue.shift();
@@ -74,4 +83,12 @@ export function collectRuntimePackagePaths(packageLock) {
       - secondPath.split('/node_modules/').length;
     return depthDifference || firstPath.localeCompare(secondPath);
   });
+}
+
+export function collectRuntimePackagePaths(packageLock) {
+  return collectPackagePaths(packageLock, false);
+}
+
+export function collectPackagedNodePackagePaths(packageLock) {
+  return collectPackagePaths(packageLock, true);
 }

@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { collectPackagedNodePackagePaths } from './runtime-dependencies.mjs';
+
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(scriptDirectory, '..');
 const outputDirectory = path.join(projectDirectory, 'build', 'media-legal');
@@ -22,11 +24,7 @@ const bundledRendererPackagePaths = new Set([
   'node_modules/zone.js',
 ]);
 const shippedPackagePaths = new Set([
-  ...Object.entries(packageLock.packages)
-    .filter(([packagePath, lockEntry]) => {
-      return packagePath.startsWith('node_modules/') && lockEntry.dev !== true;
-    })
-    .map(([packagePath]) => packagePath),
+  ...collectPackagedNodePackagePaths(packageLock),
   ...bundledRendererPackagePaths,
 ]);
 
@@ -53,14 +51,6 @@ const licenseOverrides = new Map([
   ['assert-plus@1.0.0', {
     file: 'assert-plus-1.0.0.txt',
     source: 'https://github.com/TritonDataCenter/node-assert-plus/tree/v1.0.0',
-  }],
-  ['ignore@3.3.10', {
-    file: 'ignore-3.3.10.txt',
-    source: 'https://github.com/kaelzhang/node-ignore/blob/3.3.10/LICENSE-MIT',
-  }],
-  ['slash@1.0.0', {
-    file: 'slash-1.0.0.txt',
-    source: 'https://github.com/sindresorhus/slash/blob/v1.0.0/license',
   }],
 ]);
 

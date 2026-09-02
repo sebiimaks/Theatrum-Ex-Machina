@@ -121,10 +121,14 @@ test('persisted media-folder access and automatic watching use separate main-own
 
 test('renderer-requested destructive media operations require native confirmation', () => {
   const ipc = source('node/main-ipc.ts');
+  const packageJson = JSON.parse(source('package.json'));
 
   assert.match(ipc, /trustedIpcOn\('delete-video-file', async/);
   assert.match(ipc, /'Delete Permanently' : 'Move to Trash'/);
   assert.match(ipc, /The media file changed while confirmation was open/);
+  assert.match(ipc, /await shell\.trashItem\(fileToDelete\)/);
+  assert.doesNotMatch(ipc, /require\(['"]trash['"]\)/);
+  assert.equal(packageJson.dependencies.trash, undefined);
   assert.match(ipc, /trustedIpcOn\('try-to-rename-this-file', async/);
   assert.match(ipc, /message: 'Rename this media file\?'/);
   assert.match(ipc, /reconcileSelectedSourceFolders/);

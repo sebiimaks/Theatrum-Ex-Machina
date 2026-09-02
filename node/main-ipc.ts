@@ -2,7 +2,6 @@ import { app, dialog, shell, BrowserWindow, nativeImage } from 'electron';
 
 import * as path from 'path';
 const fs = require('fs');
-const trash = require('trash');
 const spawn = require('child_process').spawn;
 
 import { GLOBALS } from './main-globals';
@@ -987,7 +986,7 @@ export function setUpIpcMessages(
       if (permanent) {
         await fs.promises.unlink(fileToDelete);
       } else {
-        await trash(fileToDelete);
+        await shell.trashItem(fileToDelete);
       }
       removeCatalogueMediaLocationAuthority(
         GLOBALS.authorizedCatalogueMediaLocations,
