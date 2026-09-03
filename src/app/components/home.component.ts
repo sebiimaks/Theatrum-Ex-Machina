@@ -568,6 +568,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       canBeginOpen: () => !this.blockActionDuringFolderThumbnailRegeneration(),
       chooseLegacyCatalogueOpen: (fullPath: string) => this.chooseLegacyCatalogueOpen(fullPath),
       getCurrentCatalogueForSave: () => this.getFinalObjectForSaving(),
+      legacyOpenCancelled: (fullPath: string) => this.handleLegacyCatalogueOpenCancelled(fullPath),
     });
     this.cataloguePersistenceIpc.connect({
       closeCancelled: (): void => {
@@ -2120,29 +2121,45 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   private chooseLegacyCatalogueOpen(
     fullPath: string,
   ): Promise<LegacyCatalogueOpenChoice | undefined> {
-    return this.zone.run(() => firstValueFrom(
-      this.modalService.openChoiceDialog<LegacyCatalogueOpenChoice>({
-        cancelLabel: this.translate.instant('SYSTEM.cancel'),
-        choices: [
-          {
-            description: this.translate.instant('SYSTEM.legacyCatalogueReadOnlyDescription'),
-            id: 'read-only',
-            label: this.translate.instant('SYSTEM.legacyCatalogueReadOnlyLabel'),
-          },
-          {
-            description: this.translate.instant('SYSTEM.legacyCatalogueDuplicateDescription'),
-            id: 'duplicate-scaena',
-            label: this.translate.instant('SYSTEM.legacyCatalogueDuplicateLabel'),
-            primary: true,
-          },
-        ],
-        summary: this.translate.instant('SYSTEM.legacyCatalogueDialogSummary', {
-          fileName: path.basename(fullPath),
+    return this.zone.run(() => {
+      // A restored legacy catalogue needs a fresh access decision. Reveal the
+      // decision before opening it so the startup cover cannot hide the modal.
+      if (this.flickerReduceOverlay) {
+        this.flickerReduceOverlay = false;
+        this.cd.detectChanges();
+      }
+      return firstValueFrom(
+        this.modalService.openChoiceDialog<LegacyCatalogueOpenChoice>({
+          cancelLabel: this.translate.instant('SYSTEM.cancel'),
+          choices: [
+            {
+              description: this.translate.instant('SYSTEM.legacyCatalogueReadOnlyDescription'),
+              id: 'read-only',
+              label: this.translate.instant('SYSTEM.legacyCatalogueReadOnlyLabel'),
+            },
+            {
+              description: this.translate.instant('SYSTEM.legacyCatalogueDuplicateDescription'),
+              id: 'duplicate-scaena',
+              label: this.translate.instant('SYSTEM.legacyCatalogueDuplicateLabel'),
+              primary: true,
+            },
+          ],
+          summary: this.translate.instant('SYSTEM.legacyCatalogueDialogSummary', {
+            fileName: path.basename(fullPath),
+          }),
+          supportingText: this.translate.instant('SYSTEM.legacyCatalogueDialogSupportingText'),
+          title: this.translate.instant('SYSTEM.legacyCatalogueDialogTitle'),
         }),
-        supportingText: this.translate.instant('SYSTEM.legacyCatalogueDialogSupportingText'),
-        title: this.translate.instant('SYSTEM.legacyCatalogueDialogTitle'),
-      }),
-    ));
+      );
+    });
+  }
+
+  private handleLegacyCatalogueOpenCancelled(fullPath: string): void {
+    // Cancelling a manual switch keeps the existing catalogue. During initial
+    // startup there is no committed session to return to, so show the wizard.
+    if (this.catalogueSessionGeneration === 0) {
+      this.showOpeningWizard(false, fullPath);
+    }
   }
 
   public loadFromFile(): void {

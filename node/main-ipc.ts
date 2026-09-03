@@ -199,6 +199,12 @@ export function setUpIpcMessages(
     mediaAuthority: Set<string>;
   }
 
+  interface CloseSessionSnapshot {
+    catalogue: CatalogueSessionSnapshot | null;
+    generation: number;
+    mediaAuthority: Set<string>;
+  }
+
   const captureCatalogueSession = (): CatalogueSessionSnapshot => {
     if (GLOBALS.catalogueTransitionActive || !GLOBALS.currentlyOpenVhaFile) {
       throw new Error('A catalogue transition is currently active.');
@@ -227,6 +233,29 @@ export function setUpIpcMessages(
     } catch {
       return false;
     }
+  };
+
+  const captureCloseSession = (): CloseSessionSnapshot => {
+    if (GLOBALS.catalogueTransitionActive) {
+      throw new Error('A catalogue transition is currently active.');
+    }
+    return {
+      catalogue: GLOBALS.currentlyOpenVhaFile ? captureCatalogueSession() : null,
+      generation: GLOBALS.catalogueSessionGeneration,
+      mediaAuthority: GLOBALS.authorizedCatalogueMediaLocations,
+    };
+  };
+
+  const closeSessionIsCurrent = (snapshot: CloseSessionSnapshot): boolean => {
+    if (snapshot.catalogue) {
+      return catalogueSessionIsCurrent(snapshot.catalogue);
+    }
+    return (
+      !GLOBALS.catalogueTransitionActive
+      && !GLOBALS.currentlyOpenVhaFile
+      && GLOBALS.catalogueSessionGeneration === snapshot.generation
+      && GLOBALS.authorizedCatalogueMediaLocations === snapshot.mediaAuthority
+    );
   };
 
   const configuredMediaExtensions = (): Set<string> => new Set(
@@ -2072,11 +2101,11 @@ export function setUpIpcMessages(
   /**
    * Close the window / quit / exit the app
    */
-  trustedIpcOn('close-window', (event, settingsToSave: SettingsObject, finalObjectToSave: FinalObject) => {
-    let closeSession: CatalogueSessionSnapshot;
+  trustedIpcOn('close-window', (event, settingsToSave: SettingsObject, finalObjectToSave: FinalObject | null) => {
+    let closeSession: CloseSessionSnapshot;
     let closeBaselineAuthority: Set<string>;
     try {
-      closeSession = captureCatalogueSession();
+      closeSession = captureCloseSession();
       GLOBALS.cataloguePersistenceActive = true;
       closeBaselineAuthority = new Set(GLOBALS.authorizedCatalogueMediaLocations);
     } catch (error) {
@@ -2154,7 +2183,7 @@ export function setUpIpcMessages(
       let json: string;
       let authorizedCommit: AuthorizedCatalogueCommit | null = null;
       try {
-        if (!catalogueSessionIsCurrent(closeSession)) {
+        if (!closeSessionIsCurrent(closeSession)) {
           throw new Error('The active catalogue changed before it could be saved.');
         }
         if (!settingsToSave || typeof settingsToSave !== 'object' || !settingsToSave.appState) {
@@ -2171,7 +2200,7 @@ export function setUpIpcMessages(
         // replace that authority while the app is closing.
         settingsToSave.appState.preferredVideoPlayer = GLOBALS.preferredVideoPlayer;
         settingsToSave.appState.videoPlayerArgs = GLOBALS.preferredVideoPlayerArguments;
-        settingsToSave.appState.currentVhaFile = closeSession.cataloguePath;
+        settingsToSave.appState.currentVhaFile = closeSession.catalogue?.cataloguePath || '';
         settingsToSave.vhaFileHistory = Array.isArray(settingsToSave.vhaFileHistory)
           ? settingsToSave.vhaFileHistory.filter((historyItem: any): boolean => {
             try {
@@ -2186,6 +2215,9 @@ export function setUpIpcMessages(
           })
           : [];
         if (finalObjectToSave !== null && GLOBALS.catalogueAccessMode !== 'read-only') {
+          if (!closeSession.catalogue) {
+            throw new Error('There is no active catalogue to save.');
+          }
           authorizedCommit = prepareRendererCatalogueCommit(finalObjectToSave);
         }
         // convert shortcuts map to object
@@ -2198,24 +2230,36 @@ export function setUpIpcMessages(
       }
 
       writeJsonAtomically(path.join(GLOBALS.settingsPath, 'settings.json'), json).then(() => {
-        if (!catalogueSessionIsCurrent(closeSession)) {
+        if (!closeSessionIsCurrent(closeSession)) {
           reportCloseFailure(
             new Error('The active catalogue changed while settings were being saved.'),
             'The app will remain open because the active catalogue changed during saving.',
           );
           return;
         }
-        if (finalObjectToSave === null || GLOBALS.catalogueAccessMode === 'read-only') {
+        if (
+          !closeSession.catalogue
+          || finalObjectToSave === null
+          || GLOBALS.catalogueAccessMode === 'read-only'
+        ) {
           closeWindow();
           return;
         }
 
-        writeVhaFileToDisk(authorizedCommit.finalObject, closeSession.cataloguePath, (error: Error) => {
+        if (!authorizedCommit) {
+          reportCloseFailure(
+            new Error('The catalogue save was not prepared.'),
+            'The app will remain open because the current catalogue could not be prepared for saving.',
+          );
+          return;
+        }
+
+        writeVhaFileToDisk(authorizedCommit.finalObject, closeSession.catalogue.cataloguePath, (error: Error) => {
           if (error) {
             reportCatalogueCloseFailure(error);
             return;
           }
-          if (!catalogueSessionIsCurrent(closeSession)) {
+          if (!closeSessionIsCurrent(closeSession)) {
             reportCloseFailure(
               new Error('The active catalogue changed while it was being saved.'),
               'The app will remain open because the active catalogue changed during saving.',

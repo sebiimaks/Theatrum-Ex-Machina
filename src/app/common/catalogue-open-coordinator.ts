@@ -15,6 +15,7 @@ export interface CatalogueOpenCoordinatorHooks {
   canBeginOpen(): boolean;
   chooseLegacyCatalogueOpen(fullPath: string): Promise<LegacyCatalogueOpenChoice | undefined>;
   getCurrentCatalogueForSave(): FinalObject | null;
+  legacyOpenCancelled?(fullPath: string): void;
 }
 
 export interface CatalogueOpenCoordinatorTransport {
@@ -155,6 +156,8 @@ export class CatalogueOpenCoordinator {
         if (choice) {
           this.openInFlight = true;
           this.dispatchOpen(request.fullPath, choice);
+        } else {
+          this.hooks.legacyOpenCancelled?.(request.fullPath);
         }
         this.acknowledgeExternalOpen(request);
         if (!choice) {

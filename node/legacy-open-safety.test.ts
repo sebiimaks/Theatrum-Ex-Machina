@@ -141,7 +141,48 @@ test('read-only sessions block catalogue, source-file, scan, and preview mutatio
   }
   assert.match(
     ipcSource,
-    /finalObjectToSave === null \|\| GLOBALS\.catalogueAccessMode === 'read-only'/,
+    /finalObjectToSave === null\s*\|\|\s*GLOBALS\.catalogueAccessMode === 'read-only'/,
   );
   assert.match(ipcSource, /catalogue-read-only-write-blocked/);
+});
+
+test('restored legacy choices are visible and cancellation returns an empty startup to the wizard', () => {
+  const choiceFunction = homeSource.slice(
+    homeSource.indexOf('private chooseLegacyCatalogueOpen'),
+    homeSource.indexOf('public loadFromFile'),
+  );
+  assert.match(
+    choiceFunction,
+    /flickerReduceOverlay = false;\s*this\.cd\.detectChanges\(\);[\s\S]*openChoiceDialog/,
+  );
+  assert.match(choiceFunction, /handleLegacyCatalogueOpenCancelled/);
+  assert.match(
+    choiceFunction,
+    /catalogueSessionGeneration === 0[\s\S]*showOpeningWizard\(false, fullPath\)/,
+  );
+  assert.match(homeSource, /legacyOpenCancelled: \(fullPath: string\)/);
+});
+
+test('closing before a catalogue is committed saves settings-only state and can terminate', () => {
+  assert.match(ipcSource, /interface CloseSessionSnapshot/);
+  assert.match(
+    ipcSource,
+    /catalogue: GLOBALS\.currentlyOpenVhaFile \? captureCatalogueSession\(\) : null/,
+  );
+  assert.match(
+    ipcSource,
+    /settingsToSave\.appState\.currentVhaFile = closeSession\.catalogue\?\.cataloguePath \|\| ''/,
+  );
+  assert.match(
+    ipcSource,
+    /!closeSession\.catalogue[\s\S]*finalObjectToSave === null[\s\S]*GLOBALS\.catalogueAccessMode === 'read-only'[\s\S]*closeWindow\(\)/,
+  );
+  assert.match(
+    mainSource,
+    /function getAngularToShutDown\(\): boolean[\s\S]*sender\.isDestroyed\(\)[\s\S]*sender\.id !== currentWindow\.webContents\.id[\s\S]*GLOBALS\.readyToQuit = true;[\s\S]*return false;/,
+  );
+  assert.match(
+    mainSource,
+    /win\.on\('close', \(event\) => \{\s*if \(!GLOBALS\.readyToQuit && getAngularToShutDown\(\)\) \{\s*event\.preventDefault\(\);/,
+  );
 });

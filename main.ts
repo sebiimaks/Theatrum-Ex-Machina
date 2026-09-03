@@ -977,13 +977,14 @@ function createWindow() {
   // Watch for computer powerMonitor
   // https://electronjs.org/docs/api/power-monitor
   electron.powerMonitor.on('shutdown', () => {
-    getAngularToShutDown();
+    if (!getAngularToShutDown()) {
+      app.quit();
+    }
   });
 
   win.on('close', (event) => {
-    if (!GLOBALS.readyToQuit) {
+    if (!GLOBALS.readyToQuit && getAngularToShutDown()) {
       event.preventDefault();
-      getAngularToShutDown();
     }
   });
 
@@ -1072,8 +1073,23 @@ function tellElectronDarkModeChange(mode: string) {
 /**
  * Get angular to shut down immediately - saving settings and hub if needed.
  */
-function getAngularToShutDown(): void {
-  GLOBALS.angularApp.sender.send('please-shut-down-ASAP');
+function getAngularToShutDown(): boolean {
+  const sender = GLOBALS.angularApp?.sender;
+  const currentWindow = win;
+  if (
+    !sender
+    || sender.isDestroyed()
+    || !currentWindow
+    || currentWindow.isDestroyed()
+    || sender.id !== currentWindow.webContents.id
+  ) {
+    // If renderer startup failed, there is no renderer-owned catalogue state
+    // to save and no process capable of completing the shutdown handshake.
+    GLOBALS.readyToQuit = true;
+    return false;
+  }
+  sender.send('please-shut-down-ASAP');
+  return true;
 }
 
 /**

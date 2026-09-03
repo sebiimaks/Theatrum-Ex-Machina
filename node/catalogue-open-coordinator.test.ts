@@ -52,6 +52,7 @@ function createHarness(options: {
   chooseLegacyCatalogueOpen?: (
     fullPath: string,
   ) => Promise<LegacyCatalogueOpenChoice | undefined>;
+  legacyOpenCancelled?: (fullPath: string) => void;
 } = {}) {
   const scheduler = new ManualScheduler();
   const opens: OpenRecord[] = [];
@@ -75,6 +76,7 @@ function createHarness(options: {
     canBeginOpen: options.canBeginOpen || (() => true),
     chooseLegacyCatalogueOpen: options.chooseLegacyCatalogueOpen || (async () => undefined),
     getCurrentCatalogueForSave: () => snapshot,
+    legacyOpenCancelled: options.legacyOpenCancelled,
   });
 
   return {
@@ -159,10 +161,12 @@ test('legacy catalogue choices preserve read-only and duplicate intents', async 
 
 test('cancelling a legacy decision releases the next queued request', async () => {
   let resolveChoice: (choice: LegacyCatalogueOpenChoice | undefined) => void;
+  const cancelledPaths: string[] = [];
   const harness = createHarness({
     chooseLegacyCatalogueOpen: () => new Promise((resolve) => {
       resolveChoice = resolve;
     }),
+    legacyOpenCancelled: (fullPath: string) => cancelledPaths.push(fullPath),
   });
 
   harness.coordinator.requestOpen('/catalogues/legacy.vha2', true);
@@ -171,6 +175,7 @@ test('cancelling a legacy decision releases the next queued request', async () =
   await settlePromises();
 
   assert.equal(harness.acknowledgements, 1);
+  assert.deepEqual(cancelledPaths, ['/catalogues/legacy.vha2']);
   assert.equal(harness.scheduler.pendingCount, 1);
   harness.scheduler.flushNext();
   assert.deepEqual(harness.opens.map(({ fullPath }) => fullPath), ['/catalogues/next.scaena']);
