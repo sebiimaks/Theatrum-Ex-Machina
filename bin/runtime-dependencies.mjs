@@ -17,7 +17,11 @@ function resolveLockedPackagePath(packages, parentPackagePath, dependencyName) {
   return packages[rootCandidate] ? rootCandidate : null;
 }
 
-function collectPackagePaths(packageLock, includeRootOptionalDependencies) {
+function collectPackagePaths(
+  packageLock,
+  includeRootOptionalDependencies,
+  isOptionalPackageInstalled = () => true,
+) {
   const packages = packageLock.packages || {};
   const rootPackage = packages[''];
   if (!rootPackage) {
@@ -56,6 +60,9 @@ function collectPackagePaths(packageLock, includeRootOptionalDependencies) {
         `Unable to resolve runtime dependency '${dependency.dependencyName}' from '${dependency.parentPackagePath || 'root'}'.`,
       );
     }
+    if (dependency.optional && !isOptionalPackageInstalled(packagePath)) {
+      continue;
+    }
     if (runtimePackagePaths.has(packagePath)) {
       continue;
     }
@@ -89,6 +96,9 @@ export function collectRuntimePackagePaths(packageLock) {
   return collectPackagePaths(packageLock, false);
 }
 
-export function collectPackagedNodePackagePaths(packageLock) {
-  return collectPackagePaths(packageLock, true);
+export function collectPackagedNodePackagePaths(
+  packageLock,
+  isOptionalPackageInstalled = () => true,
+) {
+  return collectPackagePaths(packageLock, true, isOptionalPackageInstalled);
 }

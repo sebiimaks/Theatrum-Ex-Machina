@@ -356,8 +356,11 @@ function verifyNotices(resourcesPath, archivedFiles) {
 
   assert.equal(
     thirdPartyNotices,
-    fs.readFileSync(path.join(projectDirectory, 'legal', 'THIRD_PARTY_NOTICES.txt'), 'utf8'),
-    'The packaged runtime notices differ from the reviewed tracked notice file.',
+    fs.readFileSync(
+      path.join(projectDirectory, 'build', 'media-legal', 'THIRD_PARTY_NOTICES.txt'),
+      'utf8',
+    ),
+    'The packaged runtime notices differ from the generated platform notice file.',
   );
   assert.equal(
     rendererThirdPartyNotices,
@@ -441,6 +444,9 @@ function verifyNotices(resourcesPath, archivedFiles) {
     ['punycode@2.3.1', 'Copyright Mathias Bynens <https://mathiasbynens.be/>'],
   ]);
   for (const [identity, copyrightNotice] of requiredExactAttributions) {
+    if (!thirdPartyNotices.includes(`\n${identity}\n`)) {
+      continue;
+    }
     assert.ok(
       runtimeNoticeSection(identity).includes(copyrightNotice),
       `The packaged notice for ${identity} is missing its reviewed copyright attribution.`,

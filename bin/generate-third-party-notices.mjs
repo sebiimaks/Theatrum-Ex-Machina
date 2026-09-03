@@ -23,8 +23,17 @@ const bundledRendererPackagePaths = new Set([
   'node_modules/rxjs',
   'node_modules/zone.js',
 ]);
+const allPackagedNodePackagePaths = collectPackagedNodePackagePaths(packageLock);
+const installedPackagedNodePackagePaths = collectPackagedNodePackagePaths(
+  packageLock,
+  (relativePackageDirectory) => fs.existsSync(path.join(
+    projectDirectory,
+    relativePackageDirectory,
+    'package.json',
+  )),
+);
 const shippedPackagePaths = new Set([
-  ...collectPackagedNodePackagePaths(packageLock),
+  ...installedPackagedNodePackagePaths,
   ...bundledRendererPackagePaths,
 ]);
 
@@ -185,8 +194,15 @@ const notices = [
 
 fs.mkdirSync(outputDirectory, { recursive: true });
 fs.mkdirSync(path.dirname(trackedNoticePath), { recursive: true });
-fs.writeFileSync(trackedNoticePath, notices, 'utf8');
-fs.copyFileSync(trackedNoticePath, path.join(outputDirectory, 'THIRD_PARTY_NOTICES.txt'));
+const platformNoticePath = path.join(outputDirectory, 'THIRD_PARTY_NOTICES.txt');
+fs.writeFileSync(platformNoticePath, notices, 'utf8');
+if (installedPackagedNodePackagePaths.length === allPackagedNodePackagePaths.length) {
+  fs.writeFileSync(trackedNoticePath, notices, 'utf8');
+} else if (!fs.existsSync(trackedNoticePath)) {
+  throw new Error(
+    'The canonical tracked third-party notice is missing, and this platform cannot regenerate it completely.',
+  );
+}
 fs.copyFileSync(
   path.join(projectDirectory, 'node_modules', 'electron', 'LICENSE'),
   path.join(outputDirectory, 'ELECTRON-LICENSE.txt'),
