@@ -29,6 +29,11 @@ This changelog covers material fork-specific changes made after the upstream bas
 <p>Made the legal-notice inventory follow the dependencies actually installed for the target platform. Linux now prunes the absent macOS-only DMG helper and its complete optional dependency closure without weakening checks for required runtime packages, while macOS retains its existing reviewed inventory. Platform packages must still contain an exact notice for every shipped Node and compiled-renderer dependency, including the fork’s audited copyright attributions.</p>
 </details>
 
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/8230f78671876950ea344b0758ba8263e9f1847b"><code>8230f786</code></a> — <strong>Fix the Linux desktop video category</strong></summary>
+<p>Moved the complete <code>AudioVideo;Video</code> classification into Electron Builder’s authoritative Linux category field. The generated desktop entry now retains both the main multimedia category and the more specific video category instead of silently replacing the custom entry during packaging.</p>
+</details>
+
 </details>
 
 <details>
