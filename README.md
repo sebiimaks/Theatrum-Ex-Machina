@@ -7,7 +7,7 @@
 **Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
 - Current fork version: `v1.1.2`
-- Change summary updated: 02/09/2026
+- Change summary updated: 03/09/2026
 
 # Fork Changelog
 
@@ -21,7 +21,8 @@ This changelog covers material fork-specific changes made after the upstream bas
 <details>
 <summary><strong>Reduce dependency and packaged-runtime debt</strong></summary>
 <p>Replaced the obsolete third-party Trash wrapper with Electron's native, literal-path Trash operation, removing its vulnerable UUID and globbing dependency chain from the shipped application. Removed the broad forced <code>glob</code> and <code>minimatch</code> downgrades, moved linting from the unsupported ESLint 8 line to ESLint 9 without changing the existing lint baseline, and regenerated the lockfile from an isolated dependency resolution. Runtime staging remains limited to the exact production closure, while third-party notice generation now follows the exact packaged Node, optional packaging, and compiled-renderer dependency sets.</p>
-<p>At this maintenance checkpoint, the live npm audit falls from 102 affected package nodes to 41, the production-and-non-optional view falls from eight to two Angular findings, and the staged Node runtime contains none of the removed <code>trash</code>, <code>uuid</code>, <code>glob</code>, <code>globby</code>, <code>minimatch</code>, or <code>brace-expansion</code> packages. The remaining same-major Angular, Electron, and build-tool patches are being handled as a separate tested slice rather than through a forced audit rewrite.</p>
+<p>Applied the compatible maintenance releases across Angular, Angular Material, Angular ESLint, TypeScript ESLint, Electron, and Electron Builder, and aligned the declared Node.js support range with the complete build toolchain. The live npm audit now falls from 102 affected package nodes to eight moderate findings, all confined to the development-server and build-tool chain; the production-and-non-optional audit reports zero findings. No high or critical advisories remain, and no forced audit rewrite or framework-major migration was used.</p>
+<p>The staged Node runtime contains none of the removed <code>trash</code>, <code>uuid</code>, <code>glob</code>, <code>globby</code>, <code>minimatch</code>, or <code>brace-expansion</code> packages.</p>
 </details>
 
 </details>
