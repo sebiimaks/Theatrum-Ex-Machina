@@ -6,7 +6,7 @@
 
 **Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
-- Current fork version: `v1.1.2`
+- Current fork version: `v1.1.3`
 - Change summary updated: 03/09/2026
 
 # Fork Changelog
@@ -18,15 +18,24 @@ This changelog covers material fork-specific changes made after the upstream bas
 <details>
 <summary><strong>Unreleased</strong></summary>
 
+</details>
+
 <details>
-<summary><strong>Fix restored legacy catalogue startup and shutdown</strong></summary>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v1.1.3">v1.1.3</a> — 3 September 2026</strong></summary>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/0c61f06eca7f0b8f69aa08c4157d9c32d9565f19"><code>0c61f06e</code></a> — <strong>Fix restored legacy catalogue startup and shutdown</strong></summary>
 <p>Restored startup when the saved current catalogue is a legacy <code>.vha2</code> file: the read-only-or-duplicate decision now appears above the startup cover, and cancelling the initial decision returns to the opening wizard. Closing from that decision or before any catalogue has opened now saves application settings without attempting a catalogue write, while a missing or stale renderer can no longer trap the app in its shutdown handshake. Active editable catalogues retain the existing save-before-close protections.</p>
 </details>
 
 <details>
-<summary><strong>Reduce dependency and packaged-runtime debt</strong></summary>
-<p>Replaced the obsolete third-party Trash wrapper with Electron's native, literal-path Trash operation, removing its vulnerable UUID and globbing dependency chain from the shipped application. Removed the broad forced <code>glob</code> and <code>minimatch</code> downgrades, moved linting from the unsupported ESLint 8 line to ESLint 9 without changing the existing lint baseline, and regenerated the lockfile from an isolated dependency resolution. Runtime staging remains limited to the exact production closure, while third-party notice generation now follows the exact packaged Node, optional packaging, and compiled-renderer dependency sets.</p>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/cfd7098a75aae4153bb90a931afcda9119dcd221"><code>cfd7098a</code></a> — <strong>Update Angular and Electron maintenance releases</strong></summary>
 <p>Applied the compatible maintenance releases across Angular, Angular Material, Angular ESLint, TypeScript ESLint, Electron, and Electron Builder, and aligned the declared Node.js support range with the complete build toolchain. The live npm audit now falls from 102 affected package nodes to eight moderate findings, all confined to the development-server and build-tool chain; the production-and-non-optional audit reports zero findings. No high or critical advisories remain, and no forced audit rewrite or framework-major migration was used.</p>
+</details>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/dd294616cd08e478ed559c0d9e54fd231cc48170"><code>dd294616</code></a> — <strong>Reduce dependency and packaged-runtime debt</strong></summary>
+<p>Replaced the obsolete third-party Trash wrapper with Electron's native, literal-path Trash operation, removing its vulnerable UUID and globbing dependency chain from the shipped application. Removed the broad forced <code>glob</code> and <code>minimatch</code> downgrades, moved linting from the unsupported ESLint 8 line to ESLint 9 without changing the existing lint baseline, and regenerated the lockfile from an isolated dependency resolution. Runtime staging remains limited to the exact production closure, while third-party notice generation now follows the exact packaged Node, optional packaging, and compiled-renderer dependency sets.</p>
 <p>The staged Node runtime contains none of the removed <code>trash</code>, <code>uuid</code>, <code>glob</code>, <code>globby</code>, <code>minimatch</code>, or <code>brace-expansion</code> packages.</p>
 </details>
 
