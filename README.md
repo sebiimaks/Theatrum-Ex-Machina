@@ -24,6 +24,11 @@ This changelog covers material fork-specific changes made after the upstream bas
 <p>The artifact contains the <code>.deb</code>, a platform-qualified matching media-source archive, and verified SHA-256 checksums. The workflow cannot publish a release, preventing an untested Linux build from being attached to an existing release automatically.</p>
 </details>
 
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/e7a7a34ded8123696c828323df257aa53c264e65"><code>e7a7a34d</code></a> — <strong>Make packaged notices platform-aware</strong></summary>
+<p>Made the legal-notice inventory follow the dependencies actually installed for the target platform. Linux now prunes the absent macOS-only DMG helper and its complete optional dependency closure without weakening checks for required runtime packages, while macOS retains its existing reviewed inventory. Platform packages must still contain an exact notice for every shipped Node and compiled-renderer dependency, including the fork’s audited copyright attributions.</p>
+</details>
+
 </details>
 
 <details>
