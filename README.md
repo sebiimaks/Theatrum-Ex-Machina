@@ -374,9 +374,11 @@ Before building, install the project's development prerequisites and review `LIC
 
 On an Apple Silicon Mac, run `npm run electron:mac:release`. The command builds an unsigned and unnotarized ARM64 DMG, creates the matching media-source archive, and verifies the packaged application and licensing payload. Outputs are written to the ignored `release/` directory. The reproducible unpacked staging application may be deleted after verification.
 
-### ~~Debian 13 AMD64~~
+### Debian/Ubuntu AMD64 CI Test Builds
 
-~~Debian packages must be built natively on Debian 13 AMD64; cross-building them on macOS is not supported. Run `npm run electron` after installing the required development tools and preparing the platform-specific media binaries. The resulting Debian package and matching media-source archive should be distributed together with all required licence materials if they are shared outside the local system.~~
+Run the manual [Linux Debian package workflow](https://github.com/sebiimaks/Theatrum-Ex-Machina/actions/workflows/linux-deb.yml) to build natively on GitHub's Ubuntu 22.04 AMD64 runner. The workflow compiles the reviewed FFmpeg and x264 sources for Linux, runs the static and automated test suites, builds and installs the `.deb`, verifies its architecture, linkage, application contents, desktop integration, licensing and matching corresponding source, exercises media extraction, starts the packaged app under Xvfb, and verifies SHA-256 checksums.
+
+One expiring Actions artifact contains the `.deb`, its platform-qualified media-source archive, and `SHA256SUMS-linux-amd64`. The workflow has read-only repository permissions and cannot publish a GitHub release. Treat its output as a CI test build—not an official release—and test installation, catalogue opening, scanning, playback, Trash, network volumes, and `.scaena` file association on a normal Debian/Ubuntu desktop before public distribution. A native Linux AMD64 build host can run `npm run electron:linux:release` for the same package and verification path.
 
 ## Licensing and Attribution
 
