@@ -78,7 +78,7 @@
   "linux": {
     "artifactName": "theatrum-ex-machina-v${version}-linux-${arch}.${ext}",
     "icon": "src/assets/icons/png",
-    "category": "AudioVideo",
+    "category": "AudioVideo;Video",
     "synopsis": "Personal fork of Video Hub App",
     "description": "Browse, search, preview, and manage video collections. Theatrum Ex Machina is a personal fork of Video Hub App. Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use at your own risk.",
     "maintainer": "sebiimaks <github.sadness446@passmail.net>",
@@ -86,8 +86,7 @@
     "desktop": {
       "entry": {
         "Name": "Theatrum Ex Machina",
-        "Comment": "Browse, search, preview, and manage video collections",
-        "Categories": "AudioVideo;Video;"
+        "Comment": "Browse, search, preview, and manage video collections"
       }
     },
     "target": [

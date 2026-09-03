@@ -16,6 +16,8 @@ test('keeps Debian packaging native, AMD64-specific, verified, and non-publishin
   const verifier = source('bin/verify-packaged-linux.mjs');
 
   assert.ok(builder.linux.target.includes('deb'));
+  assert.equal(builder.linux.category, 'AudioVideo;Video');
+  assert.equal(builder.linux.desktop.entry.Categories, undefined);
   assert.equal(
     builder.linux.artifactName,
     'theatrum-ex-machina-v${version}-linux-${arch}.${ext}',
