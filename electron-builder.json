@@ -76,6 +76,7 @@
     "asar": true
   },
   "linux": {
+    "artifactName": "theatrum-ex-machina-v${version}-linux-${arch}.${ext}",
     "icon": "src/assets/icons/png",
     "category": "AudioVideo",
     "synopsis": "Personal fork of Video Hub App",

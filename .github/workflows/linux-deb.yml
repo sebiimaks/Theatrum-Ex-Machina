@@ -1,0 +1,136 @@
+name: Linux Debian package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-deb-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-linux-deb:
+    name: Build and verify Linux AMD64 Debian package
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    env:
+      CI: 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.16.0
+          cache: npm
+
+      - name: Install native build and test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            binutils \
+            build-essential \
+            ca-certificates \
+            curl \
+            dpkg \
+            file \
+            libasound2 \
+            libatspi2.0-0 \
+            libgbm1 \
+            libgtk-3-0 \
+            libnotify4 \
+            libnss3 \
+            libopenjp2-tools \
+            libsecret-1-0 \
+            libuuid1 \
+            libxss1 \
+            libxtst6 \
+            nasm \
+            pkg-config \
+            xauth \
+            xdg-utils \
+            xvfb \
+            xz-utils
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Build Linux media tools from reviewed sources
+        run: npm run media:build
+
+      - name: Run static checks
+        run: npm run check
+
+      - name: Run tests
+        run: xvfb-run --auto-servernum npm test
+
+      - name: Prepare packaged runtime and legal notices
+        run: npm run media:prepare
+
+      - name: Build production renderer
+        run: npm run build:prod
+
+      - name: Build Linux AMD64 Debian package
+        run: ./node_modules/.bin/electron-builder build --linux deb --x64 --publish never
+
+      - name: Create matching Linux media source archive
+        run: npm run media:source:linux
+
+      - name: Verify packaged application and corresponding source
+        env:
+          THEATRUM_REQUIRE_XVFB_SMOKE: '1'
+        run: npm run verify:linux:release
+
+      - name: Verify Debian installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_version="$(node -p "require('./package.json').version")"
+          deb_path="release/theatrum-ex-machina-v${release_version}-linux-amd64.deb"
+
+          sudo apt-get install --yes --no-install-recommends "./${deb_path}"
+          test "$(dpkg-query --show --showformat='${Version}' theatrum-ex-machina)" = "${release_version}"
+          test "$(dpkg-query --show --showformat='${Architecture}' theatrum-ex-machina)" = 'amd64'
+
+      - name: Create and verify checksums
+        id: artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_version="$(node -p "require('./package.json').version")"
+          deb_name="theatrum-ex-machina-v${release_version}-linux-amd64.deb"
+          source_name="theatrum-ex-machina-media-source-v${release_version}-linux-amd64.tar.xz"
+          checksum_name="SHA256SUMS-linux-amd64"
+
+          test -s "release/${deb_name}"
+          test -s "release/${source_name}"
+
+          (
+            cd release
+            sha256sum "${deb_name}" "${source_name}" > "${checksum_name}"
+            sha256sum --check "${checksum_name}"
+          )
+
+          {
+            echo "release-version=${release_version}"
+            echo "deb-path=release/${deb_name}"
+            echo "source-path=release/${source_name}"
+            echo "checksum-path=release/${checksum_name}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload verified Linux package bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: theatrum-ex-machina-v${{ steps.artifacts.outputs.release-version }}-linux-amd64
+          path: |
+            ${{ steps.artifacts.outputs.deb-path }}
+            ${{ steps.artifacts.outputs.source-path }}
+            ${{ steps.artifacts.outputs.checksum-path }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
