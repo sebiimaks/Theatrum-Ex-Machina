@@ -18,6 +18,12 @@ This changelog covers material fork-specific changes made after the upstream bas
 <details>
 <summary><strong>Unreleased</strong></summary>
 
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/16a9ef8beb7c7424410a968f3b68b09cf09644fa"><code>16a9ef8b</code></a> — <strong>Add a verified native Linux Debian build</strong></summary>
+<p>Added a manual, read-only GitHub Actions workflow that builds the AMD64 Debian package natively on Ubuntu 22.04, compiles the reviewed FFmpeg and x264 sources for Linux, and runs the complete static and automated test suites. The pipeline verifies Debian metadata and installation, Electron and media-tool architecture and linkage, packaged runtime boundaries, desktop and file-association metadata, licensing notices, corresponding-source completeness, functional media extraction, and packaged startup under Xvfb before producing an expiring CI artifact.</p>
+<p>The artifact contains the <code>.deb</code>, a platform-qualified matching media-source archive, and verified SHA-256 checksums. The workflow cannot publish a release, preventing an untested Linux build from being attached to an existing release automatically.</p>
+</details>
+
 </details>
 
 <details>
