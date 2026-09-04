@@ -657,6 +657,8 @@ test('renders the hierarchy as an independent vertical right-side panel', () => 
   const bottomTrayStart = homeTemplate.indexOf('class="bottom-tray"');
   const bottomTabsStart = homeTemplate.indexOf('class="all-settings-tabs bottom-tray-tabs"');
   const floatingButtonStart = homeTemplate.indexOf('class="catalogueEditorButton tag-panel-button"');
+  const panelGuardStart = homeTemplate.lastIndexOf('@if (', panelStart);
+  const floatingButtonGuardStart = homeTemplate.lastIndexOf('@if (', floatingButtonStart);
   const windowContentEnd = homeTemplate.indexOf('end of window-content');
   assert.ok(panelStart > -1);
   assert.ok(panelStart < bottomTrayStart);
@@ -667,6 +669,14 @@ test('renders the hierarchy as an independent vertical right-side panel', () => 
   assert.doesNotMatch(homeTemplate.slice(bottomTrayStart), /<app-tag-tray/);
   assert.ok(floatingButtonStart > panelStart);
   assert.ok(floatingButtonStart > windowContentEnd);
+  assert.match(
+    homeTemplate.slice(panelGuardStart, panelStart),
+    /!wizard\.showWizard/,
+  );
+  assert.match(
+    homeTemplate.slice(floatingButtonGuardStart, floatingButtonStart),
+    /!wizard\.showWizard/,
+  );
   assert.doesNotMatch(
     homeTemplate.slice(bottomTabsStart),
     /toggleButton\('showTagTray'\)/,

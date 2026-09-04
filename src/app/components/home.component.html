@@ -1250,7 +1250,7 @@
     </div>
   }
 
-  @if (settingsButtons['showTagTray'].toggled) {
+  @if (!wizard.showWizard && settingsButtons['showTagTray'].toggled) {
     <aside
       class="right-tag-panel"
       [ngClass]="{ 'right-tag-panel-dark': settingsButtons['darkMode'].toggled }"
@@ -1289,7 +1289,7 @@
 
   </div> <!-- end of window-content -->
 
-  @if (!settingsButtons['showTagTray'].hidden && !settingsButtons['showTagTray'].toggled) {
+  @if (!wizard.showWizard && !settingsButtons['showTagTray'].hidden && !settingsButtons['showTagTray'].toggled) {
     <button
       class="catalogueEditorButton tag-panel-button"
       [class.tag-panel-button-raised]="settingsButtons['showDetailsTray'].toggled
