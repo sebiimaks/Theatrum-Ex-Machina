@@ -7,7 +7,7 @@
 **Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
 - Current fork version: `v1.1.3`
-- Change summary updated: 03/09/2026
+- Change summary updated: 04/09/2026
 
 # Fork Changelog
 
@@ -17,6 +17,11 @@ This changelog covers material fork-specific changes made after the upstream bas
 
 <details>
 <summary><strong>Unreleased</strong></summary>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/d49be2e12e34af7cf4847a3bddf78f0b1119b31e"><code>d49be2e1</code></a> — <strong>Hide Tags controls from the opening wizard</strong></summary>
+<p>Kept the right-side Tags panel and its floating opener out of the opening wizard regardless of the saved panel state or platform startup timing. The saved panel preference remains intact for the catalogue interface, and regression coverage protects both the panel and opener from appearing over the wizard.</p>
+</details>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/16a9ef8beb7c7424410a968f3b68b09cf09644fa"><code>16a9ef8b</code></a> — <strong>Add a verified native Linux Debian build</strong></summary>
