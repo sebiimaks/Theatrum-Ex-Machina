@@ -10,7 +10,8 @@
   <!-- RENAME FILE SECTION -->
   <input
     class="meta-title"
-    [attr.aria-label]="'WORKBENCH.videoTitle' | translate"
+    [attr.aria-label]="'RIGHTCLICK.renameFile' | translate"
+    [attr.title]="'WORKBENCH.renameFileHelp' | translate"
     [ngClass]="{ 'larger-font': largerFont() }"
     [ngStyle]="{
         width: renamingWIP.length + 10 + 'ch',

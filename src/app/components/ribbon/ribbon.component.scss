@@ -1,17 +1,45 @@
 @use "../variables";
 
 :host {
+  align-items: center;
   display: flex;
+  flex-wrap: nowrap;
   min-width: 0;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 12px;
   width: 100%;
+
+  // Keep a visible scroll affordance without changing the 40px toolbar height.
+  &::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: var(--app-control-background);
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--app-border-strong);
+    border-radius: 3px;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--app-text-secondary);
+  }
 }
 
 .settings-buttons-group {
-  float: left;
-  margin-bottom: 10px; // if ever app width is too small, buttons spill over; this pushes them below cutoff
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   margin-right: 8px;
   max-height: 27px;
   z-index: 2;
+
+  button {
+    flex: 0 0 auto;
+  }
 
   .defaultSettingsButton {
     max-height: 25px;
@@ -66,18 +94,17 @@
   color: var(--app-text-secondary);
   display: flex;
   flex: 1 1 180px;
-  float: left;
   font-size: 13px;
   font-weight: 400;
   height: 25px;
   margin-left: 2px;
+  max-width: 360px;
+  min-width: 0;
   opacity: 0;
   overflow: hidden;
   padding: 0 8px;
   pointer-events: none;
   transition: opacity var(--app-motion-fast);
-  min-width: 0;
-  max-width: 360px;
 }
 
 .ribbon-hover-label-visible {

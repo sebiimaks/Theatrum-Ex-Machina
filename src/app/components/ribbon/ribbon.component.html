@@ -15,6 +15,7 @@
         (mouseleave)="clearHoveredButtonLabel(buttonKey)"
         (pointerdown)="clearFocusedButtonLabel(buttonKey)"
         [attr.aria-label]="settingsButtons[buttonKey].title | translate"
+        [title]="settingsButtons[buttonKey].title | translate"
         [ngClass]="settingsButtons[buttonKey].toggled | buttonStylePipe : settingsButtons['darkMode'].toggled
                                                                         : settingsButtons['flatIcons'].toggled"
         type="button"

@@ -17,8 +17,13 @@
   box-sizing: border-box;
   color: var(--app-text-primary);
   font-size: 12px;
-  overflow: hidden;
-  position: absolute;
+  max-height: calc(100dvh - var(--app-context-menu-y, 0px));
+  max-width: calc(100vw - var(--app-context-menu-x, 0px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  position: fixed;
   z-index: 30;
 
   ul {

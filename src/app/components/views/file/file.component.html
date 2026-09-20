@@ -37,7 +37,7 @@
           class="file-favorite"
           [class.file-favorite-active]="video.stars === 5.5"
           [attr.aria-pressed]="video.stars === 5.5"
-          [attr.aria-label]="(video.stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate"
+          [attr.aria-label]="((video.stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate) + ': ' + (video.cleanName || video.fileName)"
           [title]="(video.stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate"
           (click)="toggleHeart($event)"
           (dblclick)="$event.stopPropagation()"

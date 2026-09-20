@@ -120,7 +120,7 @@
             <img
               class="full-filmstrip"
               [ngStyle]="{ height: '100%', transform: 'translate(' + (-percentOffset * i) + '%, 0)' }"
-              src="{{ pathToFilmstripJpg }}"
+              src="{{ pathToFilmstripJpg() }}"
               alt=""
             >
             <span class="frame-play-symbol" aria-hidden="true"><app-icon [icon]="'icon-play'" [size]="24" /></span>

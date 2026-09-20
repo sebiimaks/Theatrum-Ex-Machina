@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import { test } from 'node:test';
 import { join } from 'path';
 
+import { LanguageLookup } from '../src/app/common/languages';
 import { SettingsButtons } from '../src/app/common/settings-buttons';
 import {
   getSettingsWorkspaceSections,
@@ -17,6 +18,27 @@ const translate = (key: string): string => key.split('.').reduce((value, part) =
 const search = (query: string, category: SettingsCategoryId = 'appearance') => (
   getSettingsWorkspaceSections(category, query, SettingsButtons, translate)
 );
+
+test('every supported language covers the Workbench and preserves interpolation parameters', () => {
+  const expectedKeys = Object.keys(english.WORKBENCH).sort();
+  const parameters = (value: string): string[] => (
+    Array.from(value.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g), (match) => match[1].trim()).sort()
+  );
+
+  for (const [locale, translations] of Object.entries(LanguageLookup)) {
+    const workbench = translations.WORKBENCH;
+    assert.ok(workbench && typeof workbench === 'object', `${locale} must include Workbench translations`);
+    assert.deepEqual(Object.keys(workbench).sort(), expectedKeys, `${locale} must cover all Workbench keys`);
+
+    for (const key of expectedKeys) {
+      const value = workbench[key];
+      const message = `${locale}.WORKBENCH.${key}`;
+      assert.equal(typeof value, 'string', `${message} must be text`);
+      assert.ok(value.trim(), `${message} must not be empty`);
+      assert.deepEqual(parameters(value), parameters(english.WORKBENCH[key]), `${message} must preserve interpolation parameters`);
+    }
+  }
+});
 
 test('organizes all 94 persisted settings exactly once across the settings workspace', () => {
   const keys = SettingsWorkspaceCategories.flatMap((category) => category.sections.flatMap((section) => section.buttonKeys));

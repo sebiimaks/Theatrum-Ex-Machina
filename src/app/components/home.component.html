@@ -101,7 +101,9 @@
     appDialogKeyboard (dialogEscape)="dismissContextMenu()"
     [ngStyle]="{
         top: rightClickPosition.y + 'px',
-        left: rightClickPosition.x + 'px'
+        left: rightClickPosition.x + 'px',
+        '--app-context-menu-x': rightClickPosition.x + 'px',
+        '--app-context-menu-y': rightClickPosition.y + 'px'
       }"
     class="right-click-menu"
     @rightClickAnimation
@@ -227,10 +229,10 @@
   <!-- Clickable tabs -->
 
 @if (settingsModalOpen) {
-  <div cdkTrapFocus [cdkTrapFocusAutoCapture]="true"
+  <div class="workbench-settings-dialog" cdkTrapFocus [cdkTrapFocusAutoCapture]="true"
     appDialogKeyboard (dialogEscape)="toggleSettings()"
     role="dialog" aria-modal="true" [attr.aria-label]="'SETTINGS.settings' | translate">
-  <aside class="workbench-settings-nav" aria-label="Settings navigation">
+  <aside class="workbench-settings-nav" [attr.aria-label]="'WORKBENCH.settingsCategories' | translate">
     <button type="button" class="workbench-settings-back" (click)="toggleSettings()">
       <span aria-hidden="true">←</span> {{ 'WORKBENCH.backToLibrary' | translate }}
     </button>
@@ -398,14 +400,14 @@
           <button type="button" class="workbench-enable-search" (click)="toggleButton('magic')">{{ 'WORKBENCH.search' | translate }}</button>
         }
         <label class="workbench-view"><span>{{ 'WORKBENCH.view' | translate }}</span>
-          <select [ngModel]="appState.currentView" (ngModelChange)="toggleButton($event)" [attr.aria-label]="'WORKBENCH.galleryView' | translate">
+          <select #workspaceViewSelect [ngModel]="appState.currentView" (ngModelChange)="toggleButton($event)" [attr.aria-label]="'WORKBENCH.galleryView' | translate">
             @for (view of workbenchViews; track view) { <option [value]="view">{{ settingsButtons[view].title | translate }}</option> }
           </select>
         </label>
         <button type="button" (click)="toggleRibbon()" [attr.aria-expanded]="!appState.menuHidden" aria-controls="workbench-pinned-controls" [title]="'WORKBENCH.pinnedControls' | translate">
           <app-icon [icon]="'icon-show-more-info'" [size]="16" /><span class="workbench-toolbar-label">{{ 'WORKBENCH.pinned' | translate }}</span>
         </button>
-        <button type="button" (click)="toggleSettings()" [attr.aria-pressed]="settingsModalOpen" [attr.aria-label]="'SETTINGS.settings' | translate">
+        <button type="button" class="workbench-open-settings" (click)="toggleSettings()" [attr.aria-pressed]="settingsModalOpen" [attr.aria-label]="'SETTINGS.settings' | translate">
           <app-icon [icon]="'icon-gear'" [size]="18" /><span class="workbench-toolbar-label">{{ 'SETTINGS.settings' | translate }}</span>
         </button>
       </div>
@@ -494,7 +496,7 @@
           'sidebar-dark-mode': settingsButtons['darkMode'].toggled
         }"
       [ngStyle]="{
-          'height': 'calc(100vh - ' + (
+          'height': 'max(0px, calc(100vh - ' + (
                         appState.menuHidden | sidebarHeightPipe
                           : settingsButtons['hideTop'].toggled
                           : (
@@ -503,7 +505,7 @@
                               || settingsButtons['showRecentlyPlayed'].toggled
                               || settingsButtons['showRelatedVideosTray'].toggled
                             )
-                      ) + 'px)'
+                      ) + ' - var(--app-sidebar-inset, 0px)))'
         }"
       #searchRef
     >
@@ -887,7 +889,7 @@
       [style.margin-top.px]="workspaceGalleryInset"
 
       [ngStyle]="{
-          'height': 'calc(100vh - ' + (
+          'height': 'max(0px, calc(100vh - ' + (
                         appState.menuHidden | sidebarHeightPipe
                           : settingsButtons['hideTop'].toggled
                           : (
@@ -896,7 +898,7 @@
                               || settingsButtons['showRecentlyPlayed'].toggled
                               || settingsButtons['showRelatedVideosTray'].toggled
                             )
-                      ) + 'px - ' + workspaceGalleryInset + 'px)'
+                      ) + ' - ' + workspaceGalleryInset + 'px))'
         }"
 
       [enableUnequalChildrenSizes]="appState.currentView === 'showFullView'"
@@ -914,6 +916,8 @@
       [bufferAmount]="getVirtualScrollBufferAmount(appState.currentView)"
 
       [items]="imageElementService.imageElements
+
+                | recentlyPlayedOnlyPipe : showRecentlyPlayedOnly : playbackRevision
 
                 | playlistOnlyPipe : settingsButtons['showOnlyPlaylist'].toggled : playlistViewRefresh
 
@@ -1252,19 +1256,39 @@
 
     </virtual-scroller>
 
-  @if (numberOfVideosFound === 0) {
-    <div
-      class="no-results"
-      [ngStyle]="{
-        'padding-left': settingsButtons['hideSidebar'].toggled ? 0 : '190px'
-      }"
+  @if (numberOfVideosFound === 0 && !wizard.showWizard) {
+    <section
+      class="workbench-empty"
+      [class.workbench-empty-full]="settingsButtons['hideSidebar'].toggled"
+      [class.workbench-empty-tags]="settingsButtons['showTagTray'].toggled"
+      [style.margin-top.px]="workspaceGalleryInset"
+      [style.height]="'max(0px, calc(100vh - ' + (appState.menuHidden | sidebarHeightPipe
+        : settingsButtons['hideTop'].toggled
+        : (settingsButtons['showDetailsTray'].toggled || settingsButtons['showFreq'].toggled
+          || settingsButtons['showRecentlyPlayed'].toggled || settingsButtons['showRelatedVideosTray'].toggled))
+        + ' - ' + workspaceGalleryInset + 'px))'"
+      aria-labelledby="workbench-empty-title"
     >
-      @if ((appState.currentView === 'showClips' && currentScreenshotSettings.clipSnippets === 0)) {
-        {{ 'SETTINGS.noClipsExtracted' | translate }}
-      } @else {
-        {{ 'SETTINGS.noResultsFound' | translate }}
-      }
-    </div>
+      <div class="workbench-empty-card">
+        <span class="workbench-empty-icon" aria-hidden="true"><app-icon [icon]="'icon-looking-glass'" [size]="24" /></span>
+        @if (imageElementService.imageElements.length === 0) {
+          <h2 id="workbench-empty-title">{{ 'WORKBENCH.emptyCatalogueTitle' | translate }}</h2>
+          <p>{{ 'WORKBENCH.emptyCatalogueDescription' | translate }}</p>
+          <button type="button" (click)="openWorkspaceSettings('library')">{{ 'WORKBENCH.manageSources' | translate }}</button>
+        } @else if (appState.currentView === 'showClips' && currentScreenshotSettings.clipSnippets === 0) {
+          <h2 id="workbench-empty-title">{{ 'SETTINGS.noClipsExtracted' | translate }}</h2>
+          <p>{{ 'WORKBENCH.noClipsDescription' | translate }}</p>
+          <button type="button" (click)="showWorkspaceThumbnails()">{{ 'WORKBENCH.browseThumbnails' | translate }}</button>
+        } @else {
+          <h2 id="workbench-empty-title">{{ 'SETTINGS.noResultsFound' | translate }}</h2>
+          <p>{{ 'WORKBENCH.emptyResultsDescription' | translate }}</p>
+          <div class="workbench-empty-actions">
+            <button type="button" (click)="clearWorkspaceFilters()">{{ 'WORKBENCH.clearSearchAndFilters' | translate }}</button>
+            <button type="button" class="workbench-empty-secondary" (click)="openWorkspaceSettings('search')">{{ 'WORKBENCH.reviewSearchSettings' | translate }}</button>
+          </div>
+        }
+      </div>
+    </section>
   }
 
   @if (!wizard.showWizard && settingsButtons['showTagTray'].toggled) {
@@ -1272,7 +1296,7 @@
       class="right-tag-panel"
       [ngClass]="{ 'right-tag-panel-dark': settingsButtons['darkMode'].toggled }"
       [ngStyle]="{
-        'height': 'calc(100vh - ' + (
+        'height': 'max(0px, calc(100vh - ' + (
           appState.menuHidden | sidebarHeightPipe
             : settingsButtons['hideTop'].toggled
             : (
@@ -1281,7 +1305,7 @@
               || settingsButtons['showRecentlyPlayed'].toggled
               || settingsButtons['showRelatedVideosTray'].toggled
             )
-        ) + 'px)'
+        ) + '))'
       }"
       @modalAnimation
     >
@@ -1328,6 +1352,7 @@
 <!-- -----------       five tabs     ----------------- -->
 
 <div
+  #bottomTrayTabs
   class="all-settings-tabs bottom-tray-tabs"
   [ngClass]="{
     'bottom-tray-tabs-dark': settingsButtons['darkMode'].toggled,
@@ -1387,15 +1412,17 @@
   [ngClass]="{ 'bottom-tray-dark': settingsButtons['darkMode'].toggled }"
   @bottomTrayAnimation
 >
-  <div
-    (click)="toggleAllTrayViewsButtonsOff()"
+  <button type="button"
+    (click)="closeWorkspaceTray()"
     class="close-bottom-tray"
     [ngClass]="{ 'close-bottom-tray-dark': settingsButtons['darkMode'].toggled }"
     title="{{ 'SETTINGS.closeBottomTray' | translate }}"
+    [attr.aria-label]="'SETTINGS.closeBottomTray' | translate"
   >
     <app-icon class="close-modal-icon" [icon]="'icon-close'" />
-  </div>
+  </button>
 
+<div class="bottom-tray-content">
 <!-- SIMILAR & RECENT -- similar to last clicked, and list of recently played -->
 @if (settingsButtons['showRelatedVideosTray'].toggled
   || settingsButtons['showRecentlyPlayed'].toggled) {
@@ -1408,6 +1435,7 @@
 
     [appState]="appState"
     [currentClickedItemName]="currentClickedItemName"
+    [playbackRevision]="playbackRevision"
     [previewHeightRelated]="previewHeightRelated"
     [previewWidthRelated]="previewWidthRelated"
     [settingsButtons]="settingsButtons"
@@ -1504,6 +1532,7 @@
   </div>
 }
 
+</div>
 </div>
 }   <!-- end of bottom tray section (just below all the tabs) -->
 

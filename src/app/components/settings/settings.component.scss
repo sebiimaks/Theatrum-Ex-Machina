@@ -441,6 +441,46 @@
   }
 }
 
+@media (max-width: 520px) {
+  .settings-workspace {
+    padding: 12px 8px 24px;
+  }
+
+  .settings-workspace__header {
+    margin-bottom: 18px;
+
+    h2 {
+      font-size: 22px;
+      overflow-wrap: anywhere;
+    }
+  }
+
+  .settings-card__header,
+  .settings-row,
+  .settings-detail,
+  .settings-about {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .settings-row__copy label,
+  .settings-card__header h3 {
+    overflow-wrap: anywhere;
+  }
+
+  .settings-detail__actions,
+  .settings-row__value {
+    min-width: 0;
+  }
+
+  .settings-action,
+  .settings-choice {
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-switch,
   .settings-switch__thumb {

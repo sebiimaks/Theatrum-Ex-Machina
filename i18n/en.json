@@ -685,6 +685,13 @@
     "videos": "videos"
   },
   "WORKBENCH": {
+    "emptyCatalogueTitle": "This catalogue is empty",
+    "emptyCatalogueDescription": "Add a video folder or check your existing sources to start browsing.",
+    "emptyResultsDescription": "Try a different search, clear your filters, or choose another collection.",
+    "noClipsDescription": "This catalogue has no clip previews. You can still browse its thumbnails and metadata.",
+    "browseThumbnails": "Browse thumbnails",
+    "clearSearchAndFilters": "Clear search and filters",
+    "reviewSearchSettings": "Review search settings",
     "allVideos": "All videos",
     "folders": "Folders",
     "favourites": "Favourites",

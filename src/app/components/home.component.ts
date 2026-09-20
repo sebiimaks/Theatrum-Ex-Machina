@@ -193,7 +193,8 @@ const GALLERY_RESIZE_SETTLE_MS = 60;
     './wizard-button.scss',
     './resolution.scss',
     './rightclick.scss',
-    './workbench.scss'
+    './workbench.scss',
+    './workbench-compact.scss'
   ],
   animations: [
     bottomTrayAnimation,
@@ -221,6 +222,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly searchRef = viewChild<ElementRef>('searchRef');
   readonly settingsModal = viewChild<ElementRef>('settingsModal');
 
+  readonly workspaceViewSelect = viewChild<ElementRef<HTMLSelectElement>>('workspaceViewSelect');
+  readonly bottomTrayTabs = viewChild<ElementRef<HTMLDivElement>>('bottomTrayTabs');
   readonly sortOrderRef = viewChild(SortOrderComponent);
   readonly catalogueEditor = viewChild(CatalogueEditorComponent);
   readonly renameModal = viewChild(RenameModalComponent);
@@ -235,6 +238,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   settingsSearchQuery = '';
   readonly settingsCategories = SettingsWorkspaceCategories;
   readonly workbenchViews = AllSupportedViews;
+  showRecentlyPlayedOnly = false;
+  playbackRevision = 0;
   readonly workspaceCollections: { id: WorkspaceCollection; label: string; icon: string }[] = [
     { id: 'all', label: 'WORKBENCH.allVideos', icon: 'icon-show-thumbnails' },
     { id: 'folders', label: 'WORKBENCH.folders', icon: 'icon-folder-blank' },
@@ -249,7 +254,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       folders: this.settingsButtons.showFolders.toggled
         && ['showThumbnails', 'showFiles', 'showClips'].includes(this.appState.currentView),
       playlist: this.settingsButtons.showOnlyPlaylist.toggled,
-      sort: this.sortType,
+      recent: this.showRecentlyPlayedOnly,
     });
   }
 
@@ -270,17 +275,27 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.settingsButtons.showOnlyPlaylist.toggled = plan.playlist;
     if (this.appState.currentView !== plan.view) { this.toggleButton(plan.view); }
     if (this.settingsButtons.showFolders.toggled !== plan.folders) { this.toggleButton('showFolders'); }
+    this.showRecentlyPlayedOnly = plan.recent;
     this.folderViewNavigationPath = '';
     if (collection === 'recent') {
-      this.sortByRecentlyPlayed();
-    } else if (this.sortType === 'lastPlayedDesc') {
-      this.selectFilterOrder('default');
+      this.settingsButtons.sortOptionLastPlayed.toggled = true;
+      this.selectFilterOrder('lastPlayedDesc');
       setTimeout(() => {
         const element = this.sortOrderRef()?.sortFilterElement();
-        if (element) { element.nativeElement.value = 'default'; }
+        if (element) { element.nativeElement.value = this.sortType; }
       });
     }
     this.scheduleGalleryLayoutRefresh(0, true);
+  }
+
+  clearWorkspaceFilters(): void {
+    this.clearAllFilters();
+    (this.magicSearch() || this.workspaceViewSelect())?.nativeElement.focus();
+  }
+
+  showWorkspaceThumbnails(): void {
+    this.toggleButton('showThumbnails');
+    this.workspaceViewSelect()?.nativeElement.focus();
   }
 
   openWorkspaceSettings(category: SettingsCategoryId = 'appearance'): void {
@@ -1219,6 +1234,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     ) => {
 
       this.importStage = stage;
+
+      if (stage === 'done') {
+        this.filePathService.refreshGeneratedPreviews();
+      }
 
       if (this.isFirstRunEver) {
         this.showFirstRunMessage();
@@ -2325,10 +2344,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.blockActionDuringFolderThumbnailRegeneration()) {
       return;
     }
-    this.sourceFolderService.resetTransientState();
-    this.sourceFolderService.selectedSourceFolder = this.wizard.selectedSourceFolder;
-    this.appState.selectedOutputFolder = this.wizard.selectedOutputFolder;
-    this.electronService.ipcRenderer.send('start-the-import', this.wizard);
+    // The old catalogue remains active until main confirms the new document.
+    // In particular, capture its source paths before any wizard state is applied.
+    const finalObjectToSave = this.getFinalObjectForSaving();
+    this.electronService.ipcRenderer.send('start-the-import', this.wizard, finalObjectToSave);
   }
 
   public cancelCurrentImport(): void {
@@ -2502,6 +2521,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     }
 
     this.imageElementService.updateNumberOfTimesPlayed(item.index);
+    this.playbackRevision++;
 
     this.updateCurrentClickedItem(item);
 
@@ -2892,6 +2912,11 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * Toggles all TRAY views buttons off
    * A helper function for `toggleBotton`
    */
+  closeWorkspaceTray(): void {
+    this.bottomTrayTabs()?.nativeElement.querySelector<HTMLButtonElement>('.active-tab')?.focus();
+    this.toggleAllTrayViewsButtonsOff();
+  }
+
   toggleAllTrayViewsButtonsOff(): void {
     this.settingsButtons['showDetailsTray'].toggled = false;
     this.settingsButtons['showFreq'].toggled = false;
@@ -3019,6 +3044,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * @param   fromIpc     boolean value indicate, call from IPC
    */
   toggleButton(uniqueKey: SettingsButtonKey | SupportedView | SupportedTrayView, fromIpc = false): void {
+    if (['showOnlyFavorites', 'showOnlyPlaylist', 'showFolders'].includes(uniqueKey)
+        && !this.settingsButtons[uniqueKey].toggled) {
+      this.showRecentlyPlayedOnly = false;
+    }
     // ======== View buttons ================
     if (AllSupportedViews.includes(<SupportedView>uniqueKey)) {
       this.savePreviousViewSize();
@@ -3567,6 +3596,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * Restore settings to their default values
    */
   resetSettingsToDefault(): void {
+    this.showRecentlyPlayedOnly = false;
     this.settingsButtons = JSON.parse(JSON.stringify(this.defaultSettingsButtons)); // JSON hack to allow resetting more than once
     this.toggleButton('showThumbnails');
     this.syncAppIconTheme();
@@ -3719,17 +3749,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     this.contextMenuOrigin?.focus({ preventScroll: true });
 
-    const winWidth: number = window.innerWidth;
-    const clientX: number = event.clientX;
-    const howFarFromRight: number = winWidth - clientX;
-
-    // handle top-offset if clicking close to the bottom
-    const winHeight: number = window.innerHeight;
-    const clientY: number = event.clientY;
-    const howFarFromBottom: number = winHeight - clientY;
-
-    this.rightClickPosition.x = (howFarFromRight < 180) ? clientX - 180 + (howFarFromRight) : clientX;
-    this.rightClickPosition.y = (howFarFromBottom < 240) ? clientY - 240 + (howFarFromBottom) : clientY;
+    // Keep the usual edge offset, but let the menu scroll from the viewport
+    // origin when application zoom leaves less room than its preferred size.
+    this.rightClickPosition.x = Math.max(0, Math.min(event.clientX, window.innerWidth - 180));
+    this.rightClickPosition.y = Math.max(0, Math.min(event.clientY, window.innerHeight - 240));
 
     this.rightClickShowing = true;
   }
@@ -4358,20 +4381,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /**
-   * Sort by most-recent
+   * Open the played-only collection, with the latest playback first.
    */
   sortByRecentlyPlayed(): void {
-    this.settingsButtons['sortOptionLastPlayed'].toggled = true;
-
-    this.selectFilterOrder('lastPlayedDesc');
-
-    setTimeout(() => {
-      const sortOrderRef = this.sortOrderRef();
-      const sortFilterElement = sortOrderRef.sortFilterElement();
-      if (sortFilterElement) { // just in case, perform check
-        sortFilterElement.nativeElement.value = 'lastPlayedDesc';
-      }
-    });
+    this.selectWorkspaceCollection('recent');
   }
 
   /**
@@ -4601,6 +4614,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * It resets all filter arrays, bounds, and toggles all filter buttons off
    */
   clearAllFilters(): void {
+    this.showRecentlyPlayedOnly = false;
     // Clear all filter arrays and bools
     this.filters.forEach((filter) => {
       filter.array = [];

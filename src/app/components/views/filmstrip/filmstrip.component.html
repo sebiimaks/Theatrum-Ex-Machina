@@ -13,7 +13,7 @@
     class="filmstrip-container"
     [ngStyle]="{
         height: imgHeight() + 'px',
-        'background-image': video().metadataImportFailed ? 'none' : 'url(' + fullFilePath + ')',
+        'background-image': video().metadataImportFailed ? 'none' : 'url(' + fullFilePath() + ')',
         'background-position-x': '-' + filmXoffset + 'px',
         'background-size': 'auto ' + imgHeight() + 'px'
       }"
@@ -46,7 +46,7 @@
     class="heart workbench-gallery-action"
     [ngClass]="{ 'heart-lit' : video().stars === 5.5 }"
     [attr.aria-pressed]="video().stars === 5.5"
-    [attr.aria-label]="(video().stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate"
+    [attr.aria-label]="((video().stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate) + ': ' + (video().cleanName || video().fileName)"
     title="{{ (video().stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate }}"
   >
     <app-icon [icon]="'icon-heart'" [size]="16" />

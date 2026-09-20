@@ -61,6 +61,15 @@
   }
 }
 
+@media (max-width: 420px) {
+  .breadcrumbs,
+  .breadcrumbs-right-panel-open,
+  .breadcrumbs-full-width.breadcrumbs-right-panel-open {
+    left: 0;
+    width: 100vw;
+  }
+}
+
 .breadcrumb-folder-word {
   color: var(--app-text-secondary);
   cursor: pointer;

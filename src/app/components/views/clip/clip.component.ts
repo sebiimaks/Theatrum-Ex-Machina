@@ -1,4 +1,4 @@
-import { ChangeDetectorRef, input, output } from '@angular/core';
+import { ChangeDetectorRef, computed, input, output } from '@angular/core';
 import type { OnInit } from '@angular/core';
 import { Component, HostListener, Input } from '@angular/core';
 import { DomSanitizer } from '@angular/platform-browser';
@@ -48,13 +48,24 @@ export class ClipComponent implements OnInit {
   readonly showMeta = input<boolean>();
 
   appInFocus = true;
-  folderPosterPaths: string[] = [];
-  folderThumbPaths: string[] = [];
+  readonly folderPosterPaths = computed(() => this.video.hash.split(':').slice(0, 4).map(
+    (hash) => this.filePathService.createFilePath(
+      this.folderPath(), this.hubName(), this.defaultThumbnailMode() ? 'thumbnails' : 'clips',
+      hash, false, this.video.uuid,
+    ),
+  ));
+  readonly folderThumbPaths = computed(() => this.video.hash.split(':').slice(0, 4).map(
+    (hash) => this.filePathService.createFilePath(this.folderPath(), this.hubName(), 'clips', hash, true),
+  ));
   hover: boolean;
   noError = true;
-  pathToVideo = '';
-  poster: string;
-  posterFolderType: any = 'clips';
+  readonly pathToVideo = computed(() => this.filePathService.createFilePath(
+    this.folderPath(), this.hubName(), 'clips', this.video.hash, true,
+  ));
+  readonly poster = computed(() => this.filePathService.createFilePath(
+    this.folderPath(), this.hubName(), this.defaultThumbnailMode() ? 'thumbnails' : 'clips',
+    this.video.hash, false, this.video.uuid,
+  ));
 
   constructor(
     public cd: ChangeDetectorRef,
@@ -118,37 +129,8 @@ export class ClipComponent implements OnInit {
 
   ngOnInit() {
 
-    if (isMetadataImportFailure(this.video)) {
+    if (isMetadataImportFailure(this.video) || this.video.hash === undefined) {
       this.noError = false;
-    }
-
-    if (this.defaultThumbnailMode()) {
-      this.posterFolderType = 'thumbnails';
-    }
-
-    // multiple hashes?
-    if (this.video.hash.indexOf(':') !== -1) {
-      const hashes = this.video.hash.split(':');
-
-      hashes.slice(0, 4).forEach((hash) => {
-        const folderPath = this.folderPath();
-        const hubName = this.hubName();
-        this.folderThumbPaths.push( this.filePathService.createFilePath(folderPath, hubName, 'clips', hash, true));
-        this.folderPosterPaths.push(
-          this.filePathService.createFilePath(folderPath, hubName, this.posterFolderType, hash, false, this.video.uuid),
-        );
-      });
-    } else {
-      if (this.video.hash === undefined) {
-        this.noError = false;
-      }
-      this.pathToVideo = this.filePathService.createFilePath(this.folderPath(), this.hubName(), 'clips', this.video.hash, true);
-      this.poster =      this.filePathService.createFilePath(
-        this.folderPath(), this.hubName(), this.posterFolderType, this.video.hash, false, this.video.uuid,
-      );
-
-      this.folderThumbPaths.push(this.pathToVideo);
-      this.folderPosterPaths.push(this.poster);
     }
   }
 

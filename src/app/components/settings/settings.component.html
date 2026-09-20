@@ -123,7 +123,7 @@
         @case ('language') {
           <div class="settings-detail">
             <label for="settings-language">{{ 'WORKBENCH.settingsLanguageDescription' | translate }}</label>
-            <select #langSelect id="settings-language" [value]="appState.language" (change)="changeLanguage.emit(langSelect.value)">
+            <select id="settings-language" [ngModel]="appState.language" (ngModelChange)="changeLanguage.emit($event)">
               @for (language of languages; track language[0]) {
                 <option [value]="language[0]">{{ language[1] }}</option>
               }

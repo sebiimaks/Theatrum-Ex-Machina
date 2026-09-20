@@ -1,5 +1,5 @@
-import type { OnInit, ElementRef} from '@angular/core';
-import { Component, input, output, viewChild } from '@angular/core';
+import type { ElementRef} from '@angular/core';
+import { Component, computed, input, output, viewChild } from '@angular/core';
 
 import { FilePathService } from '../file-path.service';
 
@@ -23,7 +23,7 @@ import type { RightClickEmit, VideoClickEmit } from '../../../../../interfaces/s
     ],
   animations: [ textAppear, metaAppear ]
 })
-export class FilmstripComponent implements OnInit {
+export class FilmstripComponent {
 
   readonly filmstripHolder = viewChild<ElementRef>('filmstripHolder');
 
@@ -43,7 +43,9 @@ export class FilmstripComponent implements OnInit {
   readonly showMeta = input<boolean>();
   readonly showFavorites = input<boolean>();
 
-  fullFilePath = '';
+  readonly fullFilePath = computed(() => this.filePathService.createFilePath(
+    this.folderPath(), this.hubName(), 'filmstrips', this.video().hash,
+  ));
   filmXoffset = 0;
   indexToShow = 1;
 
@@ -51,10 +53,6 @@ export class FilmstripComponent implements OnInit {
     public filePathService: FilePathService,
     public imageElementService: ImageElementService
   ) { }
-
-  ngOnInit() {
-    this.fullFilePath = this.filePathService.createFilePath(this.folderPath(), this.hubName(), 'filmstrips', this.video().hash);
-  }
 
   updateFilmXoffset(mouseMove: PointerEvent) {
     if (this.hoverScrub() && this.video().screens > 0) {

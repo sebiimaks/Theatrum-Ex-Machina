@@ -53,6 +53,7 @@ export class RibbonComponent {
       return;
     }
 
+    target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     this.focusedButtonKey = buttonKey;
     this.activeButtonKey = buttonKey;
   }

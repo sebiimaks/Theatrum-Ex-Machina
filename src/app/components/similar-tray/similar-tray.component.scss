@@ -27,6 +27,10 @@
 }
 
 .more {
+  background: var(--app-tray-background);
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 4px;
+  padding: 4px 6px;
   color: var(--app-text-secondary);
   position: absolute;
   bottom: 6px;

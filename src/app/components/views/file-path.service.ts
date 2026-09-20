@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Injectable, signal } from '@angular/core';
 
 import * as path from 'path';
 
@@ -15,6 +15,12 @@ type FolderType = 'thumbnails' | 'filmstrips' | 'clips';
 
 @Injectable()
 export class FilePathService {
+
+  private readonly previewRevision = signal(0);
+
+  refreshGeneratedPreviews(): void {
+    this.previewRevision.update((revision) => revision + 1);
+  }
 
   replaceMap: any = {
     ' ': '%20',
@@ -43,11 +49,15 @@ export class FilePathService {
     video?: boolean,
     cacheKey?: string,
   ): string {
+    // Metadata can arrive before extraction creates the preview files. A new
+    // revision retries those early failed requests without recreating cards.
+    const revision = this.previewRevision();
+    const previewCacheKey = revision ? `${cacheKey || ''}:import-${revision}` : cacheKey;
     const bridge = (globalThis as typeof globalThis & {
       theatrum?: { isElectron?: boolean };
     }).theatrum;
     if (bridge?.isElectron) {
-      return createTheatrumMediaUrl(subfolder, hash, Boolean(video), cacheKey);
+      return createTheatrumMediaUrl(subfolder, hash, Boolean(video), previewCacheKey);
     }
 
     const filePath = 'file://' + path.normalize(path.join(
@@ -59,7 +69,7 @@ export class FilePathService {
       .replace(/[ ()]/g, (match) => { return this.replaceMap[match]; });
       //         ^^^^^ replace the ` ` (space) as well as parentheses `(` and `)` with URL encoding from the `replaceMap`
 
-    return cacheKey ? `${filePath}?v=${encodeURIComponent(cacheKey)}` : filePath;
+    return previewCacheKey ? `${filePath}?v=${encodeURIComponent(previewCacheKey)}` : filePath;
   }
 
   /**

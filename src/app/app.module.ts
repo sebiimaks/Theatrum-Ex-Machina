@@ -96,6 +96,7 @@ import { MagicSearchPipe } from './pipes/magic-search.pipe';
 import { ManualTagSortPipe } from './pipes/manual-tags-sort.pipe';
 import { PlaylistOnlyPipe } from './pipes/playlist-only.pipe';
 import { PlaylistPipe } from './pipes/playlist.pipe';
+import { RecentlyPlayedOnlyPipe } from './pipes/recently-played-only.pipe';
 import { RegexSearchPipe } from './pipes/regex-search.pipe';
 import { ResolutionFilterPipe } from './pipes/resolution-filter.pipe';
 import { ReturnZeroPipe } from './pipes/return-zero.pipe';
@@ -158,6 +159,7 @@ import { YearPipe } from './pipes/year.pipe';
     PlaylistOnlyPipe,
     PlaylistPipe,
     RecentlyOpenedComponent,
+    RecentlyPlayedOnlyPipe,
     RegexSearchPipe,
     RenameFileComponent,
     RenameModalComponent,

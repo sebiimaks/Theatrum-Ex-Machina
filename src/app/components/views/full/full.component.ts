@@ -1,5 +1,5 @@
 import type { OnInit} from '@angular/core';
-import { Component, Input, input, output } from '@angular/core';
+import { Component, Input, computed, input, output } from '@angular/core';
 
 import { FilePathService } from '../file-path.service';
 
@@ -59,7 +59,9 @@ export class FullViewComponent implements OnInit {
   _imgHeight: number;
   _metaWidth: number;
   computedWidth = 0;
-  fullFilePath = '';
+  readonly fullFilePath = computed(() => this.filePathService.createFilePath(
+    this.folderPath(), this.hubName(), 'filmstrips', this.video().hash,
+  ));
   rowOffsets: number[] = [];
 
   constructor(
@@ -68,7 +70,6 @@ export class FullViewComponent implements OnInit {
   ) { }
 
   ngOnInit() {
-    this.fullFilePath = this.filePathService.createFilePath(this.folderPath(), this.hubName(), 'filmstrips', this.video().hash);
     this.render();
   }
 
