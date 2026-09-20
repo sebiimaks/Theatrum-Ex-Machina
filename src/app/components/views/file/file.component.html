@@ -1,69 +1,93 @@
-<div class="element-container">
+<div
+  class="element-container"
+  [class.file-row-selected]="video.selected"
+  [class.file-row-larger]="largerFont()"
+  [class.file-row-without-meta]="!showMeta()"
+>
+  @if (video.cleanName === '*FOLDER*') {
+    <span class="file-leading" aria-hidden="true">
+      <app-icon
+        [icon]="video.fileName === '*UP*' ? 'icon-chevron-left' : 'icon-folder-blank'"
+        [size]="16"
+      />
+    </span>
 
-@if (video.cleanName === '*FOLDER*') {
+    <span class="file-name folder-name" [title]="video.partialPath">
+      <span class="file-name-text">{{ video.fileName === '*UP*' ? '..' : video.fileName }}</span>
+      @if (showMeta() && video.fileName !== '*UP*') {
+        <span class="folder-count">{{ video.fileSizeDisplay | number }} {{ 'STATISTICS.files' | translate }}</span>
+      }
+    </span>
 
-  @if (video.fileName === '*UP*') {
-
-    <app-icon class="back-icon" [icon]="'icon-chevron-left'" [ngClass]="{ 'back-icon-dark-mode': darkMode() }" />
-
+    @if (showMeta() && video.fileName !== '*UP*') {
+      <span class="file-cell file-duration" title="{{ 'SIDEBAR.sortTime' | translate }}">
+        {{ video.duration | lengthPipe : 'folder' }}
+      </span>
+      <span class="file-cell file-resolution" aria-hidden="true">—</span>
+      <span class="file-cell file-size" title="{{ 'SIDEBAR.sortSize' | translate }}">
+        {{ video.fileSize | fileSizePipe }}
+      </span>
+      <span class="file-cell file-rating" aria-hidden="true">—</span>
+    }
   } @else {
+    <span class="file-leading">
+      @if (showFavorites()) {
+        <button
+          type="button"
+          class="file-favorite"
+          [class.file-favorite-active]="video.stars === 5.5"
+          [attr.aria-pressed]="video.stars === 5.5"
+          [attr.aria-label]="(video.stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate"
+          [title]="(video.stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate"
+          (click)="toggleHeart($event)"
+          (dblclick)="$event.stopPropagation()"
+        >
+          <app-icon [icon]="'icon-heart'" [size]="14" />
+        </button>
+      } @else {
+        <app-icon [icon]="'icon-video-blank'" [size]="16" aria-hidden="true" />
+      }
+    </span>
 
-    @if (showMeta()) { <div class="number-of-files">{{ video.fileSizeDisplay | number }}</div> }
-
-    <app-icon [icon]="'icon-folder-blank'" class="icon-folder-lol" />
-
-    <div class="folder-name" [ngClass]="{ 'folder-name-dark-mode': darkMode() }">
-      {{ video.fileName }}
-      @if (showMeta()) { <div class="folder-size">{{ video.fileSize | fileSizePipe }}</div> }
-    </div>
+    <span class="file-name" [title]="video.partialPath + '/' + video.fileName">
+      @if (video.selected) {
+        <app-icon class="file-selection" [icon]="'icon-show-more-info'" [size]="13" />
+      }
+      <span class="file-name-text">{{ video.cleanName }}</span>
+      @if (video.playlist) {
+        <app-icon
+          class="file-playlist"
+          [icon]="'icon-playlist'"
+          [size]="14"
+          title="{{ 'BUTTONS.showOnlyPlaylistDescription' | translate }}"
+        />
+      }
+    </span>
 
     @if (showMeta()) {
-      <div class="length" [ngClass]="{ 'meta-dark-mode': darkMode() }">
-        {{ video.duration | lengthPipe : 'folder' }}
-      </div>
+      <span class="file-cell file-duration" title="{{ 'SIDEBAR.sortTime' | translate }}">
+        {{ video.durationDisplay || '—' }}
+      </span>
+      <span class="file-cell file-resolution" title="{{ 'BUTTONS.resolutionFilterDescription' | translate }}">
+        {{ video.resolution || '—' }}
+      </span>
+      <span class="file-cell file-size" title="{{ 'SIDEBAR.sortSize' | translate }}">
+        {{ video.fileSizeDisplay || '—' }}
+      </span>
+      <span
+        class="file-cell file-rating"
+        [attr.aria-label]="('SIDEBAR.sortStar' | translate) + ': ' + (video.stars - 0.5) + '/5'"
+        [title]="('SIDEBAR.sortStar' | translate) + ': ' + (video.stars - 0.5) + '/5'"
+      >
+        @for (star of [1, 2, 3, 4, 5]; track star) {
+          <app-icon
+            [icon]="'icon-star'"
+            [size]="11"
+            [class.file-star-active]="video.stars > star"
+            aria-hidden="true"
+          />
+        }
+      </span>
     }
-
   }
-
-} @else { <!-- INDIVIDUAL FILE BLOCK -->
-
-  @if (video.selected) {
-    <app-icon class="selected-file-view" [icon]="'icon-show-more-info'" />
-  }
-
-  @if (showFavorites()) {
-    <app-icon
-      (click)="toggleHeart($event)"
-      class="heart"
-      [ngClass]="{ 'heart-lit' : video.stars === 5.5, 'heart-selected' : video.selected }"
-      [icon]="'icon-heart'"
-     />
-  }
-
-  @if (showMeta()) {
-    <div [ngClass]="{ 'meta-dark-mode': darkMode() }" class="size">{{ video.resolution }}</div>
-  }
-
-    <div
-      class="title"
-      [ngClass]="{
-          'title-dark-mode': darkMode(),
-          'larger-font': largerFont(),
-          'showing-meta': showMeta()
-        }"
-    >
-      {{ video.cleanName }}
-
-      @if (showMeta()) {
-        <div class="file-size" [ngClass]="{ 'meta-dark-mode': darkMode() }">({{ video.fileSizeDisplay }})</div>
-      }
-
-    </div>
-
-  @if (showMeta()) {
-    <div class="length" [ngClass]="{ 'meta-dark-mode': darkMode() }">{{ video.durationDisplay }}</div>
-  }
-
-}
-
 </div>

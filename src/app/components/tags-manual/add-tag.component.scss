@@ -1,53 +1,115 @@
-@use "./../variables";
-
 .input-container {
+  max-width: 360px;
   position: relative;
 }
 
-// added on top of .filter-general
+.tag-entry-row {
+  align-items: stretch;
+  display: flex;
+  gap: 5px;
+  margin: 7px 0 3px;
+  max-width: 100%;
+}
+
 .input-filter {
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  box-sizing: border-box;
+  flex: 1;
   font-size: 12px;
-  margin-bottom: 5px;
-  padding: 4px 4px 0;
-  width: 140px;
-  z-index: 2;
+  height: 29px;
+  margin: 0;
+  min-width: 0;
+  padding: 5px 8px;
+  width: 180px;
 
   &::placeholder {
     color: var(--app-text-secondary);
     opacity: 1;
   }
-}
 
-.dark-mode {
-  border-color: var(--app-border-strong);
-  color: var(--app-text-primary);
-
-  &::placeholder {
-    color: var(--app-text-secondary);
+  &:focus {
+    border-color: var(--app-accent);
+    box-shadow: 0 0 0 1px var(--app-accent);
   }
 }
 
-.typeahead {
+.add-tag-button {
+  background: var(--app-accent-soft);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
   color: var(--app-accent-text);
-  font-size: 12px;
-  left: 4px;
-  pointer-events: none;
-  position: absolute;
-  top: 9px;
-  z-index: -1;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 10px;
+
+  &:hover:not(:disabled) { border-color: var(--app-accent); }
+  &:disabled { cursor: default; opacity: 0.4; }
 }
+
+.typeahead {
+  align-items: center;
+  background: var(--app-elevated-background);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-control-radius);
+  box-shadow: var(--app-shadow-elevated);
+  color: var(--app-accent-text);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 11px;
+  gap: 8px;
+  justify-content: space-between;
+  left: 0;
+  line-height: 1.5;
+  padding: 7px 9px;
+  position: absolute;
+  text-align: left;
+  top: 33px;
+  width: 100%;
+  z-index: 20;
+
+  > span { overflow-wrap: anywhere; }
+
+  kbd {
+    color: var(--app-text-secondary);
+    flex-shrink: 0;
+    font-family: inherit;
+    font-size: 10px;
+  }
+
+  &:hover { background: var(--app-control-hover); }
+}
+
+button:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 2px;
+}
+
+.tag-entry-help {
+  color: var(--app-text-secondary);
+  display: none;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+:host-context(.sheet-modal) .tag-entry-help { display: block; }
 
 .tag-validation-error {
   background: var(--app-elevated-background);
   border: 1px solid var(--app-destructive);
   border-radius: var(--app-control-radius);
   box-shadow: var(--app-shadow-elevated);
+  box-sizing: border-box;
   color: var(--app-destructive);
   font-size: 11px;
   left: 0;
   line-height: 15px;
-  max-width: 260px;
-  padding: 4px 6px;
+  max-width: 100%;
+  padding: 6px 8px;
   position: absolute;
   top: calc(100% + 2px);
   width: max-content;

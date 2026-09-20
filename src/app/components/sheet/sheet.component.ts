@@ -36,6 +36,7 @@ export interface DefaultScreenEmission {
 })
 export class SheetComponent implements OnInit {
 
+  readonly closeSheet = output<void>();
   readonly filterTag = output<TagEmit>();
   readonly openVideoAtTime = output<object>();
 
@@ -88,7 +89,7 @@ export class SheetComponent implements OnInit {
   }
 
   decreaseZoomLevel() {
-    if (this.thumbnailsToDisplay > 1) {
+    if (this.thumbnailsToDisplay < 10) {
       this.thumbnailsToDisplay++;
     }
   }
@@ -98,7 +99,7 @@ export class SheetComponent implements OnInit {
   }
 
   increaseZoomLevel() {
-    if (this.thumbnailsToDisplay < 10) {
+    if (this.thumbnailsToDisplay > 1) {
       this.thumbnailsToDisplay--;
     }
   }

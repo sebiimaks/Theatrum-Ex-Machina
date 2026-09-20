@@ -1,39 +1,60 @@
 @use "../variables";
 
 .singleTag {
-  display: inline-block;
-  margin: 10px 10px 0 0;
+  align-items: center;
+  background: var(--app-control-background);
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 5px;
+  display: inline-flex;
+  margin: 6px 6px 0 0;
+  max-width: 100%;
   position: relative;
+  vertical-align: top;
 
   .tag {
     align-items: center;
     background-color: variables.$manual-tag-color;
+    border: 0;
+    border-radius: 4px;
+    box-shadow: none;
     display: inline-flex;
-    gap: 4px;
+    font-family: inherit;
+    font-size: 10px;
+    gap: 5px;
+    line-height: 1.45;
     margin: 0;
-    position: relative;
-    z-index: 3;
+    min-height: 24px;
+    min-width: 0;
+    padding: 3px 7px;
+    text-align: left;
+
+    > span:first-child { overflow-wrap: anywhere; }
+  }
+
+  button:focus-visible {
+    outline: 2px solid var(--app-accent);
+    outline-offset: 2px;
+    z-index: 4;
   }
 
   .tag-auto-match-markers {
     align-items: center;
     display: inline-flex;
-    gap: 2px;
+    flex-shrink: 0;
+    gap: 3px;
   }
 
   .tag-auto-match-dot {
     border: 1px solid rgba(255, 255, 255, 0.78);
     border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
     box-sizing: border-box;
     display: inline-block;
     height: 6px;
     width: 6px;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
   }
 
-  .tag-auto-file-match {
-    background-color: #147ce5;
-  }
+  .tag-auto-file-match { background-color: #147ce5; }
 
   .tag-auto-folder-match {
     background-color: #ff9f0a;
@@ -41,54 +62,38 @@
     transform: rotate(45deg) scale(0.82);
   }
 
-  .tag-draggable {
-    &:active {
-      transform: scale(1.5);
-      transition-delay: 150ms;
-      transition-duration: 150ms;
-      transition-property: transform;
-    }
-  }
+  .tag-draggable { cursor: grab; }
+  .tag-draggable:active { cursor: grabbing; }
 
   .remove-tag {
+    align-items: center;
+    align-self: stretch;
+    background: transparent;
+    border: 0;
+    border-radius: 0 4px 4px 0;
     box-sizing: border-box;
+    color: var(--app-text-secondary);
     cursor: pointer;
-    fill: red;
-    height: 14px;
-    left: 1px;
-    position: absolute;
-    top: 3px;
-    transform: translate(0, 0);
-    transition-delay: 0.25s;
-    transition-duration: 0.25s;
-    transition-property: transform;
-    width: 14px;
-    z-index: 1;
-  }
+    display: inline-flex;
+    fill: currentColor;
+    flex: 0 0 24px;
+    justify-content: center;
+    min-height: 24px;
+    padding: 0;
+    width: 24px;
 
-  .remove-tag-dark {
-    fill: variables.$gray-05;
-  }
-
-  &:hover {
-    .remove-tag {
-      transform: translate(0, -13px);
-      transition-delay: 0.5s;
-      transition-duration: 0.25s;
-      transition-property: transform;
+    &:hover {
+      background: var(--app-control-hover);
+      color: var(--app-destructive);
     }
   }
 
   .frequency {
-    color: variables.$gray-90;
-    cursor: initial;
-    font-family: monospace;
-    font-size: 8px;
-    margin-right: 1px;
-  }
-
-  .frequency-dark {
-    color: variables.$gray-30;
+    color: var(--app-text-secondary);
+    cursor: default;
+    font-family: var(--app-font-mono);
+    font-size: 10px;
+    padding: 0 5px;
   }
 }
 

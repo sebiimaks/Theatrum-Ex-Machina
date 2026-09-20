@@ -66,6 +66,33 @@
         </div>
       }
 
+      <div class="source-toolbar edit-mode-container">
+        <p class="source-toolbar__hint">{{ 'WORKBENCH.sourcesDescription' | translate }}</p>
+        <div class="source-toolbar__actions">
+          <button
+            type="button"
+            class="wizard-button start-import"
+            (click)="addAnotherFolder()"
+            [disabled]="catalogueReadOnly() || folderThumbnailRegenerationStatus() !== null"
+          >
+            <span aria-hidden="true">+</span> {{ 'WORKBENCH.addSourceFolder' | translate }}
+          </button>
+          <button
+            type="button"
+            (click)="removeFoldersMode = !removeFoldersMode"
+            class="wizard-button"
+            [disabled]="catalogueReadOnly() || folderThumbnailRegenerationStatus() !== null"
+            [ngClass]="{ 'edit-mode-active': removeFoldersMode }"
+            [attr.aria-pressed]="removeFoldersMode"
+          >
+            {{ (removeFoldersMode ? 'WORKBENCH.doneEditingFolders' : 'STATISTICS.editFolders') | translate }}
+          </button>
+        </div>
+      </div>
+      @if (removeFoldersMode) {
+        <p class="source-edit-note" role="status">{{ 'WORKBENCH.sourceEditDescription' | translate }}</p>
+      }
+
   <div
     class="input-sources"
     [class.input-sources-editing]="removeFoldersMode || folderThumbnailRegenerationStatus() !== null"
@@ -274,31 +301,19 @@
 
   </div> <!-- end of input-sources -->
 
-  <span class="edit-mode-container">
-
-    <button
-      class="wizard-button start-import"
-      (click)="addAnotherFolder()"
-      [disabled]="catalogueReadOnly() || folderThumbnailRegenerationStatus() !== null"
-      [ngClass]="{ 'button-hidden': !removeFoldersMode }"
-    >
-      {{ 'STATISTICS.addFolderToHub' | translate }}
-    </button>
-
-    <button
-      (click)="removeFoldersMode = !removeFoldersMode"
-      class="wizard-button "
-      [disabled]="catalogueReadOnly() || folderThumbnailRegenerationStatus() !== null"
-      [ngClass]="{ 'edit-mode-active': removeFoldersMode }"
-    >
-      {{ 'STATISTICS.editFolders' | translate }}
-    </button>
-
+  <div class="source-preferences" aria-labelledby="source-preferences-heading">
+    <header class="source-group-heading">
+      <h4 id="source-preferences-heading">{{ 'WORKBENCH.sourceBehaviour' | translate }}</h4>
+      <p>{{ 'WORKBENCH.sourceBehaviourDescription' | translate }}</p>
+    </header>
     <label
       class="scan-on-addition-control"
       title="{{ 'STATISTICS.scanFoldersOnAdditionHelpText' | translate }}"
     >
-      <span>{{ 'STATISTICS.scanFoldersOnAddition' | translate }}</span>
+      <span class="source-preference-copy">
+        <strong>{{ 'STATISTICS.scanFoldersOnAddition' | translate }}</strong>
+        <span>{{ 'STATISTICS.scanFoldersOnAdditionHelpText' | translate }}</span>
+      </span>
       <span class="switch">
         <input
           type="checkbox"
@@ -314,7 +329,10 @@
       class="generate-on-addition-control"
       title="{{ 'STATISTICS.generatePreviewsOnFolderAdditionHelpText' | translate }}"
     >
-      <span>{{ 'STATISTICS.generatePreviewsOnFolderAddition' | translate }}</span>
+      <span class="source-preference-copy">
+        <strong>{{ 'STATISTICS.generatePreviewsOnFolderAddition' | translate }}</strong>
+        <span>{{ 'STATISTICS.generatePreviewsOnFolderAdditionHelpText' | translate }}</span>
+      </span>
       <span class="switch">
         <input
           type="checkbox"
@@ -330,7 +348,10 @@
       class="hide-empty-subdirectories-control"
       title="{{ 'STATISTICS.hideSubdirectoriesWithNoVideosHelpText' | translate }}"
     >
-      <span>{{ 'STATISTICS.hideSubdirectoriesWithNoVideos' | translate }}</span>
+      <span class="source-preference-copy">
+        <strong>{{ 'STATISTICS.hideSubdirectoriesWithNoVideos' | translate }}</strong>
+        <span>{{ 'STATISTICS.hideSubdirectoriesWithNoVideosHelpText' | translate }}</span>
+      </span>
       <span class="switch">
         <input
           type="checkbox"
@@ -342,35 +363,47 @@
       </span>
     </label>
 
+  </div>
+
+  @if (removeFoldersMode) {
+    <div class="source-maintenance" aria-labelledby="source-maintenance-heading">
+      <header class="source-group-heading">
+        <h4 id="source-maintenance-heading">{{ 'WORKBENCH.sourceThumbnailMaintenance' | translate }}</h4>
+        <p>{{ 'WORKBENCH.sourceThumbnailMaintenanceDescription' | translate }}</p>
+      </header>
+      <div class="source-maintenance-actions">
     <button
+      type="button"
       class="wizard-button"
       (click)="addMissingThumbnails()"
       (mouseup)="animateThis($event)"
       [disabled]="catalogueReadOnly() || folderThumbnailRegenerationStatus() !== null"
-      [ngClass]="{ 'button-hidden': !removeFoldersMode }"
     >
       {{ 'STATISTICS.addMissingThumbnails' | translate }}
     </button>
 
     <button
-      class="wizard-button"
+      type="button"
+      class="wizard-button source-maintenance-destructive"
       (click)="cleanScreenshotFolder()"
       (mouseup)="animateThis($event)"
       [disabled]="catalogueReadOnly() || folderThumbnailRegenerationStatus() !== null"
       title="{{ 'STATISTICS.cleanScreenshotsHint' | translate }}"
-      [ngClass]="{ 'button-hidden': !removeFoldersMode }"
     >
       {{ 'STATISTICS.cleanScreenshots' | translate }}
 
     @if (showNumberDeleted) {
-      <div class="number-of-thumbs-deleted" @metaAppear>
-        Deleted {{ numberOfScreensDeleted | number }} thumbnails
-      </div>
+      <span class="number-of-thumbs-deleted" role="status" @metaAppear>
+        {{ 'WORKBENCH.deletedThumbnails' | translate : { count: numberOfScreensDeleted } }}
+      </span>
     }
 
     </button>
 
-  </span>
+      </div>
+    </div>
+  }
+
 
     </div>
   </section>

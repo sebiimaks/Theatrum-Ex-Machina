@@ -23,7 +23,7 @@ import { historyItemRemove, slowFadeIn } from '../../common/animations';
 export class WizardComponent {
 
   readonly clearRecentlyViewedHistory = output<any>();
-  readonly hideWizard                 = output<any>();
+  readonly hideWizard                 = output<void>();
   readonly importFresh                = output<void>();
   readonly loadFromFile               = output<void>();
   readonly openFromHistory            = output<number>();
@@ -118,6 +118,18 @@ export class WizardComponent {
   }
 
   preventNumberInputKeyboard(event: KeyboardEvent): void {
+    const navigationKeys = [
+      'Tab', 'Escape', 'Enter',
+      'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+      'Home', 'End', 'PageUp', 'PageDown',
+      'Control', 'Meta', 'Alt', 'Shift',
+    ];
+    if (event.ctrlKey || event.metaKey || navigationKeys.includes(event.key)) {
+      return;
+    }
+
+    // Keep the existing restriction on direct typing while allowing keyboard
+    // users to leave the field and adjust its bounded value with arrow keys.
     event.preventDefault();
   }
 

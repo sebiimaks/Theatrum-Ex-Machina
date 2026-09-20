@@ -11,7 +11,6 @@ import {
   planTagDefinitionBranchMove,
   planTagBranchMove,
   planTagBranchRemoval,
-  remapTagBranchPath,
   resolveTagBranchMoveDestination,
   sortTagHierarchy,
   TAG_PATH_SEPARATOR,
@@ -35,6 +34,7 @@ import { ModalService } from '../modal/modal.service';
 import { ManualTagsService } from '../tags-manual/manual-tags.service';
 
 import { modalAnimation } from '../../common/animations';
+import { TagTreeExpansionState } from '../../common/tag-tree-expansion';
 
 const TAG_BRANCH_DRAG_TYPE = 'application/x-theatrum-tag-branch';
 const ROOT_DROP_TARGET = '__theatrum_tag_root__';
@@ -79,7 +79,16 @@ export class TagTrayComponent {
   readonly verticalLayout = input<boolean>(false);
   readonly updateTotalSelectedTrigger = input<number>(0);
 
-  manualTagFilterString = '';
+  private tagFilterString = '';
+
+  get manualTagFilterString(): string {
+    return this.tagFilterString;
+  }
+
+  set manualTagFilterString(value: string) {
+    this.tagFilterString = value;
+    this.tagExpansion.setFilter(value);
+  }
   manualTagShowFrequency = true;
   recomputeTrigger = 0;
   draggedTagPath = '';
@@ -111,7 +120,7 @@ export class TagTrayComponent {
   private cachedDisplayedFilter = '';
   private cachedDisplayedSortMode: TagHierarchySortMode | undefined;
   private hierarchyExpansionInitialized = false;
-  private readonly expandedTagPaths = new Set<string>();
+  private readonly tagExpansion = new TagTreeExpansionState();
 
   constructor(
     public manualTagsService: ManualTagsService,
@@ -205,7 +214,7 @@ export class TagTrayComponent {
       }
 
       getTagAncestorPaths(addedTag, true).forEach((path: string) => {
-        this.expandedTagPaths.add(path);
+        this.tagExpansion.rememberExpanded(path);
       });
       this.manualTagFilterString = '';
       this.invalidateHierarchy();
@@ -228,31 +237,31 @@ export class TagTrayComponent {
   }
 
   toggleBranch(node: TagHierarchyNode): void {
-    if (!node.children.length || this.tagFilterActive) {
-      return;
-    }
-
-    if (this.expandedTagPaths.has(node.fullPath)) {
-      this.expandedTagPaths.delete(node.fullPath);
-    } else {
-      this.expandedTagPaths.add(node.fullPath);
+    if (node.children.length) {
+      this.tagExpansion.toggle(node.fullPath);
     }
   }
 
   branchIsExpanded(node: TagHierarchyNode): boolean {
-    return this.tagFilterActive || this.expandedTagPaths.has(node.fullPath);
+    return this.tagExpansion.isExpanded(node.fullPath);
   }
 
   expandAll(): void {
-    this.visitHierarchy(this.getHierarchy(), (node: TagHierarchyNode) => {
-      if (node.children.length) {
-        this.expandedTagPaths.add(node.fullPath);
-      }
-    });
+    this.tagExpansion.expandAll(this.getBranchPaths());
   }
 
   collapseAll(): void {
-    this.expandedTagPaths.clear();
+    this.tagExpansion.collapseAll(this.getBranchPaths());
+  }
+
+  private getBranchPaths(): string[] {
+    const paths: string[] = [];
+    this.visitHierarchy(this.getHierarchy(), (node: TagHierarchyNode) => {
+      if (node.children.length) {
+        paths.push(node.fullPath);
+      }
+    });
+    return paths;
   }
 
   tagClicked(node: TagHierarchyNode, event: PointerEvent): void {
@@ -383,8 +392,12 @@ export class TagTrayComponent {
     }
   }
 
-  @HostListener('document:keydown.escape')
-  cancelTagPointerDragWithEscape(): void {
+  @HostListener('document:keydown.escape', ['$event'])
+  cancelTagPointerDragWithEscape(event: KeyboardEvent): void {
+    if (event.defaultPrevented || (event.target instanceof Element
+      && event.target.closest('[appDialogKeyboard], .cdk-overlay-container'))) {
+      return;
+    }
     if (this.showAddTagForm) {
       this.cancelAddTagForm();
     }
@@ -665,7 +678,7 @@ export class TagTrayComponent {
       if (!this.hierarchyExpansionInitialized) {
         this.cachedHierarchy.forEach((node: TagHierarchyNode) => {
           if (node.children.length) {
-            this.expandedTagPaths.add(node.fullPath);
+            this.tagExpansion.rememberExpanded(node.fullPath);
           }
         });
         this.hierarchyExpansionInitialized = true;
@@ -1031,14 +1044,7 @@ export class TagTrayComponent {
   }
 
   private remapExpandedTagPaths(sourcePath: string, destinationPath: string): void {
-    const remappedPaths = Array.from(this.expandedTagPaths).map((path: string) => (
-      isTagInBranch(path, sourcePath)
-        ? remapTagBranchPath(path, sourcePath, destinationPath)
-        : path
-    ));
-    this.expandedTagPaths.clear();
-    remappedPaths.forEach((path: string) => this.expandedTagPaths.add(path));
-    this.expandedTagPaths.add(destinationPath);
+    this.tagExpansion.remapBranch(sourcePath, destinationPath);
   }
 
   private showInvalidTagMove(error: unknown): void {

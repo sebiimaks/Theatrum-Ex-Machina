@@ -13,13 +13,16 @@
 
 .color-picker-container {
   position: fixed;
+  box-sizing: border-box;
   background: var(--app-elevated-background);
   border: 1px solid var(--app-border-strong);
   border-radius: var(--app-panel-radius);
   box-shadow: var(--app-shadow-elevated);
   color: var(--app-text-primary);
   padding: 12px;
-  // min-width: 240px;
+  max-width: calc(100vw - 20px);
+  max-height: calc(100vh - 20px);
+  overflow-y: auto;
   z-index: 100001;
   pointer-events: auto;
 
@@ -32,10 +35,11 @@
 }
 
 .color-picker-header {
-  display: none; // disabled for visual style
+  display: flex;
+  gap: 8px;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   font-weight: 600;
   font-size: 14px;
 
@@ -72,8 +76,10 @@
 }
 
 .color-swatch {
-  // transition: all 0.2s ease;
   align-items: center;
+  border: 0;
+  box-sizing: border-box;
+  padding: 0;
   border-radius: var(--app-control-radius);
   box-shadow: var(--app-shadow-subtle);
   cursor: pointer;
@@ -107,6 +113,11 @@
       outline-offset: 2px;
       // box-shadow: 0 0 0 2px #2a2a2a, 0 0 0 4px #fff;
     }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--app-text-primary);
+    outline-offset: 2px;
   }
 
   .checkmark {

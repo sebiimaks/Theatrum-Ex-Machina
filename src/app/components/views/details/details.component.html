@@ -3,7 +3,8 @@
       height: elHeight() + 'px',
       width: maxWidth() / (showTwoColumns() ? 2 : 1) + 'px'
     }"
-  class="filmstrip-container"
+  class="filmstrip-container workbench-card"
+  [class.workbench-card-selected]="video().selected"
   [ngClass]="{ 'side-by-side': showTwoColumns() }"
 >
 

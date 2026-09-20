@@ -1,3 +1,5 @@
+@use "../workbench-gallery";
+
 @use "../../variables.scss";
 
 .folder-item {
@@ -57,42 +59,10 @@
   width: 18px;
 }
 
-.playlist-icon {
-  background: var(--app-elevated-background);
-  border: 1px solid var(--app-border-strong);
-  border-radius: var(--app-control-radius);
-  color: var(--app-text-primary);
-  cursor: cell;
-  font-size: 10px;
-  height: 10px;
-  left: 3px;
-  overflow: hidden;
-  padding: 1px;
-  position: absolute;
-  top: 3px;
-  width: 10px;
-  z-index: 2;
-}
-
-.playlist-icon--after-heart {
-  left: 23px;
-}
-
-.playlist-icon-active {
-  cursor: not-allowed;
-  opacity: 1 !important;
-}
-
 .compact-clean-name {
-  bottom: 2px;
   box-sizing: border-box;
-  max-width: calc(100% - 4px);
   overflow: hidden;
   pointer-events: none;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.compact-meta-line {
-  bottom: 17px;
 }

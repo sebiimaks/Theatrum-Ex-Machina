@@ -76,6 +76,7 @@
               type="button"
               class="shortcut-key clickable"
               (click)="changeThisShortcut(item)"
+              (blur)="cancelShortcutChange()"
               [attr.aria-pressed]="item === shortcutToChange"
               [ngClass]="{
                 'selected-for-change': item === shortcutToChange,

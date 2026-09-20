@@ -1,29 +1,45 @@
 <div class="input-container">
-  <input
-    #tagInputField
-    class="filter-general input-filter"
-    [ngClass]="{ 'dark-mode' : darkMode() }"
-    (keyup.enter)="emitTag(currentText)"
-    (keyup.esc)="escape()"
-    [(ngModel)]="currentText"
-    (ngModelChange)="checkTypeahead($event)"
-    (keydown.Tab)="tabPressed($event)"
-    [attr.aria-invalid]="tagValidationError ? true : null"
-    [attr.title]="'TAGS.hierarchyEntryHint' | translate"
-    type="text"
-    placeholder="{{ 'TAGS.addTag' | translate }}"
-  >
+  <div class="tag-entry-row">
+    <input
+      #tagInputField
+      class="filter-general input-filter"
+      [ngClass]="{ 'dark-mode': darkMode() }"
+      (keyup.enter)="emitTag(currentText)"
+      (keydown.escape)="escape($event)"
+      [(ngModel)]="currentText"
+      (ngModelChange)="checkTypeahead($event)"
+      (keydown.Tab)="tabPressed($event)"
+      [attr.aria-invalid]="tagValidationError ? true : null"
+      [attr.aria-label]="'TAGS.addTag' | translate"
+      [attr.title]="'TAGS.hierarchyEntryHint' | translate"
+      autocomplete="off"
+      type="text"
+      placeholder="{{ 'TAGS.addTag' | translate }}"
+    >
+    <button
+      type="button"
+      class="add-tag-button"
+      (click)="emitTag(currentText)"
+      [disabled]="!currentText.trim()"
+      [attr.aria-label]="'TAGS.addTag' | translate"
+    >{{ 'TAGS.add' | translate }}</button>
+  </div>
 
-@if (typeAhead.length > 0) {
-  <span class="typeahead">
-    {{ typeAhead }}
-  </span>
-}
+  @if (typeAhead.length > 0) {
+    <button
+      type="button"
+      class="typeahead"
+      (click)="emitTag(typeAhead)"
+      [attr.aria-label]="'WORKBENCH.useSuggestedTag' | translate: { tagName: typeAhead }"
+    >
+      <span>{{ typeAhead }}</span>
+      <kbd>{{ 'WORKBENCH.tabToUse' | translate }}</kbd>
+    </button>
+  }
 
-@if (tagValidationError) {
-  <span class="tag-validation-error" role="alert">
-    {{ tagValidationError }}
-  </span>
-}
+  <span class="tag-entry-help">{{ 'TAGS.hierarchyEntryHint' | translate }}</span>
 
+  @if (tagValidationError) {
+    <span class="tag-validation-error" role="alert">{{ tagValidationError }}</span>
+  }
 </div>

@@ -35,6 +35,7 @@ import {
   validateAndNormalizeNewTagPath,
 } from '../interfaces/tag-hierarchy.ts';
 import type { TagHierarchyNode, TagHierarchySource } from '../interfaces/tag-hierarchy.ts';
+import { TagTreeExpansionState } from '../src/app/common/tag-tree-expansion';
 
 function findNode(nodes: readonly TagHierarchyNode[], fullPath: string): TagHierarchyNode {
   for (const node of nodes) {
@@ -806,4 +807,87 @@ test('requires tag-removal confirmation only when video assignments are affected
   assert.equal(tagRemovalRequiresConfirmation(0), false);
   assert.equal(tagRemovalRequiresConfirmation(1), true);
   assert.equal(tagRemovalRequiresConfirmation(25), true);
+});
+
+
+test('search reveals matching ancestors while allowing individual branches to collapse and reopen', () => {
+  const state = new TagTreeExpansionState();
+  state.rememberExpanded('Topics');
+  assert.equal(state.isExpanded('Topics > Art'), false);
+
+  state.setFilter('painting');
+  assert.equal(state.isExpanded('Topics'), true);
+  assert.equal(state.isExpanded('Topics > Art'), true);
+  state.toggle('Topics > Art');
+  assert.equal(state.isExpanded('Topics > Art'), false);
+  assert.equal(state.isExpanded('Topics'), true);
+  state.toggle('Topics > Art');
+  assert.equal(state.isExpanded('Topics > Art'), true);
+});
+
+test('collapse all and expand all operate during search without changing ordinary expansion', () => {
+  const state = new TagTreeExpansionState();
+  const paths = ['Topics', 'Topics > Art', 'Locations'];
+  state.rememberExpanded('Topics');
+  state.setFilter('painting');
+  state.collapseAll(paths);
+  paths.forEach((path) => assert.equal(state.isExpanded(path), false));
+  state.toggle('Topics');
+  assert.equal(state.isExpanded('Topics'), true);
+  assert.equal(state.isExpanded('Topics > Art'), false);
+  state.expandAll(paths);
+  paths.forEach((path) => assert.equal(state.isExpanded(path), true));
+
+  state.setFilter('');
+  assert.equal(state.isExpanded('Topics'), true);
+  assert.equal(state.isExpanded('Topics > Art'), false);
+  assert.equal(state.isExpanded('Locations'), false);
+});
+
+test('a different search reveals its matches while repeated or equivalent queries preserve collapse choices', () => {
+  const state = new TagTreeExpansionState();
+  state.setFilter('painting');
+  state.toggle('Topics');
+  state.setFilter('painting');
+  assert.equal(state.isExpanded('Topics'), false);
+  state.setFilter('  PAINTING  ');
+  assert.equal(state.isExpanded('Topics'), false);
+  state.setFilter('sculpture');
+  assert.equal(state.isExpanded('Topics'), true);
+  state.toggle('Topics');
+  state.setFilter('');
+  state.setFilter('sculpture');
+  assert.equal(state.isExpanded('Topics'), true);
+});
+
+test('ordinary collapse all can be followed by search and clearing search without reopening branches', () => {
+  const state = new TagTreeExpansionState();
+  const paths = ['Topics', 'Topics > Art'];
+  state.expandAll(paths);
+  state.collapseAll(paths);
+  state.setFilter('painting');
+  assert.equal(state.isExpanded('Topics > Art'), true);
+  state.setFilter('   ');
+  paths.forEach((path) => assert.equal(state.isExpanded(path), false));
+});
+
+test('moving a tag branch remaps ordinary and search expansion choices on segment boundaries', () => {
+  const state = new TagTreeExpansionState();
+  state.rememberExpanded('Art');
+  state.rememberExpanded('Art > Painting');
+  state.rememberExpanded('Artist');
+  state.setFilter('art');
+  state.toggle('Art');
+  state.toggle('Art > Painting');
+  state.toggle('Artist');
+  state.remapBranch('Art', 'Topics > Art');
+
+  assert.equal(state.isExpanded('Topics > Art'), true, 'the moved root should be revealed');
+  assert.equal(state.isExpanded('Topics > Art > Painting'), false);
+  assert.equal(state.isExpanded('Artist'), false);
+  state.setFilter('');
+  assert.equal(state.isExpanded('Topics > Art'), true);
+  assert.equal(state.isExpanded('Topics > Art > Painting'), true);
+  assert.equal(state.isExpanded('Art'), false);
+  assert.equal(state.isExpanded('Artist'), true);
 });

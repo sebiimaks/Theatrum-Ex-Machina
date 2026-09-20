@@ -1,15 +1,22 @@
-import { Component, Input, input, output, viewChild } from '@angular/core';
+import { Component, Input, input, output } from '@angular/core';
 
 import { TranslateService } from '@ngx-translate/core';
 
 import { ElectronService } from './../../providers/electron.service';
 import { ModalService } from './../modal/modal.service';
 
-import { SettingsMetaGroupLabels, SettingsSections } from '../../common/settings-buttons';
+import {
+  getSettingsWorkspaceSections,
+  SettingsActionKeys,
+  SettingsDestructiveKeys,
+  SettingsViewKeys,
+  SettingsWorkspaceCategories,
+} from '../../common/settings-workspace';
 
 import type { OnChanges, SimpleChanges } from '@angular/core';
 import type { OnInit } from '@angular/core';
-import type { SettingsButtonsType } from '../../common/settings-buttons';
+import type { SettingsButtonKey, SettingsButtonsType } from '../../common/settings-buttons';
+import type { SettingsCategoryId, SettingsWorkspaceResult } from '../../common/settings-workspace';
 
 @Component({
   standalone: false,
@@ -34,16 +41,22 @@ export class SettingsComponent implements OnInit, OnChanges {
   readonly toggleHideButton = output<string>();
 
   @Input() appState;
-  readonly settingTabToShow = input();
+  readonly settingCategory = input<SettingsCategoryId>('appearance');
+  readonly searchQuery = input('');
+  readonly hasExternalSearchResults = input(false);
   @Input() settingsButtons: SettingsButtonsType;
   readonly versionNumber = input();
 
-  readonly settingsModal = viewChild('settingsModal');
-
   additionalInput = '';
   editAdditional = false;
-  settingsMetaGroupLabels = SettingsMetaGroupLabels;
-  settingsSections = SettingsSections;
+
+  readonly languages = [
+    ['en', 'English'], ['ar', 'العربية'], ['bn', 'বাংলা'], ['zh', '中文'],
+    ['cs', 'Česky'], ['nl', 'Nederlands'], ['fr', 'Française'], ['de', 'Deutsch'],
+    ['hi', 'हिंदी'], ['it', 'Italiana'], ['ja', '日本語'], ['ko', '한국어'],
+    ['ms', 'Melayu'], ['pl', 'Polski'], ['pt', 'Português'], ['ru', 'Русский'],
+    ['es', 'Español'], ['tr', 'Türkçe'], ['uk', 'Українська'], ['vi', 'Tiếng Việt'],
+  ];
 
   constructor(
     private electronService: ElectronService,
@@ -56,9 +69,45 @@ export class SettingsComponent implements OnInit, OnChanges {
   }
 
   ngOnChanges(changes: SimpleChanges): void {
-    if (changes.settingTabToShow) {
+    if (changes.settingCategory || changes.searchQuery) {
       this.scrollSettingsToTop.emit();
     }
+  }
+
+  get currentCategory() {
+    return SettingsWorkspaceCategories.find((category) => category.id === this.settingCategory())
+      || SettingsWorkspaceCategories[0];
+  }
+
+  get visibleSections(): SettingsWorkspaceResult[] {
+    return getSettingsWorkspaceSections(
+      this.settingCategory(), this.searchQuery(), this.settingsButtons,
+      (key) => this.translate.instant(key),
+    );
+  }
+
+  isAction(key: SettingsButtonKey): boolean {
+    return SettingsActionKeys.includes(key);
+  }
+
+  isView(key: SettingsButtonKey): boolean {
+    return SettingsViewKeys.includes(key);
+  }
+
+  isDestructive(key: SettingsButtonKey): boolean {
+    return SettingsDestructiveKeys.includes(key);
+  }
+
+  settingActionLabel(key: SettingsButtonKey): string {
+    if (key === 'makeSmaller') { return 'WORKBENCH.decrease'; }
+    if (key === 'makeLarger') { return 'WORKBENCH.increase'; }
+    if (key === 'showTags') { return 'WORKBENCH.open'; }
+    if (key === 'startWizard') { return 'WORKBENCH.create'; }
+    if (key === 'playPlaylist') { return 'WORKBENCH.play'; }
+    if (key === 'shuffleGalleryNow') { return 'WORKBENCH.shuffle'; }
+    if (key === 'clearHistory' || key === 'clearAllFilters') { return 'WORKBENCH.clear'; }
+    if (key === 'resetSettings' || key === 'resetTimesPlayed') { return 'WORKBENCH.reset'; }
+    return 'WORKBENCH.runAction';
   }
 
   editAdditionalExtensions() {
@@ -74,10 +123,6 @@ export class SettingsComponent implements OnInit, OnChanges {
     } else {
       this.modalService.openSnackbar(this.translate.instant('SETTINGS.extensionsInputError'));
     }
-  }
-
-  formatSectionIndex(index: number): string {
-    return String(index + 1).padStart(2, '0');
   }
 
   openExternalLink(event: MouseEvent, url: string): void {

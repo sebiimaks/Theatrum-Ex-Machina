@@ -9,7 +9,7 @@
   overflow: hidden;
   padding: 5px 5px 5px 32px;
   position: absolute;
-  top: variables.$settings-height;
+  top: calc(#{variables.$settings-height} + 42px);
   transition-duration: 300ms;
   transition-property: left, width;
   width: calc(100vw - #{variables.$sidebar-width});

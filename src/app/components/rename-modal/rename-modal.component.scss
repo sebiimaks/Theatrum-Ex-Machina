@@ -1,38 +1,99 @@
 @use "../variables.scss";
 
-.rename-heading {
-  color: var(--app-text-primary);
-  font-size: 16px;
-  left: 40px;
-  position: absolute;
-  top: 16px;
-}
-
-.rename-from,
-.rename-to {
-  color: var(--app-text-secondary);
+:host(.rename-popup) {
   display: block;
-  font-size: 12px;
-  left: 0px;
-  position: absolute;
-  text-align: right;
-  width: 38px;
+  height: auto;
+  left: max(16px, calc((100vw - 680px) / 2));
+  max-height: calc(100vh - var(--app-titlebar-height) - 36px);
+  max-width: 680px;
+  overflow: auto;
+  padding: 0;
+  top: max(calc(var(--app-titlebar-height) + 18px), 10vh);
+  width: calc(100vw - 32px);
+  z-index: 660;
 }
 
-.rename-from {
-  top: 149px;
+.rename-dialog {
+  padding: 22px;
 }
 
-.rename-to {
-  top: 180px;
+.rename-dialog-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+
+  h1 {
+    color: var(--app-text-primary);
+    font-size: 20px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    margin: 0 0 7px;
+  }
+
+  p {
+    color: var(--app-text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0;
+  }
 }
 
 .close-rename {
-  position: absolute;
-  right: 8px;
-  top: 19px;
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 6px;
+  color: var(--app-text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  fill: currentColor;
+  flex: 0 0 32px;
+  height: 32px;
+  justify-content: center;
+  padding: 0;
+
+  &:hover {
+    background: var(--app-control-hover);
+    color: var(--app-text-primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--app-accent);
+    outline-offset: 2px;
+  }
 }
 
-.close-rename-dark {
-  color: var(--app-text-primary);
+.rename-preview {
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 8px;
+  margin: 18px 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.rename-current {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 18px;
+
+  span {
+    color: var(--app-text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  code {
+    color: var(--app-text-primary);
+    font-family: var(--app-font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 520px) {
+  .rename-dialog {
+    padding: 16px;
+  }
 }

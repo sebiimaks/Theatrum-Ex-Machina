@@ -1,5 +1,6 @@
 <div
-  class="window"
+  class="window workbench-window"
+  [class.workbench-ribbon-collapsed]="appState.menuHidden"
   [ngClass]="{ 'window-dark-mode': settingsButtons['darkMode'].toggled }"
 >
 
@@ -65,8 +66,8 @@
 @if (rightClickShowing) {
   <div
     class="click-away-overlay"
-    (click)="      rightClickShowing = false"
-    (contextmenu)="rightClickShowing = false"
+    (click)="dismissContextMenu()"
+    (contextmenu)="$event.preventDefault(); dismissContextMenu()"
     @overlayAppear
     >
   </div>
@@ -95,7 +96,9 @@
 <!-- ===========   RIGHT CLICK MODAL    =========== -->
 @if (rightClickShowing) {
   <div
-    (click)="rightClickShowing = false"
+    (keydown)="onContextMenuKeydown($event)"
+    cdkTrapFocus [cdkTrapFocusAutoCapture]="true"
+    appDialogKeyboard (dialogEscape)="dismissContextMenu()"
     [ngStyle]="{
         top: rightClickPosition.y + 'px',
         left: rightClickPosition.x + 'px'
@@ -103,43 +106,44 @@
     class="right-click-menu"
     @rightClickAnimation
   >
-    <ul @rightClickContentAnimation>
-      <li
-        (click)="beginRenameFromContextMenu()"
-        [attr.aria-disabled]="catalogueReadOnly
+    <ul role="menu" [attr.aria-label]="'WORKBENCH.videoActions' | translate" @rightClickContentAnimation>
+      <li role="none"><button type="button" role="menuitem"
+        (click)="dismissContextMenu(); beginRenameFromContextMenu()"
+        [disabled]="catalogueReadOnly
           || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource]"
         [ngClass]="{ 'right-click-disabled': catalogueReadOnly
           || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource] }"
       >
-                                                                {{ 'RIGHTCLICK.renameFile'  | translate }}</li>
-      <li (click)="showSimilarNow()">                           {{ 'RIGHTCLICK.showSimilar' | translate }}</li>
-      <li (click)="showOnlyThisFolderNow()">                    {{ 'RIGHTCLICK.viewFolder'  | translate }}</li>
-      <li
-        (click)="openContainingFolderNow()"
+                                                                {{ 'RIGHTCLICK.renameFile'  | translate }}</button></li>
+      <li role="none"><button type="button" role="menuitem" (click)="dismissContextMenu(); showSimilarNow()">                           {{ 'RIGHTCLICK.showSimilar' | translate }}</button></li>
+      <li role="none"><button type="button" role="menuitem" (click)="dismissContextMenu(); showOnlyThisFolderNow()">                    {{ 'RIGHTCLICK.viewFolder'  | translate }}</button></li>
+      <li role="none"><button type="button" role="menuitem"
+        (click)="dismissContextMenu(); openContainingFolderNow()"
+        [disabled]="!sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource]"
         [ngClass]="{ 'right-click-disabled': !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource] }"
       >
-                                                                {{ 'RIGHTCLICK.openFolder'  | translate }}</li>
-      <li (click)="openThumbnailSheet(currentRightClickedItem)">{{ 'RIGHTCLICK.sheetModal'  | translate }}</li>
-      <li
-        (click)="regenerateThumbnails(currentRightClickedItem)"
-        [attr.aria-disabled]="catalogueReadOnly
+                                                                {{ 'RIGHTCLICK.openFolder'  | translate }}</button></li>
+      <li role="none"><button type="button" role="menuitem" (click)="dismissContextMenu(); openThumbnailSheet(currentRightClickedItem)">{{ 'RIGHTCLICK.sheetModal'  | translate }}</button></li>
+      <li role="none"><button type="button" role="menuitem"
+        (click)="dismissContextMenu(); regenerateThumbnails(currentRightClickedItem)"
+        [disabled]="catalogueReadOnly
           || thumbnailRegenerationActive
           || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource]"
         [ngClass]="{ 'right-click-disabled': catalogueReadOnly
                                                || thumbnailRegenerationActive
                                                || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource] }"
       >
-                                                                {{ 'RIGHTCLICK.regenerateThumbnails' | translate }}</li>
+                                                                {{ 'RIGHTCLICK.regenerateThumbnails' | translate }}</button></li>
     @if (settingsButtons['showDeleteOption'].toggled) {
-      <li
-        (click)="deleteThisFile(currentRightClickedItem)"
+      <li role="none"><button type="button" role="menuitem"
+        (click)="dismissContextMenu(); deleteThisFile(currentRightClickedItem)"
         class="right-click-delete"
-        [attr.aria-disabled]="catalogueReadOnly
+        [disabled]="catalogueReadOnly
           || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource]"
         [ngClass]="{ 'right-click-disabled': catalogueReadOnly
           || !sourceFolderService.sourceFolderConnected[currentRightClickedItem.inputSource] }"
       >
-                                                                {{ 'RIGHTCLICK.delete'      | translate }}</li>
+                                                                {{ 'RIGHTCLICK.delete'      | translate }}</button></li>
     }
     </ul>
   </div>
@@ -149,7 +153,8 @@
 @if (sheetOverlayShowing) {
   <app-thumbnail-sheet
     (filterTag)="handleTagWordClicked($event.tag.name, $event.event)"
-    (openVideoAtTime)="handleClick($event, sheetItemToDisplay)"
+    (openVideoAtTime)="openVideo(sheetItemToDisplay, $event.thumbIndex)"
+    (closeSheet)="sheetOverlayShowing = false"
 
     [video]="sheetItemToDisplay"
 
@@ -198,15 +203,19 @@
 @if (settingsButtons['showTags'].toggled) {
   <div
     class="settings-modal"
+    role="dialog" aria-modal="true" [attr.aria-label]="'WORKBENCH.tags' | translate"
+    cdkTrapFocus [cdkTrapFocusAutoCapture]="true"
+    appDialogKeyboard (dialogEscape)="toggleButton('showTags')"
     @modalAnimation
   >
-    <div
+    <button type="button" cdkFocusInitial
       (click)="toggleButton('showTags')"
       class="close-settings"
       title="{{ 'SETTINGS.closeSettings' | translate }}"
+      [attr.aria-label]="'WORKBENCH.closeDialog' | translate"
     >
       <app-icon class="close-modal-icon" [icon]="'icon-close'" />
-    </div>
+    </button>
     <app-tags-component [hubName]="appState.hubName" (tagClicked)="autoTagClicked($event)" />
   </div>
 }
@@ -218,36 +227,37 @@
   <!-- Clickable tabs -->
 
 @if (settingsModalOpen) {
-  <div
-    class="all-settings-tabs settings-review-tabs"
-    [ngClass]="{ 'settings-tabs-dark': settingsButtons['darkMode'].toggled }"
-    aria-label="Settings sections"
-    role="tablist"
-    @modalAnimation
-  >
-    <button type="button" id="settings-tab-0" role="tab" aria-controls="settings-review-panel" [attr.aria-selected]="settingTabToShow === 0" [attr.tabindex]="settingTabToShow === 0 ? 0 : -1" (click)="settingTabToShow = 0" (keydown)="onSettingsTabKeydown($event)" [ngClass]="{ 'active-tab': settingTabToShow === 0 }">
-      {{ 'SETTINGS.tabFilter'     | translate }}
+  <div cdkTrapFocus [cdkTrapFocusAutoCapture]="true"
+    appDialogKeyboard (dialogEscape)="toggleSettings()"
+    role="dialog" aria-modal="true" [attr.aria-label]="'SETTINGS.settings' | translate">
+  <aside class="workbench-settings-nav" aria-label="Settings navigation">
+    <button type="button" class="workbench-settings-back" (click)="toggleSettings()">
+      <span aria-hidden="true">←</span> {{ 'WORKBENCH.backToLibrary' | translate }}
     </button>
-    <button type="button" id="settings-tab-1" role="tab" aria-controls="settings-review-panel" [attr.aria-selected]="settingTabToShow === 1" [attr.tabindex]="settingTabToShow === 1 ? 0 : -1" (click)="settingTabToShow = 1" (keydown)="onSettingsTabKeydown($event)" [ngClass]="{ 'active-tab': settingTabToShow === 1 }">
-      {{ 'SETTINGS.tabView'       | translate }}
-    </button>
-    <button type="button" id="settings-tab-2" role="tab" aria-controls="settings-review-panel" [attr.aria-selected]="settingTabToShow === 2" [attr.tabindex]="settingTabToShow === 2 ? 0 : -1" (click)="settingTabToShow = 2" (keydown)="onSettingsTabKeydown($event)" [ngClass]="{ 'active-tab': settingTabToShow === 2 }">
-      {{ 'SETTINGS.tabMain'       | translate }}
-    </button>
-    <button type="button" id="settings-tab-3" role="tab" aria-controls="settings-review-panel" [attr.aria-selected]="settingTabToShow === 3" [attr.tabindex]="settingTabToShow === 3 ? 0 : -1" (click)="settingTabToShow = 3" (keydown)="onSettingsTabKeydown($event)" [ngClass]="{ 'active-tab': settingTabToShow === 3 }">
-      {{ 'SETTINGS.tabCurrentHub' | translate }}
-    </button>
-    <button type="button" id="settings-tab-4" role="tab" aria-controls="settings-review-panel" [attr.aria-selected]="settingTabToShow === 4" [attr.tabindex]="settingTabToShow === 4 ? 0 : -1" (click)="settingTabToShow = 4" (keydown)="onSettingsTabKeydown($event)" [ngClass]="{ 'active-tab': settingTabToShow === 4 }">
-      {{ 'SETTINGS.tabShortcuts'  | translate }}
-    </button>
-  </div>
+    <label class="workbench-settings-search">
+      <span>{{ 'WORKBENCH.findSetting' | translate }}</span>
+      <input type="search" cdkFocusInitial [(ngModel)]="settingsSearchQuery" [attr.aria-label]="'WORKBENCH.findSetting' | translate" [placeholder]="'WORKBENCH.findSetting' | translate">
+    </label>
+    <nav role="tablist" aria-orientation="vertical" [attr.aria-label]="'WORKBENCH.settingsCategories' | translate">
+      @for (category of settingsCategories; track category.id) {
+        <button type="button" role="tab" [id]="'settings-tab-' + category.id"
+          aria-controls="settings-review-panel" [attr.aria-selected]="settingCategory === category.id"
+          [attr.tabindex]="settingCategory === category.id ? 0 : -1"
+          (click)="selectSettingsCategory(category.id)" (keydown)="onSettingsTabKeydown($event)">
+          <app-icon [icon]="category.iconName" [size]="16" />
+          {{ category.label | translate }}
+        </button>
+      }
+    </nav>
+    <p class="workbench-settings-catalogue">{{ appState.hubName }}</p>
+  </aside>
 
   <div
     class="settings-modal settings-review-modal"
     [ngClass]="{ 'settings-modal-dark': settingsButtons['darkMode'].toggled }"
     id="settings-review-panel"
     role="tabpanel"
-    [attr.aria-labelledby]="'settings-tab-' + settingTabToShow"
+    [attr.aria-labelledby]="'settings-tab-' + settingCategory"
     @modalAnimation
     #settingsModal
   >
@@ -255,14 +265,22 @@
     <!-- fade out & close button -->
 
     <div class="modal-fade-out">
-      <div
-        (click)="toggleSettings()"
-        class="close-settings close-settings-fade-out-override"
-        title="{{ 'SETTINGS.closeSettings' | translate }}"
-      >
-        <app-icon class="close-modal-icon" [icon]="'icon-close'" />
-      </div>
+      <button type="button" (click)="toggleSettings()" class="workbench-settings-close" [attr.aria-label]="'SETTINGS.closeSettings' | translate">
+        <app-icon [icon]="'icon-close'" [size]="18" />
+      </button>
     </div>
+
+    @if (settingsDestinationMatches.length) {
+      <nav class="workbench-settings-results" [attr.aria-label]="'WORKBENCH.relatedSettings' | translate">
+        @for (category of settingsDestinationMatches; track category.id) {
+          <button type="button" (click)="selectSettingsCategory(category.id)">
+            <app-icon [icon]="category.iconName" [size]="18" />
+            <span><strong>{{ category.label | translate }}</strong><small>{{ category.description | translate }}</small></span>
+            <span aria-hidden="true">→</span>
+          </button>
+        }
+      </nav>
+    }
 
     <!-- BUTTONS -->
 
@@ -277,14 +295,16 @@
       (toggleHideButton)="toggleHideButton($event)"
 
       [appState]="appState"
-      [settingTabToShow]="settingTabToShow"
+      [settingCategory]="settingCategory"
+      [searchQuery]="settingsSearchQuery"
+      [hasExternalSearchResults]="settingsDestinationMatches.length > 0"
       [settingsButtons]="settingsButtons"
       [versionNumber]="versionNumber"
      />
 
     <!-- HUB STATISTICS / Current Hub Settings -->
 
-  @if (settingTabToShow == 3) {
+  @if (settingCategory === 'library' && !settingsSearchQuery.trim()) {
     <div class="shortcut-menu settings-review-host">
       <app-statistics
         (cancelFolderThumbnailRegeneration)="cancelFolderThumbnailRegeneration()"
@@ -311,11 +331,12 @@
     </div>
   }
     <!-- KEYBOARD SHORTCUTS -->
-  @if (settingTabToShow == 4) {
+  @if (settingCategory === 'shortcuts' && !settingsSearchQuery.trim()) {
     <div class="shortcut-menu settings-review-host">
       <app-shortcuts [macVersion]="macVersion" />
     </div>
   }
+  </div>
   </div>
 }
 
@@ -348,9 +369,6 @@
 
   <div
     class="window-content"
-    [ngStyle]="{
-      transform: appState.menuHidden ? 'translate(0, -40px)' : 'translate(0, 0)'
-    }"
   >
 
     <!-- ============================================== -->
@@ -365,8 +383,35 @@
       }"
     >
 
+      <div class="workbench-toolbar">
+        <button type="button" class="workbench-catalogue" (click)="loadFromFile()" [title]="'WORKBENCH.openCatalogue' | translate">
+          <span class="workbench-monogram" aria-hidden="true">T</span>
+          <span><strong>{{ appState.hubName || 'Theatrum Ex Machina' }}</strong><small>{{ 'WORKBENCH.openCatalogue' | translate }}</small></span>
+        </button>
+        @if (settingsButtons['magic'].toggled) {
+          <label class="workbench-search">
+            <app-icon [icon]="settingsButtons['magic'].iconName" [size]="16" />
+            <input #magicSearch [(ngModel)]="magicSearchString" (keydown.escape)="magicSearchString = ''" type="search"
+              [attr.aria-label]="'WORKBENCH.searchCatalogue' | translate" [placeholder]="'WORKBENCH.searchCatalogue' | translate">
+          </label>
+        } @else {
+          <button type="button" class="workbench-enable-search" (click)="toggleButton('magic')">{{ 'WORKBENCH.search' | translate }}</button>
+        }
+        <label class="workbench-view"><span>{{ 'WORKBENCH.view' | translate }}</span>
+          <select [ngModel]="appState.currentView" (ngModelChange)="toggleButton($event)" [attr.aria-label]="'WORKBENCH.galleryView' | translate">
+            @for (view of workbenchViews; track view) { <option [value]="view">{{ settingsButtons[view].title | translate }}</option> }
+          </select>
+        </label>
+        <button type="button" (click)="toggleRibbon()" [attr.aria-expanded]="!appState.menuHidden" aria-controls="workbench-pinned-controls" [title]="'WORKBENCH.pinnedControls' | translate">
+          <app-icon [icon]="'icon-show-more-info'" [size]="16" /><span class="workbench-toolbar-label">{{ 'WORKBENCH.pinned' | translate }}</span>
+        </button>
+        <button type="button" (click)="toggleSettings()" [attr.aria-pressed]="settingsModalOpen" [attr.aria-label]="'SETTINGS.settings' | translate">
+          <app-icon [icon]="'icon-gear'" [size]="18" /><span class="workbench-toolbar-label">{{ 'SETTINGS.settings' | translate }}</span>
+        </button>
+      </div>
+
       <!-- ALL THE BUTTONS IN THE RIBBON -->
-      <app-ribbon
+      <app-ribbon id="workbench-pinned-controls" [hidden]="appState.menuHidden"
         (toggleButton)="toggleButton($any($event))"
         [appState]="appState"
         [settingsButtonsGroups]="settingsButtonsGroups"
@@ -412,28 +457,6 @@
       </section>
     }
 
-      <!-- GEAR BUTTON -->
-      <div
-        (click)="toggleSettings()"
-        [ngClass]="{ gearButtonActive: settingsModalOpen }"
-        class="gearButton"
-        title="{{ 'SETTINGS.settings' | translate }}"
-      >
-        <app-icon [icon]="'icon-gear'" [size]="18" />
-      </div>
-      <div
-        (click)="openCatalogueEditor()"
-        [ngClass]="{
-          catalogueEditorButtonActive: catalogueEditorOpen,
-          catalogueEditorButtonDisabled: catalogueReadOnly
-        }"
-        class="catalogueEditorButton"
-        [attr.title]="catalogueReadOnly
-          ? ('SYSTEM.catalogueReadOnlyActionBlocked' | translate)
-          : 'Edit catalogue JSON'"
-      >
-        JSON
-      </div>
       @if (catalogueReadOnly) {
         <span class="catalogue-read-only-badge" role="status">
           {{ 'SYSTEM.catalogueReadOnly' | translate }}
@@ -447,17 +470,6 @@
       ></div>
     }
 
-    </div>
-
-    <div
-      (click)="toggleRibbon()"
-      class="hiding-settings-menu"
-      [ngClass]="{
-          flipped: !appState.menuHidden,
-          'hiding-settings-menu-dark': settingsButtons['darkMode'].toggled
-        }"
-    >
-      <app-icon class="mini-chevron" [icon]="'icon-chevron-down-mini'" />
     </div>
 
     <!-- BREADCRUMBS -->
@@ -496,6 +508,22 @@
       #searchRef
     >
 
+      <nav class="workbench-navigation" [attr.aria-label]="'WORKBENCH.catalogueNavigation' | translate">
+        <p class="workbench-section-label">{{ 'WORKBENCH.catalogue' | translate }}</p>
+        @for (collection of workspaceCollections; track collection.id) {
+          <button type="button" (click)="selectWorkspaceCollection(collection.id)" [attr.aria-current]="workspaceCollection === collection.id ? 'page' : null">
+            <app-icon [icon]="collection.icon" [size]="16" />{{ collection.label | translate }}
+          </button>
+        }
+        <details class="workbench-navigation-tools">
+          <summary>{{ 'WORKBENCH.libraryTools' | translate }}<span aria-hidden="true">⌄</span></summary>
+          <button type="button" (click)="openWorkspaceSettings('library')"><app-icon [icon]="'icon-folder-blank'" [size]="16" />{{ 'WORKBENCH.manageSources' | translate }}</button>
+          <button type="button" (click)="openCatalogueEditor()" [disabled]="catalogueReadOnly"><app-icon [icon]="'icon-show-details'" [size]="16" />{{ 'WORKBENCH.catalogueEditor' | translate }}</button>
+          <button type="button" (click)="startWizard()"><app-icon [icon]="'icon-plus'" [size]="16" />{{ 'WORKBENCH.newCatalogue' | translate }}</button>
+        </details>
+      </nav>
+      <div class="workbench-filter-heading"><h2>{{ 'WORKBENCH.refineResults' | translate }}</h2><button type="button" (click)="clearAllFilters()" [title]="'BUTTONS.clearAllFiltersHint' | translate">{{ 'WORKBENCH.clear' | translate }}</button></div>
+      <button type="button" class="workbench-configure-filters" (click)="openWorkspaceSettings('search')">{{ 'WORKBENCH.chooseFilters' | translate }} <span aria-hidden="true">↗</span></button>
       <div class="filtering-total">
 
       @if (!allFinishedScanning || importStage === 'importingMeta') {
@@ -537,45 +565,15 @@
         [tagTypeAhead]="tagTypeAhead"
        />
 
-      <!-- magic search -->
-    @if (settingsButtons['magic'].toggled) {
-      <div @filterItemAppear>
-        <app-icon
-          class="input-icon"
-          [icon]="settingsButtons['magic'].iconName"
-          title="{{ settingsButtons['magic'].moreInfo | translate }}"
-        />
-        <input
-          #magicSearch
-          (keydown.escape)="magicSearchString = ''"
-          [(ngModel)]="magicSearchString"
-          type="text"
-          class="filter-general input-filter"
-          placeholder="{{ 'SIDEBAR.magic' | translate }}"
-        >
-        <div class="filtered-words">
-        @if (magicSearchString !== '') {
-          <span
-            (click)="magicSearchString = ''"
-            class="generated-search-chip search-or-tag-general search-word"
-          >
-            {{ magicSearchString }}
-          </span>
-        }
-        </div>
-      </div>
-    }
-
     <!-- regex search -->
     @if (settingsButtons['regex'].toggled) {
-      <div @filterItemAppear>
-        <app-icon
-        class="input-icon"
-        [icon]="settingsButtons['regex'].iconName"
-        title="{{ settingsButtons['regex'].moreInfo | translate }}"
-      />
+      <div class="workbench-live-filter" @filterItemAppear>
+        <label class="workbench-filter-label" for="workbench-regex" [title]="settingsButtons['regex'].moreInfo | translate">
+          <app-icon [icon]="settingsButtons['regex'].iconName" [size]="13" />{{ 'SIDEBAR.regex' | translate }}
+        </label>
         <input
           #regexSearch
+          id="workbench-regex"
           (keydown.escape)="regexSearchString = ''"
           [(ngModel)]="regexSearchString"
           type="text"
@@ -584,14 +582,15 @@
         >
         <div class="filtered-words">
         @if (regexSearchString !== '') {
-          <span
+          <button type="button"
+            [attr.aria-label]="('WORKBENCH.removeFilter' | translate) + ': ' + regexSearchString"
             (click)="regexSearchString = ''"
             class="generated-search-chip search-or-tag-general search-word"
             [attr.title]="regexError ? ( 'SIDEBAR.invalidRegex' | translate ) : ''"
             [ngClass]="{ 'regex-error': regexError }"
           >
-            {{ regexSearchString }}
-          </span>
+            {{ regexSearchString }} <span aria-hidden="true">×</span>
+          </button>
         }
         </div>
       </div>
@@ -599,14 +598,13 @@
 
       <!-- fuzzy search -->
     @if (settingsButtons['fuzzy'].toggled) {
-      <div @filterItemAppear>
-        <app-icon
-          class="input-icon"
-          [icon]="settingsButtons['fuzzy'].iconName"
-          title="{{ settingsButtons['fuzzy'].moreInfo | translate }}"
-        />
+      <div class="workbench-live-filter" @filterItemAppear>
+        <label class="workbench-filter-label" for="workbench-fuzzy" [title]="settingsButtons['fuzzy'].moreInfo | translate">
+          <app-icon [icon]="settingsButtons['fuzzy'].iconName" [size]="13" />{{ 'SIDEBAR.fuzzy' | translate }}
+        </label>
         <input
           #fuzzySearch
+          id="workbench-fuzzy"
           (keydown.escape)="fuzzySearchString = ''"
           [(ngModel)]="fuzzySearchString"
           type="text"
@@ -615,12 +613,13 @@
         >
         <div class="filtered-words">
         @if (fuzzySearchString !== '' && fuzzySearchString.length > 2) {
-          <span
+          <button type="button"
+            [attr.aria-label]="('WORKBENCH.removeFilter' | translate) + ': ' + fuzzySearchString"
             (click)="fuzzySearchString = ''"
             class="generated-search-chip search-or-tag-general search-word"
           >
-            {{ fuzzySearchString }}
-          </span>
+            {{ fuzzySearchString }} <span aria-hidden="true">×</span>
+          </button>
         }
         </div>
       </div>
@@ -628,14 +627,13 @@
 
       <!-- starts-with search -->
     @if (settingsButtons['startsWith'].toggled) {
-      <div @filterItemAppear>
-        <app-icon
-          class="input-icon"
-          [icon]="settingsButtons['startsWith'].iconName"
-          title="{{ settingsButtons['startsWith'].moreInfo | translate }}"
-        />
+      <div class="workbench-live-filter" @filterItemAppear>
+        <label class="workbench-filter-label" for="workbench-startsWith" [title]="settingsButtons['startsWith'].moreInfo | translate">
+          <app-icon [icon]="settingsButtons['startsWith'].iconName" [size]="13" />{{ 'SIDEBAR.startsWith' | translate }}
+        </label>
         <input
           #startsWithSearch
+          id="workbench-startsWith"
           (keydown.escape)="startsWithSearchString = ''"
           [(ngModel)]="startsWithSearchString"
           type="text"
@@ -643,13 +641,14 @@
           placeholder="{{ 'SIDEBAR.startsWith' | translate }}"
         />
         <div class="filtered-words">
-          <span
+          <button type="button"
+            [attr.aria-label]="('WORKBENCH.removeFilter' | translate) + ': ' + startsWithSearchString"
             *ngIf="startsWithSearchString !== ''"
             (click)="startsWithSearchString = ''"
             class="generated-search-chip search-or-tag-general search-word"
           >
-            {{ startsWithSearchString }}
-          </span>
+            {{ startsWithSearchString }} <span aria-hidden="true">×</span>
+          </button>
         </div>
       </div>
     }
@@ -657,6 +656,7 @@
       <!-- durationFilter -->
     @if (settingsButtons['durationFilter'].toggled) {
       <div class="slider-container" @sliderAppear>
+        <h3 class="workbench-range-label">{{ 'WORKBENCH.duration' | translate }}</h3>
         <app-slider-filter
           (newSliderFilterSelected)="newLengthFilterSelected($event)"
           [darkMode]="settingsButtons['darkMode'].toggled"
@@ -672,6 +672,7 @@
       <!-- sizeFilter -->
     @if (settingsButtons['sizeFilter'].toggled) {
       <div class="slider-container" @sliderAppear>
+        <h3 class="workbench-range-label">{{ 'WORKBENCH.fileSize' | translate }}</h3>
         <app-slider-filter
           (newSliderFilterSelected)="newSizeFilterSelected($event)"
           [darkMode]="settingsButtons['darkMode'].toggled"
@@ -687,6 +688,7 @@
       <!-- timesPlayedFilter -->
     @if (settingsButtons['timesPlayedFilter'].toggled) {
       <div class="slider-container" @sliderAppear>
+        <h3 class="workbench-range-label">{{ 'WORKBENCH.timesPlayed' | translate }}</h3>
         <app-slider-filter
           (newSliderFilterSelected)="newTimesPlayedFilterSelected($event)"
           [darkMode]="settingsButtons['darkMode'].toggled"
@@ -702,6 +704,7 @@
       <!-- yearFilter -->
     @if (settingsButtons['yearFilter'].toggled) {
       <div class="slider-container" @sliderAppear>
+        <h3 class="workbench-range-label">{{ 'WORKBENCH.year' | translate }}</h3>
         <app-slider-filter
             (newSliderFilterSelected)="newYearFilterSelected($event)"
             [darkMode]="settingsButtons['darkMode'].toggled"
@@ -717,6 +720,7 @@
     <!-- resolution filter & its frequency histogram -->
     @if (settingsButtons['resolutionFilter'].toggled) {
       <div class="slider-container" @sliderAppear>
+        <h3 class="workbench-range-label">{{ 'WORKBENCH.resolution' | translate }}</h3>
       <app-resolution-filter
         (newResFilterSelected)="newResFilterSelected($event)"
         [freqLeftBound]="freqLeftBound"
@@ -731,6 +735,7 @@
       <!-- star filter & its frequency histogram -->
     @if (settingsButtons['starFilter'].toggled) {
       <div class="slider-container" @sliderAppear>
+        <h3 class="workbench-range-label">{{ 'WORKBENCH.rating' | translate }}</h3>
       <app-star-filter
         (newStarFilterSelected)="newStarFilterSelected($event)"
         [settingsButtons]="settingsButtons"
@@ -823,12 +828,6 @@
       </div>
     }
 
-      <!-- SORT ORDER -->
-      <app-sort-order
-        (sortTypeChange)="selectFilterOrder($event)"
-        [settingsButtons]="settingsButtons"
-       />
-
     @if (settingsButtons['hideOffline'].toggled) {
       <div
         (click)="settingsButtons['hideOffline'].toggled = false"
@@ -864,10 +863,28 @@
     <!-- ===========    THE GALLERY PANE    =========== -->
     <!-- ============================================== -->
 
+    <section class="workbench-gallery-header" [class.workbench-gallery-header-full]="settingsButtons['hideSidebar'].toggled" [class.workbench-gallery-header-tags]="settingsButtons['showTagTray'].toggled">
+      <div class="workbench-gallery-title"><h1>{{ workspaceCollectionLabel | translate }}</h1><span aria-live="polite">{{ numberOfVideosFound | number }} {{ (numberOfVideosFound === 1 ? 'WORKBENCH.video' : 'WORKBENCH.videos') | translate }}</span></div>
+      <div class="workbench-gallery-actions">
+        <app-sort-order (sortTypeChange)="selectFilterOrder($event)" [settingsButtons]="settingsButtons" />
+        <button type="button" (click)="toggleButton('hideSidebar')" [attr.aria-pressed]="!settingsButtons['hideSidebar'].toggled"><app-icon [icon]="'icon-looking-glass'" [size]="16" />{{ 'WORKBENCH.filters' | translate }}</button>
+        <button type="button" (click)="toggleButton('showTagTray')" [attr.aria-pressed]="settingsButtons['showTagTray'].toggled"><app-icon [icon]="'icon-tag'" [size]="16" />{{ 'WORKBENCH.tags' | translate }}</button>
+        <button type="button" (click)="toggleButton('showDetailsTray')" [attr.aria-pressed]="settingsButtons['showDetailsTray'].toggled"><app-icon [icon]="'icon-show-details'" [size]="16" />{{ 'WORKBENCH.details' | translate }}</button>
+        <button type="button" (click)="decreaseSize()" [disabled]="appState.currentView === 'showFiles'" [attr.aria-label]="settingsButtons['makeSmaller'].title | translate">−</button>
+        <button type="button" (click)="increaseSize()" [disabled]="appState.currentView === 'showFiles'" [attr.aria-label]="settingsButtons['makeLarger'].title | translate">+</button>
+      </div>
+    </section>
+    @if (appState.currentView === 'showFiles' && settingsButtons['showMoreInfo'].toggled) {
+      <div class="workbench-file-heading" [class.workbench-gallery-header-full]="settingsButtons['hideSidebar'].toggled" [class.workbench-gallery-header-tags]="settingsButtons['showTagTray'].toggled" [style.margin-top.px]="workspaceGalleryInset - 30" aria-hidden="true">
+        <div class="workbench-file-columns"><span></span><span>{{ 'WORKBENCH.filename' | translate }}</span><span>{{ 'WORKBENCH.duration' | translate }}</span><span>{{ 'WORKBENCH.resolution' | translate }}</span><span>{{ 'WORKBENCH.fileSize' | translate }}</span><span>{{ 'WORKBENCH.rating' | translate }}</span></div>
+      </div>
+    }
+
     <virtual-scroller
       #scroll
       id="scrollDiv"
       class="gallery-container"
+      [style.margin-top.px]="workspaceGalleryInset"
 
       [ngStyle]="{
           'height': 'calc(100vh - ' + (
@@ -879,7 +896,7 @@
                               || settingsButtons['showRecentlyPlayed'].toggled
                               || settingsButtons['showRelatedVideosTray'].toggled
                             )
-                      ) + 'px)'
+                      ) + 'px - ' + workspaceGalleryInset + 'px)'
         }"
 
       [enableUnequalChildrenSizes]="appState.currentView === 'showFullView'"

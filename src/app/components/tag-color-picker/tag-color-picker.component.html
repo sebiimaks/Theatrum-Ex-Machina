@@ -1,37 +1,47 @@
 <div class="color-picker-overlay" (click)="onClose()"></div>
 
 <div
+  #picker
   class="color-picker-container"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="tag-color-picker-title"
+  cdkTrapFocus [cdkTrapFocusAutoCapture]="true"
+  appDialogKeyboard (dialogEscape)="onClose()"
   [ngClass]="{ 'dark-mode': darkMode() }"
   [style.left.px]="position().x"
   [style.top.px]="position().y"
   (click)="$event.stopPropagation()"
 >
   <div class="color-picker-header">
-    <span>Select Tag Color</span>
-    <button class="close-btn" (click)="onClose()">×</button>
+    <span id="tag-color-picker-title">Select Tag Color</span>
+    <button type="button" class="close-btn" (click)="onClose()" aria-label="Close tag color picker">×</button>
   </div>
 
   <div class="color-grid">
 
   @for (color of colors; track color) {
-    <div
+    <button
+      type="button"
       class="color-swatch"
+      [attr.aria-label]="'Use tag color ' + color"
+      [attr.aria-pressed]="currentColor() === color"
       [style.background-color]="color"
       [class.selected]="currentColor() === color"
       (click)="selectColor(color)"
       [title]="color"
     >
     @if (currentColor() === color) {
-      <span class="checkmark">✓</span>
+      <span class="checkmark" aria-hidden="true">✓</span>
     }
-    </div>
+    </button>
   }
 
   </div>
 
   <div class="color-actions">
     <button
+      type="button"
       class="default-btn"
       [disabled]="!currentColor()"
       (click)="clearColor()"

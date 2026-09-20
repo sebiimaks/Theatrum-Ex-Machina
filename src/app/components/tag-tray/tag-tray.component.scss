@@ -855,9 +855,9 @@
 
   .tag-disclosure,
   .tag-disclosure-placeholder {
-    flex-basis: 13px;
-    height: 20px;
-    width: 13px;
+    flex-basis: 24px;
+    height: 26px;
+    width: 24px;
   }
 
   .tag-disclosure-placeholder {
@@ -866,8 +866,13 @@
   }
 
   .tag-disclosure {
-    color: inherit;
-    font-size: 10px;
+    color: var(--app-text-primary);
+    font-size: 15px;
+
+    &:focus-visible {
+      outline: 2px solid var(--app-accent);
+      outline-offset: 1px;
+    }
   }
 
   .tag-source-leaf-icon {
@@ -988,8 +993,7 @@
   align-items: center;
   display: flex;
   gap: 1px;
-  opacity: 0;
-  transition: opacity var(--app-motion-fast);
+  opacity: 1;
 
   button {
     align-items: center;
@@ -1078,5 +1082,39 @@
   .manual-tag-tray *::before,
   .manual-tag-tray *::after {
     transition-duration: 0.01ms !important;
+  }
+}
+
+// Keep tree controls discoverable without a hover and reachable in a long list.
+.tag-source-tree-controls {
+  background: var(--app-tray-background);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 3px 6px 9px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+
+  button {
+    align-items: center;
+    background: var(--app-control-background);
+    border: 1px solid var(--app-border-subtle);
+    border-radius: 5px;
+    color: var(--app-text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    fill: currentColor;
+    flex: 1 0 auto;
+    font: inherit;
+    font-size: 11px;
+    gap: 5px;
+    justify-content: center;
+    min-height: 28px;
+    padding: 4px 6px;
+
+    &:hover { background: var(--app-accent-soft); color: var(--app-accent-text); }
+    &:focus-visible { outline: 2px solid var(--app-accent); outline-offset: 1px; }
+    app-icon { display: inline-flex; }
   }
 }

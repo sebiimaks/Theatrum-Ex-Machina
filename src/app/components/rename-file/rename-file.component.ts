@@ -47,10 +47,6 @@ export class RenameFileComponent implements OnInit, OnDestroy {
     this.renamingWIP = this.filePathService.getFileNameWithoutExtension(this.currentRightClickedItem().fileName);
     this.renamingExtension = this.filePathService.getFileNameExtension(this.currentRightClickedItem().fileName);
 
-    setTimeout(() => {
-      this.renameFileInput().nativeElement.focus();
-    }, 0);
-
     this.responseSubscription = this.renameResponse().subscribe((data: RenameFileResponse) => {
 
       if (data) {

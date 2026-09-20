@@ -10,6 +10,7 @@
   <!-- RENAME FILE SECTION -->
   <input
     class="meta-title"
+    [attr.aria-label]="'WORKBENCH.videoTitle' | translate"
     [ngClass]="{ 'larger-font': largerFont() }"
     [ngStyle]="{
         width: renamingWIP.length + 10 + 'ch',
@@ -60,7 +61,7 @@
         max="3000"
         min="1888"
         placeholder="YYYY"
-        tabindex="-1"
+        [attr.aria-label]="'WORKBENCH.year' | translate"
         type="number"
       >
     </div>
@@ -94,7 +95,10 @@
     (click)="setStarRating(1.5)"
     class="star-rating"
     [ngClass]="{ 'star-lit': starRatingHack > 1 }"
-    tabindex="-1"
+    type="button"
+    [attr.aria-label]="'WORKBENCH.rateVideo' | translate: { rating: 1 }"
+    [attr.title]="'WORKBENCH.rateVideo' | translate: { rating: 1 }"
+    [attr.aria-pressed]="starRatingHack === 1.5"
   >
     <app-icon [icon]="'icon-star'" />
   </button>
@@ -102,7 +106,10 @@
     (click)="setStarRating(2.5)"
     class="star-rating"
     [ngClass]="{ 'star-lit': starRatingHack > 2 }"
-    tabindex="-1"
+    type="button"
+    [attr.aria-label]="'WORKBENCH.rateVideo' | translate: { rating: 2 }"
+    [attr.title]="'WORKBENCH.rateVideo' | translate: { rating: 2 }"
+    [attr.aria-pressed]="starRatingHack === 2.5"
   >
     <app-icon [icon]="'icon-star'" />
   </button>
@@ -110,7 +117,10 @@
     (click)="setStarRating(3.5)"
     class="star-rating"
     [ngClass]="{ 'star-lit': starRatingHack > 3 }"
-    tabindex="-1"
+    type="button"
+    [attr.aria-label]="'WORKBENCH.rateVideo' | translate: { rating: 3 }"
+    [attr.title]="'WORKBENCH.rateVideo' | translate: { rating: 3 }"
+    [attr.aria-pressed]="starRatingHack === 3.5"
   >
     <app-icon [icon]="'icon-star'" />
   </button>
@@ -118,7 +128,10 @@
     (click)="setStarRating(4.5)"
     class="star-rating"
     [ngClass]="{ 'star-lit': starRatingHack > 4 }"
-    tabindex="-1"
+    type="button"
+    [attr.aria-label]="'WORKBENCH.rateVideo' | translate: { rating: 4 }"
+    [attr.title]="'WORKBENCH.rateVideo' | translate: { rating: 4 }"
+    [attr.aria-pressed]="starRatingHack === 4.5"
   >
     <app-icon [icon]="'icon-star'" />
   </button>
@@ -126,7 +139,10 @@
     (click)="setStarRating(5.5)"
     class="star-rating"
     [ngClass]="{ 'star-lit': starRatingHack > 5 }"
-    tabindex="-1"
+    type="button"
+    [attr.aria-label]="'WORKBENCH.rateVideo' | translate: { rating: 5 }"
+    [attr.title]="'WORKBENCH.rateVideo' | translate: { rating: 5 }"
+    [attr.aria-pressed]="starRatingHack === 5.5"
   >
     <app-icon [icon]="'icon-star'" />
   </button>
@@ -139,6 +155,9 @@
 }
 
 <!-- Add tags / view tags -->
+@if (showManualTags() || showAutoFileTags() || showAutoFolderTags()) {
+  <h3 class="metadata-section-title">{{ 'WORKBENCH.tags' | translate }}</h3>
+}
 @if (showManualTags()) {
   <app-add-tag-component
     style="display: block;"
@@ -169,6 +188,7 @@
   <textarea
     #videoNotes
     class="video-notes"
+    [attr.aria-label]="'WORKBENCH.videoNotes' | translate"
     [ngClass]="{ 'notes-dark-mode': darkMode() }"
     (blur)="saveVideoNotes($event)"
     placeholder="{{ 'TAGS.notes' | translate }}"

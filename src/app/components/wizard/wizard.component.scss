@@ -14,7 +14,7 @@
   overflow-y: auto;
   position: fixed;
   width: 100%;
-  z-index: 30;
+  z-index: 650;
 
   @include variables.scrollBarShown;
 }
@@ -36,7 +36,7 @@
   top: calc(var(--app-titlebar-height) + 14px);
   transition: background-color var(--app-motion-fast), color var(--app-motion-fast);
   width: 30px;
-  z-index: 32;
+  z-index: 2;
 
   &:hover {
     background: var(--app-destructive-soft);
@@ -53,14 +53,18 @@
   box-sizing: border-box;
   margin: 0 auto;
   max-width: 1180px;
-  padding: 42px 32px 72px;
+  padding: 34px 32px 48px;
   width: 100%;
 }
 
 .wizard-ledger__section {
-  border-top: 1px solid var(--app-border-strong);
+  background: var(--app-elevated-background);
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 12px;
   display: grid;
-  grid-template-columns: 140px minmax(0, 1fr);
+  grid-template-columns: 164px minmax(0, 1fr);
+  margin-top: 20px;
+  overflow: hidden;
 }
 
 .wizard-ledger__section:last-child {
@@ -72,7 +76,7 @@
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.12em;
-  padding: 20px 18px 20px 0;
+  padding: 20px;
   text-transform: uppercase;
 
   > span {
@@ -81,7 +85,7 @@
 
   h2 {
     color: var(--app-text-primary);
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 650;
     letter-spacing: 0;
     line-height: 1.35;
@@ -91,7 +95,7 @@
 }
 
 .wizard-ledger__section-content {
-  border-left: 1px solid var(--app-border-strong);
+  border-left: 1px solid var(--app-border-subtle);
   min-width: 0;
 }
 
@@ -166,16 +170,27 @@
 }
 
 .recently-opened-wizard li {
-  align-items: center;
+  align-items: stretch;
   border-top: 1px solid var(--app-border-subtle);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  list-style: none;
+  padding-right: 8px;
+}
+
+.history-open {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--app-text-primary);
   cursor: pointer;
   display: grid;
   gap: 2px 10px;
-  grid-template-columns: 22px minmax(0, 1fr) 30px;
-  list-style: none;
-  min-height: 54px;
-  padding: 8px 10px 8px 16px;
-  transition: background-color var(--app-motion-fast);
+  grid-template-columns: 22px minmax(0, 1fr);
+  min-height: 58px;
+  min-width: 0;
+  padding: 10px 16px;
+  text-align: left;
 
   &:hover {
     background: var(--app-control-hover);
@@ -232,8 +247,8 @@
   cursor: pointer;
   display: inline-flex;
   fill: currentColor;
-  grid-column: 3;
-  grid-row: 1 / span 2;
+  grid-column: 2;
+  margin: 8px 0;
   justify-content: center;
   opacity: 0.55;
   padding: 0;
@@ -260,9 +275,9 @@
 .wizard-step-card {
   background: var(--app-elevated-background);
   border: 1px solid var(--app-border-subtle);
-  border-radius: var(--app-panel-radius);
+  border-radius: 8px;
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
+  grid-template-columns: 46px minmax(0, 1fr);
   min-width: 0;
   overflow: hidden;
   transition: border-color var(--app-motion-fast), box-shadow var(--app-motion-fast);
@@ -302,15 +317,15 @@
 }
 
 .wizard-step-card__content {
-  border-left: 1px solid var(--app-border-subtle);
   min-width: 0;
-  padding: 14px 16px;
+  padding: 14px 16px 14px 0;
 }
 
 .step-description {
-  color: var(--app-text-secondary);
+  color: var(--app-text-primary);
   display: block;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
   line-height: 1.4;
   margin-bottom: 8px;
 }
@@ -453,8 +468,19 @@
 }
 
 .wizard-step-card__content--final {
+  align-items: center;
   display: flex;
-  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: space-between;
+
+  p {
+    color: var(--app-text-secondary);
+    flex: 1 1 200px;
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0;
+  }
 }
 
 .wizard .start-import {
@@ -479,7 +505,7 @@
     align-items: baseline;
     display: flex;
     gap: 12px;
-    padding: 15px 2px 12px;
+    padding: 15px 16px;
 
     h2 {
       margin: 0;
@@ -494,7 +520,7 @@
 
 @media (max-width: 620px) {
   .wizard-ledger {
-    padding: 42px 12px 54px;
+    padding: 48px 12px 32px;
   }
 
   .close-wizard {
@@ -537,4 +563,87 @@
   .wizard-step-card__content--final {
     justify-content: stretch;
   }
+}
+
+.wizard-heading {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  padding-right: 28px;
+
+  h1 {
+    color: var(--app-text-primary);
+    font-size: clamp(20px, 2.2vw, 26px);
+    font-weight: 650;
+    letter-spacing: -0.025em;
+    margin: 0 0 6px;
+  }
+
+  p {
+    color: var(--app-text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0;
+  }
+}
+
+.wizard-brand {
+  align-items: center;
+  background: var(--app-accent-soft);
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 12px;
+  color: var(--app-accent-text);
+  display: flex;
+  flex: 0 0 46px;
+  font-family: Georgia, serif;
+  font-size: 28px;
+  height: 46px;
+  justify-content: center;
+}
+
+.wizard-preview-options {
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
+
+  > summary {
+    color: var(--app-text-primary);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.6;
+    padding: 14px 16px;
+
+    &:hover {
+      background: var(--app-control-hover);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--app-accent);
+      outline-offset: -3px;
+    }
+  }
+
+  .wizard-step-card {
+    border: 0;
+    border-radius: 0;
+    border-top: 1px solid var(--app-border-subtle);
+  }
+}
+
+.wizard-preview-summary {
+  color: var(--app-text-secondary);
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  padding-left: 15px;
+}
+
+.wizard-preview-help {
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0 16px 14px;
 }

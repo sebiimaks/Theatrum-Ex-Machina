@@ -21,9 +21,9 @@ export class SidebarHeightPipe implements PipeTransform {
 
     return (
         (menuHidden     ? -40 :   0)
-      // Includes the 28px title bar, 40px ribbon, optional 45px top panel,
+      // Includes the 28px title bar, 96px workspace toolbar (56px header + 40px pinned ribbon), optional 45px top panel,
       // and the existing 1px boundary allowance.
-      + (hideTop        ?  69 : 114)
+      + (hideTop        ? 125 : 170)
       + (showBottomTray ? 170 :  0)
       ).toString();
 

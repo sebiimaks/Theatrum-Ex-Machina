@@ -7,7 +7,8 @@
       height: elHeight() + 'px',
       width: elWidth() + 'px'
     }"
-  class="filmstrip-container"
+  class="filmstrip-container workbench-card"
+  [class.workbench-card-selected]="video.selected"
   [ngClass]="{ 'compact-margins': compactView() }"
 >
 
@@ -109,6 +110,7 @@
     <span
       [ngClass]="{ 'larger-font': largerFont() }"
       class="title"
+      [attr.title]="video.cleanName === '*FOLDER*' ? video.fileName : video.cleanName"
     >
       {{ video.fileName }}
     </span>
@@ -154,33 +156,45 @@
   }
 
   @if (showFavorites()) {
-    <app-icon
-      class="heart"
+    <button
+      type="button"
+      class="heart workbench-gallery-action"
       [ngClass]="{ 'heart-lit' : video.stars === 5.5 }"
+      [attr.aria-pressed]="video.stars === 5.5"
+      [attr.aria-label]="(video.stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate"
       (click)="toggleHeart($event)"
-      [icon]="'icon-heart'"
-      title="{{ video.stars === 5.5 ? ('BUTTONS.removeFromFavorites' | translate)
-                                    : ('BUTTONS.addToFavorites' | translate) }}"
-     />
+      (dblclick)="$event.stopPropagation()"
+      title="{{ (video.stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate }}"
+    >
+      <app-icon [icon]="'icon-heart'" [size]="16" />
+    </button>
   }
 
-    <app-icon
+    <button
+      type="button"
       title="{{ 'BUTTONS.viewDetails' | translate }}"
-      class="sheet-icon"
-      [icon]="'icon-show-thumbnails'"
+      [attr.aria-label]="'BUTTONS.viewDetails' | translate"
+      class="sheet-icon workbench-gallery-action"
       (click)="openDetailsView($event)"
-    />
+      (dblclick)="$event.stopPropagation()"
+    >
+      <app-icon [icon]="'icon-show-thumbnails'" [size]="16" />
+    </button>
 
-    <div
-      class="playlist-icon"
+    <button
+      type="button"
+      class="playlist-icon workbench-gallery-action"
       [class.playlist-icon--after-heart]="showFavorites()"
       [ngClass]="{ 'playlist-icon-active' : video.playlist }"
       (click)="togglePlaylist($event)"
+      (dblclick)="$event.stopPropagation()"
+      [attr.aria-pressed]="!!video.playlist"
+      [attr.aria-label]="(video.playlist ? 'BUTTONS.removeFromPlaylist' : 'BUTTONS.addToPlaylist') | translate"
       title="{{ video.playlist ? ('BUTTONS.removeFromPlaylist' | translate)
                               : ('BUTTONS.addToPlaylist' | translate) }}"
     >
-      <app-icon [icon]="'icon-playlist'" />
-    </div>
+      <app-icon [icon]="'icon-playlist'" [size]="16" />
+    </button>
 
   @if (compactView() && showCleanNameInCompactView() && video.cleanName) {
     <span
@@ -216,6 +230,7 @@
   <span
     [ngClass]="{ 'larger-font': largerFont() }"
     class="title"
+    [attr.title]="video.cleanName === '*FOLDER*' ? video.fileName : video.cleanName"
   >
     {{ video.cleanName }}
   </span>

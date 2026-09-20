@@ -3,7 +3,8 @@
       height: elHeight() + 'px',
       width: elWidth() + 'px'
     }"
-  class="filmstrip-container"
+  class="filmstrip-container workbench-card"
+  [class.workbench-card-selected]="video.selected"
   [ngClass]="{ 'compact-margins': compactView() }"
 >
 
@@ -74,6 +75,7 @@
     <span
       [ngClass]="{ 'larger-font': largerFont() }"
       class="title"
+      [attr.title]="video.cleanName === '*FOLDER*' ? video.fileName : video.cleanName"
     >
       {{ video.fileName }}
 
@@ -149,17 +151,29 @@
     ></video>
   }
 
-    <app-icon
-      class="heart"
+    <button
+      type="button"
+      class="heart workbench-gallery-action"
       [ngClass]="{ 'heart-lit' : video.stars === 5.5 }"
+      [attr.aria-pressed]="video.stars === 5.5"
+      [attr.aria-label]="(video.stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate"
       (click)="toggleHeart($event)"
-      [icon]="'icon-heart'"
-      title="{{ video.stars === 5.5 ? ('BUTTONS.removeFromFavorites' | translate)
-                                    : ('BUTTONS.addToFavorites' | translate) }}"
+      (dblclick)="$event.stopPropagation()"
+      title="{{ (video.stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate }}"
+    >
+      <app-icon [icon]="'icon-heart'" [size]="16" />
+    </button>
 
-     />
-
-    <app-icon class="sheet-icon" [icon]="'icon-show-thumbnails'" (click)="sheetClick.emit()" />
+    <button
+      type="button"
+      class="sheet-icon workbench-gallery-action"
+      [attr.aria-label]="'BUTTONS.viewDetails' | translate"
+      title="{{ 'BUTTONS.viewDetails' | translate }}"
+      (click)="sheetClick.emit()"
+      (dblclick)="$event.stopPropagation()"
+    >
+      <app-icon [icon]="'icon-show-thumbnails'" [size]="16" />
+    </button>
 
   </div>
 
@@ -169,6 +183,7 @@
   <span
     [ngClass]="{ 'larger-font': largerFont() }"
     class="title"
+    [attr.title]="video.cleanName === '*FOLDER*' ? video.fileName : video.cleanName"
   >
     {{ video.cleanName }}
   </span>

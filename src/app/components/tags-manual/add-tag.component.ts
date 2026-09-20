@@ -57,7 +57,13 @@ export class AddTagComponent {
   /**
    * User pressed the `esc` key
    */
-  escape(): void {
+  escape(event: KeyboardEvent): void {
+    if (!this.currentText && !this.tagValidationError && !this.typeAhead) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
     this.currentText = '';
     this.tagValidationError = '';
     this.typeAhead = '';

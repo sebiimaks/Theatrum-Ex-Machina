@@ -1,5 +1,5 @@
 import type { OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
-import { Component, ElementRef, EventEmitter, Input, Output, QueryList, ViewChildren } from '@angular/core';
+import { Component, ElementRef, EventEmitter, Input, Output, QueryList, ViewChild, ViewChildren } from '@angular/core';
 
 import type { ImageElement, StarRating } from '../../../../interfaces/final-object.interface';
 import { formatDateAddedForInput, parseDateAddedInput } from '../../../../interfaces/date-added';
@@ -77,6 +77,9 @@ type CatalogueLocationField = 'fileName' | 'partialPath';
 })
 export class CatalogueEditorComponent implements OnChanges, OnDestroy {
 
+  @ViewChild('editorCloseButton')
+  private editorCloseButton: ElementRef<HTMLButtonElement>;
+
   @ViewChildren('searchCriterionInput')
   private searchCriterionInputs: QueryList<ElementRef<HTMLInputElement>>;
 
@@ -152,6 +155,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     Partial<Record<CatalogueLocationField, string>>
   >();
   private destroyed = false;
+  private busyFocusOrigin: HTMLElement | null = null;
   private metadataImportJson = '';
   private metadataImportPreviews = new WeakMap<ImageElement, MetadataChangePreview[]>();
   private metadataImportResultSummary = '';
@@ -184,6 +188,13 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     }
     if (changes.saveStatus) {
       this.handleMetadataImportSaveStatus(changes.saveStatus.currentValue);
+    }
+    if (changes.isSaving) {
+      if (this.isSaving) {
+        this.focusCloseButton();
+      } else {
+        this.restoreBusyFocus();
+      }
     }
   }
 
@@ -312,6 +323,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       );
       return;
     }
+    this.captureBusyFocus();
     this.metadataTransferBusy = true;
     this.setMetadataTransferStatus('Choose where to save the metadata export.');
 
@@ -355,6 +367,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     } finally {
       if (!this.destroyed) {
         this.metadataTransferBusy = false;
+        this.restoreBusyFocus();
       }
     }
   }
@@ -379,6 +392,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       return;
     }
 
+    this.captureBusyFocus();
     this.metadataTransferBusy = true;
     this.setMetadataTransferStatus('Choose a metadata JSON file to import.');
 
@@ -417,6 +431,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     } finally {
       if (!this.destroyed) {
         this.metadataTransferBusy = false;
+        this.restoreBusyFocus();
       }
     }
   }
@@ -509,6 +524,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       + plan.missingHashRecordCount
       + plan.duplicateHashRecordCount
       + plan.ambiguousCatalogueRecordCount;
+    this.captureBusyFocus();
     this.metadataTransferBusy = true;
     this.modalService.openConfirmationDialog({
       cancelLabel: 'Cancel',
@@ -529,6 +545,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       }
       if (this.currentVhaFile !== cataloguePath) {
         this.metadataTransferBusy = false;
+        this.restoreBusyFocus();
         this.setMetadataTransferStatus(
           'The open catalogue changed before the metadata import was confirmed. No metadata was imported.',
           true,
@@ -537,6 +554,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       }
       if (!confirmed) {
         this.metadataTransferBusy = false;
+        this.restoreBusyFocus();
         this.setMetadataTransferStatus('Metadata import cancelled.');
         return;
       }
@@ -591,6 +609,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       } finally {
         if (!this.destroyed) {
           this.metadataTransferBusy = false;
+          this.restoreBusyFocus();
         }
       }
     });
@@ -875,6 +894,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   requestSave(): void {
+    if (this.isSaving || this.metadataTransferBusy) {
+      return;
+    }
     if (!this.commitAllTagDrafts()) {
       this.setMetadataTransferStatus(
         'The catalogue was not saved because one or more tag fields contain an invalid path. Clear the search filters to reveal and correct the highlighted field.',
@@ -882,7 +904,14 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       );
       return;
     }
+    this.captureBusyFocus();
     this.saveRequested.emit();
+    // A no-op or blocked save may never change the isSaving input.
+    setTimeout(() => {
+      if (!this.destroyed && !this.isSaving && !this.metadataTransferBusy) {
+        this.restoreBusyFocus();
+      }
+    });
   }
 
   metadataChangesFor(item: ImageElement): MetadataChangePreview[] {
@@ -1186,6 +1215,52 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
 
     const activeFragment = this.getActiveTagFragment(tagText);
     return tagText + typeahead.slice(activeFragment.length);
+  }
+
+  private captureBusyFocus(): void {
+    const closeButton = this.editorCloseButton?.nativeElement;
+    const activeElement = closeButton?.ownerDocument.activeElement;
+    this.busyFocusOrigin = activeElement instanceof HTMLElement
+      && closeButton.closest('.catalogue-editor')?.contains(activeElement)
+      ? activeElement
+      : null;
+    this.focusCloseButton();
+  }
+
+  private focusCloseButton(): void {
+    if (!this.destroyed && !this.modalService.dialog.openDialogs.length) {
+      this.editorCloseButton?.nativeElement.focus({ preventScroll: true });
+    }
+  }
+
+  private restoreBusyFocus(): void {
+    const origin = this.busyFocusOrigin;
+    this.busyFocusOrigin = null;
+    if (!origin) {
+      return;
+    }
+
+    // Wait for Angular to remove inert/disabled before restoring the control.
+    setTimeout(() => {
+      if (this.destroyed || this.isSaving || this.metadataTransferBusy
+        || this.modalService.dialog.openDialogs.length) {
+        return;
+      }
+      const closeButton = this.editorCloseButton?.nativeElement;
+      if (!closeButton?.isConnected) {
+        return;
+      }
+      const activeElement = closeButton.ownerDocument.activeElement;
+      if (activeElement !== closeButton && activeElement !== closeButton.ownerDocument.body) {
+        return;
+      }
+      if (origin.isConnected && !origin.closest('[inert]') && !origin.matches(':disabled')) {
+        origin.focus({ preventScroll: true });
+      }
+      if (closeButton.ownerDocument.activeElement === closeButton.ownerDocument.body) {
+        closeButton.focus({ preventScroll: true });
+      }
+    });
   }
 
   private focusSearchCriterion(criterionId: number): void {

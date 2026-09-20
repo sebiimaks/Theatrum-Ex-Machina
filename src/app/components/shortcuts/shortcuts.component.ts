@@ -15,18 +15,35 @@ export class ShortcutsComponent {
   isReadyToReceiveKey = false;
   shortcutToChange: SettingsButtonKey | CustomShortcutAction;
 
-  @HostListener('window:keydown', ['$event'])
-  handleThisEvent(event: KeyboardEvent) {
-    if (this.isReadyToReceiveKey) {
-      // Prevent Enter or Space from activating the focused shortcut button a
-      // second time after it has just been accepted as the new binding.
-      event.preventDefault();
-      event.stopPropagation();
-      this.shortcutService.setNewKeyBinding(event.key, this.shortcutToChange);
-      this.isReadyToReceiveKey = false;
-      this.shortcutToChange = undefined;
-      (document.activeElement as HTMLElement | null)?.blur();
+  @HostListener('keydown', ['$event'])
+  handleThisEvent(event: KeyboardEvent): void {
+    if (!this.isReadyToReceiveKey) {
+      return;
     }
+
+    if (event.key === 'Tab') {
+      this.cancelShortcutChange();
+      return;
+    }
+
+    // Handle capture before Home's document shortcuts, and prevent Enter or
+    // Space from activating the focused button again after capture completes.
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (['Control', 'Meta', 'Alt', 'Shift'].includes(event.key)) {
+      return;
+    }
+
+    if (event.key !== 'Escape') {
+      this.shortcutService.setNewKeyBinding(event.key, this.shortcutToChange);
+    }
+    this.cancelShortcutChange();
+  }
+
+  cancelShortcutChange(): void {
+    this.isReadyToReceiveKey = false;
+    this.shortcutToChange = undefined;
   }
 
   // Do not alphabetize!

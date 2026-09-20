@@ -1,270 +1,154 @@
-@for (sections of settingsSections; track $index; let tabIndex = $index) {
-  <div [id]="tabIndex">
-  @if (settingTabToShow() == tabIndex) {
-    <main class="settings-ledger">
-      <header class="settings-ledger__page-header">
-        <h2>{{ settingsMetaGroupLabels[tabIndex] | translate }}</h2>
-        <p>Review each setting by section. The first control changes the setting; the eye controls whether it appears in the toolbar.</p>
+@let sections = visibleSections;
+<div class="settings-workspace" [class.settings-workspace--heading-only]="!sections.length && !searchQuery().trim()">
+  <header class="settings-workspace__header">
+    <div>
+      <p class="settings-workspace__eyebrow">{{ 'WORKBENCH.preferences' | translate }}</p>
+      <h2>{{ (searchQuery().trim() ? 'WORKBENCH.settingsSearchResults' : currentCategory.label) | translate }}</h2>
+      <p>{{ (searchQuery().trim() ? 'WORKBENCH.settingsSearchResultsDescription' : currentCategory.description) | translate }}</p>
+    </div>
+  </header>
+
+  @if (searchQuery().trim() && !sections.length && !hasExternalSearchResults()) {
+    <div class="settings-workspace__empty" role="status">
+      <app-icon icon="icon-looking-glass" [size]="25" />
+      <h3>{{ 'WORKBENCH.settingsNoResults' | translate }}</h3>
+      <p>{{ 'WORKBENCH.settingsNoResultsDescription' | translate }}</p>
+    </div>
+  }
+
+  @for (section of sections; track section.id) {
+    <section class="settings-card" [attr.aria-labelledby]="'settings-section-' + section.id">
+      <header class="settings-card__header">
+        <div>
+          @if (searchQuery().trim()) {
+            <span class="settings-card__category">{{ section.categoryLabel | translate }}</span>
+          }
+          <h3 [id]="'settings-section-' + section.id">{{ section.heading | translate }}</h3>
+        </div>
+        @if (section.buttonKeys.length) {
+          <span class="settings-card__toolbar-label">{{ 'WORKBENCH.toolbar' | translate }}</span>
+        }
       </header>
 
-      <div class="settings-ledger__sections">
-      @for (section of sections; track section.heading; let sectionIndex = $index) {
-        <section class="settings-ledger__section">
-          <div class="settings-ledger__index">
-            <span>{{ formatSectionIndex(sectionIndex) }}</span>
-            <h3>{{ section.heading | translate }}</h3>
-          </div>
-
-          <div class="settings-ledger__section-content">
-            <div class="settings-ledger__column-headings" aria-hidden="true">
-              <span></span>
-              <span>Setting</span>
-              <span>Toolbar</span>
-            </div>
-
-            <div class="settings-ledger__rows">
-          @for (buttonKey of section.buttonKeys; track buttonKey) {
-            <div
-              class="settings-ledger__row"
-              [class.settings-ledger__row--nested]="settingsButtons[buttonKey].settingsNested"
-            >
-              <div class="settings-ledger__copy">
-                <span class="settings-ledger__description">
-                  {{ settingsButtons[buttonKey].description | translate }}
-                </span>
-              @if (settingsButtons[buttonKey].moreInfo) {
-                <span class="more-info">i</span>
-                <span class="tooltip-text">
-                  {{ settingsButtons[buttonKey].moreInfo | translate }}
-                </span>
-              }
-              </div>
-
-              <div class="settings-ledger__control settings-ledger__control--setting">
-                <app-button
-                  (toggleButton)="toggleButton.emit($event)"
-                  [button]="buttonKey"
-                  [neverDarkMode]="true"
-                  [settingsButtons]="settingsButtons"
-                />
-              </div>
-
-              <div class="settings-ledger__control settings-ledger__control--toolbar">
-              @if (settingsButtons[buttonKey].iconName) {
-                <span
-                  (click)="toggleHideButton.emit(buttonKey)"
-                  class="eye-icon-container icon {{ settingsButtons[buttonKey].hidden ? 'eye-closed' : 'eye-open' }}"
-                  title="{{ 'SETTINGS.showHideText' | translate }}"
-                ></span>
-              } @else {
-                <span class="settings-ledger__not-applicable" aria-hidden="true">—</span>
-              }
-              </div>
-            </div>
-          }
-
-          @if (tabIndex === 2 && sectionIndex === 1) {
-            <div class="settings-ledger__detail-row">
-              <div class="settings-ledger__detail-copy">
-                <span class="settings-ledger__detail-label">{{ 'SETTINGS.preferredPlayer' | translate }}</span>
-                <strong>{{ appState.preferredVideoPlayer ? appState.preferredVideoPlayer : ('SETTINGS.systemDefault' | translate) }}</strong>
-              </div>
-              <div class="settings-ledger__actions">
-                <button
-                  class="defaultSettingsButton player-settings-button"
-                  (click)="chooseDefaultVideoPlayer.emit()"
-                >
-                  {{ 'SETTINGS.chooseVideoPlayer' | translate }}
-                </button>
-              @if (appState.preferredVideoPlayer) {
-                <button
-                  class="defaultSettingsButton player-settings-button"
-                  (click)="appState.preferredVideoPlayer = ''"
-                >
-                  {{ 'SETTINGS.restorePlayer' | translate }}
-                </button>
-              }
-              </div>
-            </div>
-          }
-            </div>
-          </div>
-        </section>
-      }
-      </div>
-
-    @if (tabIndex === 2) {
-      <section class="settings-ledger__section settings-ledger__section--custom">
-        <div class="settings-ledger__index">
-          <span>{{ formatSectionIndex(sections.length) }}</span>
-          <h3>{{ 'SETTINGS.additionalExtensions' | translate }}</h3>
-        </div>
-        <div class="settings-ledger__section-content">
-          <div
-            class="settings-ledger__detail-row settings-ledger__detail-row--input"
-            [ngStyle]="{ opacity: (additionalInput || editAdditional) ? 1 : '0.7' }"
-          >
-            <label class="settings-ledger__detail-label" for="additional-extensions">
-              {{ 'SETTINGS.extensions' | translate }}
+      @for (buttonKey of section.buttonKeys; track buttonKey) {
+        <div class="settings-row" [class.settings-row--nested]="settingsButtons[buttonKey].settingsNested">
+          <div class="settings-row__copy">
+            <label [id]="'setting-label-' + buttonKey" [for]="'setting-control-' + buttonKey">
+              {{ settingsButtons[buttonKey].description | translate }}
             </label>
-            <input
-              id="additional-extensions"
-              class="filter-general input-filter extensions-input"
-              [(ngModel)]="additionalInput"
-              type="text"
-              [disabled]="!editAdditional"
-            >
-            <div class="settings-ledger__actions">
-              <button
-                class="defaultSettingsButton player-settings-button"
-                (click)="editAdditionalExtensions()"
-              >
-                {{ (editAdditional ? 'SETTINGS.cancelExtensionsEdit': 'SETTINGS.editExtensionsInput') | translate }}
+            @if (settingsButtons[buttonKey].moreInfo) {
+              <p [id]="'setting-help-' + buttonKey">{{ settingsButtons[buttonKey].moreInfo | translate }}</p>
+            }
+          </div>
+
+          <div class="settings-row__value">
+            @if (isAction(buttonKey)) {
+              <button type="button" class="settings-action" [class.settings-action--destructive]="isDestructive(buttonKey)"
+                [id]="'setting-control-' + buttonKey" [attr.aria-labelledby]="'setting-label-' + buttonKey"
+                (click)="toggleButton.emit(buttonKey)">
+                {{ settingActionLabel(buttonKey) | translate }}<span aria-hidden="true">↗</span>
               </button>
-            @if (editAdditional) {
-              <button
-                class="defaultSettingsButton player-settings-button"
-                (click)="applyAdditionalExtensions()"
-              >
-                {{ 'SETTINGS.applyAdditionalExtensions' | translate }}
+            } @else if (isView(buttonKey)) {
+              <button type="button" class="settings-choice" [class.settings-choice--selected]="settingsButtons[buttonKey].toggled"
+                [id]="'setting-control-' + buttonKey" [attr.aria-labelledby]="'setting-label-' + buttonKey"
+                [attr.aria-pressed]="settingsButtons[buttonKey].toggled" (click)="toggleButton.emit(buttonKey)">
+                @if (settingsButtons[buttonKey].toggled) { <span aria-hidden="true">✓</span> }
+                {{ (settingsButtons[buttonKey].toggled ? 'WORKBENCH.selected' : 'WORKBENCH.select') | translate }}
+              </button>
+            } @else {
+              <button type="button" role="switch" class="settings-switch"
+                [id]="'setting-control-' + buttonKey" [attr.aria-labelledby]="'setting-label-' + buttonKey"
+                [attr.aria-describedby]="settingsButtons[buttonKey].moreInfo ? 'setting-help-' + buttonKey : null"
+                [attr.aria-checked]="settingsButtons[buttonKey].toggled" (click)="toggleButton.emit(buttonKey)">
+                <span class="settings-switch__thumb"></span>
               </button>
             }
-            </div>
+          </div>
+
+          <div class="settings-row__toolbar">
+            @if (settingsButtons[buttonKey].iconName) {
+              <button type="button" class="settings-pin" [class.settings-pin--active]="!settingsButtons[buttonKey].hidden"
+                [attr.aria-pressed]="!settingsButtons[buttonKey].hidden"
+                [attr.aria-label]="((settingsButtons[buttonKey].hidden ? 'WORKBENCH.pinToToolbar' : 'WORKBENCH.unpinFromToolbar') | translate) + ': ' + (settingsButtons[buttonKey].description | translate)"
+                [title]="(settingsButtons[buttonKey].hidden ? 'WORKBENCH.pinToToolbar' : 'WORKBENCH.unpinFromToolbar') | translate"
+                (click)="toggleHideButton.emit(buttonKey)">
+                <app-icon [icon]="settingsButtons[buttonKey].hidden ? 'icon-eye-closed' : 'icon-eye-open'" [size]="15" />
+              </button>
+            } @else {
+              <span class="settings-row__unavailable" aria-hidden="true">—</span>
+            }
           </div>
         </div>
-      </section>
+      }
 
-      <section class="settings-ledger__section settings-ledger__section--custom">
-        <div class="settings-ledger__index">
-          <span>{{ formatSectionIndex(sections.length + 1) }}</span>
-          <h3>{{ 'SETTINGS.changeAppZoom' | translate }}</h3>
-        </div>
-        <div class="settings-ledger__section-content">
-          <div class="settings-ledger__detail-row settings-ledger__detail-row--controls-only">
-            <div class="zoom-buttons">
-            <button
-              (click)="decreaseZoomLevel.emit()"
-              aria-label="Decrease zoom"
-              class="zoom-icon-button"
-              title="Decrease zoom"
-              [ngClass]="{
-                defaultSettingsButton: !settingsButtons['flatIcons'].toggled,
-                flatSettingsButton: settingsButtons['flatIcons'].toggled
-              }"
-            >
-              <span class="zoom-control-symbol" aria-hidden="true">−</span>
-            </button>
-            <button
-              (click)="resetZoomLevel.emit()"
-              class="zoom-reset-button"
-              [ngClass]="{
-                defaultSettingsButton: !settingsButtons['flatIcons'].toggled,
-                flatSettingsButton: settingsButtons['flatIcons'].toggled
-              }"
-            >
-              <span>{{ 'SETTINGS.resetZoom' | translate }}</span>
-            </button>
-            <button
-              (click)="increaseZoomLevel.emit()"
-              aria-label="Increase zoom"
-              class="zoom-icon-button"
-              title="Increase zoom"
-              [ngClass]="{
-                defaultSettingsButton: !settingsButtons['flatIcons'].toggled,
-                flatSettingsButton: settingsButtons['flatIcons'].toggled
-              }"
-            >
-              <span class="zoom-control-symbol" aria-hidden="true">+</span>
-            </button>
+      @switch (section.kind) {
+        @case ('player') {
+          <div class="settings-detail">
+            <div class="settings-detail__copy">
+              <span>{{ 'SETTINGS.preferredPlayer' | translate }}</span>
+              <strong>{{ appState.preferredVideoPlayer || ('SETTINGS.systemDefault' | translate) }}</strong>
+            </div>
+            <div class="settings-detail__actions">
+              <button type="button" class="settings-action" (click)="chooseDefaultVideoPlayer.emit()">{{ 'SETTINGS.chooseVideoPlayer' | translate }}</button>
+              @if (appState.preferredVideoPlayer) {
+                <button type="button" class="settings-action" (click)="appState.preferredVideoPlayer = ''">{{ 'SETTINGS.restorePlayer' | translate }}</button>
+              }
             </div>
           </div>
-        </div>
-      </section>
-
-      <section class="settings-ledger__section settings-ledger__section--custom">
-        <div class="settings-ledger__index">
-          <span>{{ formatSectionIndex(sections.length + 2) }}</span>
-          <h3>{{ 'SETTINGS.changeLanguage' | translate }}</h3>
-        </div>
-        <div class="settings-ledger__section-content">
-          <label class="settings-ledger__detail-row settings-ledger__detail-row--controls-only" for="settings-language">
-            <select
-              #langSelect
-              id="settings-language"
-              (change)="changeLanguage.emit(langSelect.value)"
-              class="language-drop-down monospace"
-            >
-            <option value="en" [selected]="appState.language == 'en'">English</option>
-            <option value="ar" [selected]="appState.language == 'ar'">Arabic ------ العربية</option>
-            <option value="bn" [selected]="appState.language == 'bn'">Bengali ----- বাংলা</option>
-            <option value="zh" [selected]="appState.language == 'zh'">Chinese ----- 中文</option>
-            <option value="cs" [selected]="appState.language == 'cs'">Czech ------- Česky</option>
-            <option value="nl" [selected]="appState.language == 'nl'">Dutch ------- Nederlands</option>
-            <option value="fr" [selected]="appState.language == 'fr'">French ------ Française</option>
-            <option value="de" [selected]="appState.language == 'de'">German ------ Deutsch</option>
-            <option value="hi" [selected]="appState.language == 'hi'">Hindi ------- हिंदी</option>
-            <option value="it" [selected]="appState.language == 'it'">Italian ----- Italiana</option>
-            <option value="ja" [selected]="appState.language == 'ja'">Japanese ---- 日本語</option>
-            <option value="ko" [selected]="appState.language == 'ko'">Korean ------ 한국어</option>
-            <option value="ms" [selected]="appState.language == 'ms'">Melay ------- Melayu</option>
-            <option value="pl" [selected]="appState.language == 'pl'">Polish ------ Polski</option>
-            <option value="pt" [selected]="appState.language == 'pt'">Portuguese -- Português</option>
-            <option value="ru" [selected]="appState.language == 'ru'">Russian ----- Русский</option>
-            <option value="es" [selected]="appState.language == 'es'">Spanish ----- Español</option>
-            <option value="tr" [selected]="appState.language == 'tr'">Turkish ----- Türkçe</option>
-            <option value="uk" [selected]="appState.language == 'uk'">Ukrainian --- Українська</option>
-            <option value="vi" [selected]="appState.language == 'vi'">Vietnamese -- Tiếng Việt</option>
+        }
+        @case ('extensions') {
+          <div class="settings-detail settings-detail--extensions">
+            <label for="additional-extensions">{{ 'SETTINGS.extensions' | translate }}</label>
+            <input id="additional-extensions" [(ngModel)]="additionalInput" type="text" [disabled]="!editAdditional" spellcheck="false">
+            <div class="settings-detail__actions">
+              <button type="button" class="settings-action" (click)="editAdditionalExtensions()">
+                {{ (editAdditional ? 'SETTINGS.cancelExtensionsEdit' : 'SETTINGS.editExtensionsInput') | translate }}
+              </button>
+              @if (editAdditional) {
+                <button type="button" class="settings-action settings-action--primary" (click)="applyAdditionalExtensions()">{{ 'SETTINGS.applyAdditionalExtensions' | translate }}</button>
+              }
+            </div>
+          </div>
+        }
+        @case ('zoom') {
+          <div class="settings-detail">
+            <p>{{ 'WORKBENCH.settingsZoomDescription' | translate }}</p>
+            <div class="settings-zoom">
+              <button type="button" (click)="decreaseZoomLevel.emit()" [attr.aria-label]="'WORKBENCH.decreaseZoom' | translate" class="settings-action settings-zoom__step"><span aria-hidden="true">−</span></button>
+              <button type="button" (click)="resetZoomLevel.emit()" class="settings-action">{{ 'SETTINGS.resetZoom' | translate }}</button>
+              <button type="button" (click)="increaseZoomLevel.emit()" [attr.aria-label]="'WORKBENCH.increaseZoom' | translate" class="settings-action settings-zoom__step"><span aria-hidden="true">+</span></button>
+            </div>
+          </div>
+        }
+        @case ('language') {
+          <div class="settings-detail">
+            <label for="settings-language">{{ 'WORKBENCH.settingsLanguageDescription' | translate }}</label>
+            <select #langSelect id="settings-language" [value]="appState.language" (change)="changeLanguage.emit(langSelect.value)">
+              @for (language of languages; track language[0]) {
+                <option [value]="language[0]">{{ language[1] }}</option>
+              }
             </select>
-          </label>
-        </div>
-      </section>
-
-      <section class="settings-ledger__section settings-ledger__section--about">
-        <div class="settings-ledger__index">
-          <span>{{ formatSectionIndex(sections.length + 3) }}</span>
-          <h3>About</h3>
-        </div>
-        <div class="settings-ledger__section-content">
-          <div class="settings-ledger__about-heading">
-            <span class="settings-ledger__version">v{{ versionNumber() }}</span>
           </div>
-          <div class="settings-ledger__about-content">
-          <img
-            width="44px"
-            height="44px"
-            [src]="settingsButtons.darkMode.toggled ? './assets/logo-dark.png' : './assets/logo-light.png'"
-            alt=""
-          >
-          <div>
-            <a
-              class="credits-and-help credits-and-help-fork"
-              href="https://github.com/sebiimaks/Theatrum-Ex-Machina"
-              target="_blank"
-              rel="noopener noreferrer"
-              (click)="openExternalLink($event, 'https://github.com/sebiimaks/Theatrum-Ex-Machina')"
-            >
-              <strong>Theatrum Ex Machina is a personal fork of Video Hub App. Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use at your own risk.</strong>
-            </a>
-
-            <a
-              class="credits-and-help credits-and-help-secondary"
-              href="http://www.videohubapp.com/"
-              target="_blank"
-              rel="noopener noreferrer"
-              (click)="openExternalLink($event, 'http://www.videohubapp.com/')"
-            >
-              Click here for the original and supported Video Hub App. Please support this developer.
-            </a>
-
-            <div class="credits-attribution">
-              This app includes separate FFmpeg and ffprobe programs under GNU GPL v2 or later. License notices and corresponding-source instructions are included with the app.
+        }
+        @case ('about') {
+          <div class="settings-about">
+            <img width="48" height="48" [src]="settingsButtons.darkMode.toggled ? './assets/logo-dark.png' : './assets/logo-light.png'" alt="">
+            <div>
+              <h4>Theatrum Ex Machina <span>v{{ versionNumber() }}</span></h4>
+              <a href="https://github.com/sebiimaks/Theatrum-Ex-Machina" target="_blank" rel="noopener noreferrer" (click)="openExternalLink($event, 'https://github.com/sebiimaks/Theatrum-Ex-Machina')">
+                <strong>Theatrum Ex Machina is a personal fork of Video Hub App. Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use at your own risk.</strong>
+              </a>
+              <a href="http://www.videohubapp.com/" target="_blank" rel="noopener noreferrer" (click)="openExternalLink($event, 'http://www.videohubapp.com/')">
+                Click here for the original and supported Video Hub App. Please support this developer.
+              </a>
+              <p>This app includes separate FFmpeg and ffprobe programs under GNU GPL v2 or later. License notices and corresponding-source instructions are included with the app.</p>
             </div>
           </div>
-          </div>
-        </div>
-      </section>
-    }
-    </main>
+        }
+      }
+    </section>
   }
-  </div>
-}
+  @if (sections.length) {
+    <p class="settings-workspace__footer">{{ 'WORKBENCH.settingsToolbarHelp' | translate }}</p>
+  }
+</div>

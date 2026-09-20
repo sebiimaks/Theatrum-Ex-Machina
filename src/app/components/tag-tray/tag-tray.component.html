@@ -70,7 +70,6 @@
         <span aria-hidden="true">·</span>
         <button
           (click)="expandAll()"
-          [disabled]="tagFilterActive"
           title="{{ 'TAGS.expandAll' | translate }}"
           type="button"
         >
@@ -79,7 +78,6 @@
         <span aria-hidden="true">·</span>
         <button
           (click)="collapseAll()"
-          [disabled]="tagFilterActive"
           title="{{ 'TAGS.collapseAll' | translate }}"
           type="button"
         >
@@ -210,25 +208,25 @@
             [attr.title]="(manualTagShowFrequency ? 'TAGS.showingFrequency' : 'TAGS.hidingFrequency') | translate"
             type="button"
           >#</button>
+        </span>
+      </div>
+      <div class="tag-source-tree-controls" role="group" [attr.aria-label]="'TAGS.hierarchyControls' | translate">
           <button
             (click)="expandAll()"
-            [disabled]="tagFilterActive"
             [attr.aria-label]="'TAGS.expandAll' | translate"
             [attr.title]="'TAGS.expandAll' | translate"
             type="button"
           >
-            <app-icon [icon]="'icon-chevron-down-mini'" [size]="11" />
+            <app-icon [icon]="'icon-chevron-down-mini'" [size]="11" />{{ 'TAGS.expandAll' | translate }}
           </button>
           <button
             (click)="collapseAll()"
-            [disabled]="tagFilterActive"
             [attr.aria-label]="'TAGS.collapseAll' | translate"
             [attr.title]="'TAGS.collapseAll' | translate"
             type="button"
           >
-            <app-icon [icon]="'icon-chevron-up'" [size]="11" />
+            <app-icon [icon]="'icon-chevron-up'" [size]="11" />{{ 'TAGS.collapseAll' | translate }}
           </button>
-        </span>
       </div>
     }
     @if (displayedTags.length) {
@@ -300,10 +298,11 @@
       @if (node.children.length) {
         <button
           class="tag-disclosure"
+          [attr.aria-expanded]="branchIsExpanded(node)"
+          [attr.title]="(branchIsExpanded(node) ? 'TAGS.collapseBranch' : 'TAGS.expandBranch') | translate : { tagName: node.fullPath }"
           [attr.aria-label]="(
             branchIsExpanded(node) ? 'TAGS.collapseBranch' : 'TAGS.expandBranch'
           ) | translate : { tagName: node.fullPath }"
-          [disabled]="tagFilterActive"
           (click)="toggleBranch(node)"
           type="button"
         >

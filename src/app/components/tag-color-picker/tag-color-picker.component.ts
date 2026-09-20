@@ -1,4 +1,4 @@
-import { Component, OnInit, input, output } from '@angular/core';
+import { Component, AfterViewInit, ElementRef, ChangeDetectorRef, HostListener, input, output, viewChild } from '@angular/core';
 
 import { ContextMenuCoordinate } from '../../../../interfaces/shared-interfaces';
 
@@ -8,7 +8,9 @@ import { ContextMenuCoordinate } from '../../../../interfaces/shared-interfaces'
   templateUrl: './tag-color-picker.component.html',
   styleUrls: ['./tag-color-picker.component.scss']
 })
-export class TagColorPickerComponent implements OnInit {
+export class TagColorPickerComponent implements AfterViewInit {
+
+  readonly picker = viewChild<ElementRef<HTMLElement>>('picker');
 
   readonly position = input<ContextMenuCoordinate>();
   readonly currentColor = input<string>('');
@@ -30,28 +32,20 @@ export class TagColorPickerComponent implements OnInit {
     '#FFFFFF',
   ];
 
-  constructor() { }
+  constructor(private cd: ChangeDetectorRef) { }
 
-  ngOnInit() {
-    // Adjust position to keep picker on screen
-    const pickerWidth = 142;
-    const pickerHeight = 108;
+  ngAfterViewInit(): void {
+    this.keepOnScreen();
+    this.cd.detectChanges();
+  }
 
+  @HostListener('window:resize')
+  keepOnScreen(): void {
+    const bounds = this.picker()?.nativeElement.getBoundingClientRect();
     const position = this.position();
-    if (position) {
-      // Keep within horizontal bounds
-      if (position.x + pickerWidth > window.innerWidth) {
-        position.x = window.innerWidth - pickerWidth - 30;
-      }
-
-      // Keep within vertical bounds
-      if (position.y + pickerHeight > window.innerHeight) {
-        position.y = window.innerHeight - pickerHeight - 30;
-      }
-
-      // Ensure minimum position
-      if (position.x < 10) position.x = 10;
-      if (position.y < 10) position.y = 10;
+    if (bounds && position) {
+      position.x = Math.max(10, Math.min(position.x, window.innerWidth - bounds.width - 10));
+      position.y = Math.max(10, Math.min(position.y, window.innerHeight - bounds.height - 10));
     }
   }
 

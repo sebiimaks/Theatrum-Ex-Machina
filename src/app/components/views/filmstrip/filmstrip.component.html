@@ -1,6 +1,7 @@
 <div
   [ngStyle]="{ height: elHeight() + 'px'}"
-  class="meta-container"
+  class="meta-container workbench-card"
+  [class.workbench-card-selected]="video().selected"
   [ngClass]="{ 'compact-margins' : compactView() }"
 >
   <div
@@ -38,18 +39,25 @@
 }
 
 @if (showFavorites()) {
-  <app-icon
+  <button
+    type="button"
     (click)="toggleHeart($event)"
-    class="heart"
+    (dblclick)="$event.stopPropagation()"
+    class="heart workbench-gallery-action"
     [ngClass]="{ 'heart-lit' : video().stars === 5.5 }"
-    [icon]="'icon-heart'"
-   />
+    [attr.aria-pressed]="video().stars === 5.5"
+    [attr.aria-label]="(video().stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate"
+    title="{{ (video().stars === 5.5 ? 'BUTTONS.removeFromFavorites' : 'BUTTONS.addToFavorites') | translate }}"
+  >
+    <app-icon [icon]="'icon-heart'" [size]="16" />
+  </button>
 }
 
 @if (showMeta() && !compactView()) {
   <span
     [ngClass]="{ 'larger-font': largerFont() }"
     class="title"
+    [attr.title]="video().cleanName === '*FOLDER*' ? video().fileName : video().cleanName"
   >
     {{ video().cleanName }}
   </span>
