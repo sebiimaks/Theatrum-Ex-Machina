@@ -509,6 +509,9 @@
     "videos": "動画"
   },
   "WORKBENCH": {
+    "addVideoNotes": "動画のメモを追加",
+    "autoDetails": "詳細を自動で開く",
+    "autoDetailsDescription": "動画を選択したときに詳細バーを自動で開きます。",
     "emptyCatalogueTitle": "このカタログは空です",
     "emptyCatalogueDescription": "動画フォルダを追加するか、既存のソースを確認して閲覧を始めましょう。",
     "emptyResultsDescription": "検索条件を変えるか、フィルターを解除するか、別のコレクションを選んでください。",

@@ -656,11 +656,8 @@ test('renders the hierarchy as an independent vertical right-side panel', () => 
 
   const panelStart = homeTemplate.indexOf('class="right-tag-panel"');
   const bottomTrayStart = homeTemplate.indexOf('class="bottom-tray"');
-  const bottomTabsStart = homeTemplate.indexOf('class="all-settings-tabs bottom-tray-tabs"');
-  const floatingButtonStart = homeTemplate.indexOf('class="catalogueEditorButton tag-panel-button"');
   const panelGuardStart = homeTemplate.lastIndexOf('@if (', panelStart);
-  const floatingButtonGuardStart = homeTemplate.lastIndexOf('@if (', floatingButtonStart);
-  const windowContentEnd = homeTemplate.indexOf('end of window-content');
+  const toolbarStart = homeTemplate.indexOf('class="workbench-gallery-actions"');
   assert.ok(panelStart > -1);
   assert.ok(panelStart < bottomTrayStart);
   assert.match(
@@ -668,31 +665,22 @@ test('renders the hierarchy as an independent vertical right-side panel', () => 
     /<app-tag-tray[\s\S]*\[verticalLayout\]="true"/,
   );
   assert.doesNotMatch(homeTemplate.slice(bottomTrayStart), /<app-tag-tray/);
-  assert.ok(floatingButtonStart > panelStart);
-  assert.ok(floatingButtonStart > windowContentEnd);
+  assert.ok(toolbarStart > -1 && toolbarStart < panelStart);
   assert.match(
     homeTemplate.slice(panelGuardStart, panelStart),
     /!wizard\.showWizard/,
   );
   assert.match(
-    homeTemplate.slice(floatingButtonGuardStart, floatingButtonStart),
-    /!wizard\.showWizard/,
-  );
-  assert.doesNotMatch(
-    homeTemplate.slice(bottomTabsStart),
+    homeTemplate.slice(toolbarStart, homeTemplate.indexOf('</section>', toolbarStart)),
     /toggleButton\('showTagTray'\)/,
   );
-  assert.match(
-    homeTemplate.slice(panelStart, bottomTabsStart),
-    /!settingsButtons\['showTagTray'\]\.toggled[\s\S]*toggleButton\('showTagTray'\)/,
+  assert.doesNotMatch(
+    homeTemplate.slice(bottomTrayStart),
+    /toggleButton\('showTagTray'\)/,
   );
+  assert.doesNotMatch(homeTemplate, /class="catalogueEditorButton tag-panel-button"/);
   assert.match(homeComponent, /uniqueKey === 'showTagTray'[\s\S]*scheduleGalleryLayoutRefresh/);
   assert.match(layoutStyles, /--app-tag-panel-width: #\{variables\.\$sidebar-width\};/);
-  assert.match(
-    homeTemplate.slice(floatingButtonStart),
-    /<app-icon[^>]*\[icon\]="'icon-tag'"[\s\S]*SETTINGS\.trayTags/,
-  );
-  assert.match(layoutStyles, /\.catalogueEditorButton\.tag-panel-button\s*\{[\s\S]*bottom: 12px;[\s\S]*color: var\(--app-accent-text\);[\s\S]*font-weight: 700;[\s\S]*right: 12px;[\s\S]*width: 72px;/);
   assert.match(layoutStyles, /\.gallery-container-tag-panel-open\s*\{/);
   assert.match(layoutStyles, /\.right-tag-panel\s*\{[\s\S]*position: absolute;/);
   assert.match(tagStyles, /\.manual-tag-tray-vertical\s*\{[\s\S]*flex-direction: column;/);

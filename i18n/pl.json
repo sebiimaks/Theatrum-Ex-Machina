@@ -510,6 +510,9 @@
     "videos": "filmy"
   },
   "WORKBENCH": {
+    "addVideoNotes": "Dodaj notatki do filmu",
+    "autoDetails": "Automatycznie otwieraj szczegóły",
+    "autoDetailsDescription": "Automatycznie otwieraj pasek szczegółów po wybraniu filmu.",
     "emptyCatalogueTitle": "Ten katalog jest pusty",
     "emptyCatalogueDescription": "Dodaj folder z filmami lub sprawdź istniejące źródła, aby rozpocząć przeglądanie.",
     "emptyResultsDescription": "Spróbuj innego wyszukiwania, wyczyść filtry lub wybierz inną kolekcję.",

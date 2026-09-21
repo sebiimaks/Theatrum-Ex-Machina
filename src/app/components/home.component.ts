@@ -158,8 +158,7 @@ import {
   rightClickContentAnimation,
   similarResultsText,
   slowFadeIn,
-  slowFadeOut,
-  topAnimation
+  slowFadeOut
 } from '../common/animations';
 
 interface Vha2ExportResult {
@@ -210,8 +209,7 @@ const GALLERY_RESIZE_SETTLE_MS = 60;
     similarResultsText,
     sliderAppear,
     slowFadeIn,
-    slowFadeOut,
-    topAnimation
+    slowFadeOut
   ]
 })
 export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
@@ -223,7 +221,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly settingsModal = viewChild<ElementRef>('settingsModal');
 
   readonly workspaceViewSelect = viewChild<ElementRef<HTMLSelectElement>>('workspaceViewSelect');
-  readonly bottomTrayTabs = viewChild<ElementRef<HTMLDivElement>>('bottomTrayTabs');
+  readonly workspaceTrayButtons = viewChild<ElementRef<HTMLDivElement>>('workspaceTrayButtons');
   readonly sortOrderRef = viewChild(SortOrderComponent);
   readonly catalogueEditor = viewChild(CatalogueEditorComponent);
   readonly renameModal = viewChild(RenameModalComponent);
@@ -505,6 +503,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
   currentClickedItem: ImageElement;
   currentClickedItemName = '';
+  // Single-video selection is separate from the catalogue's batch-tagging flags.
+  selectedVideo: ImageElement | undefined;
+  private currentClickedItemRefreshTimeout: ReturnType<typeof setTimeout> | undefined;
+  private pendingClickedItem: ImageElement | undefined;
   currentPlayingFolder = '';
   fullPathToCurrentFile = '';
   currentMediaOperationItem: ImageElement | null = null;
@@ -1282,7 +1284,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
       // console.log('input dirs', finalObject.inputDirs);
       // reset to initial
-      this.currentClickedItem = undefined;
+      this.clearVideoSelection();
       this.lastRenamedFileHack = undefined;
       this.imageElementService.finalArrayNeedsSaving = false;
       this.catalogueAccessMode = catalogueAccessMode === 'read-only' ? 'read-only' : 'read-write';
@@ -1430,8 +1432,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.electronService.ipcRenderer.on('file-deleted', (event, element: ImageElement) => {
       // spot check it's the same element
       // just in case the message comes back after user has switched to view another hub
-      if (element.fileName === this.imageElementService.imageElements[element.index].fileName) {
-        this.imageElementService.imageElements[element.index].deleted = true;
+      const currentElement = this.imageElementService.imageElements[element.index];
+      if (currentElement && element.fileName === currentElement.fileName) {
+        currentElement.deleted = true;
+        this.reconcileVideoSelection();
         this.deletePipeTrigger = !this.deletePipeTrigger;
         this.imageElementService.finalArrayNeedsSaving = true;
         this.cd.detectChanges();
@@ -1493,6 +1497,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
         element.index = existingFailureIndex;
         this.imageElementService.imageElements[existingFailureIndex] = element;
+        this.replaceSelectedVideo(existingFailure, element);
         this.imageElementService.finalArrayNeedsSaving = true;
         this.resetFinalArrayRef();
         return;
@@ -1632,6 +1637,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       delete incomingElement.metadataImportFailed;
       incomingElement.index = target.index;
       this.imageElementService.imageElements[targetIndex] = incomingElement;
+      this.replaceSelectedVideo(target, incomingElement);
       this.imageElementService.finalArrayNeedsSaving = true;
       this.deletePipeTrigger = !this.deletePipeTrigger;
       this.debounceImport();
@@ -1714,6 +1720,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.clearVideoSelection();
     this.catalogueOpenCoordinator.disconnect();
     this.cataloguePersistenceIpc.disconnect();
     this.thumbnailRegenerationIpc.disconnect();
@@ -1798,6 +1805,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       }
     });
     this.deletePipeTrigger = !this.deletePipeTrigger;
+    this.reconcileVideoSelection();
   }
 
   /**
@@ -2096,24 +2104,12 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private refreshAfterIgnoredSubdirectoryRemoval(): void {
-    const previouslySelected = this.currentClickedItem;
     this.deletePipeTrigger = !this.deletePipeTrigger;
     this.manualTagsService.rebuildFromImages(this.imageElementService.imageElements);
     this.wordFrequencyService.computeFrequencyArray(this.imageElementService.imageElements.length, 165);
     this.ifShowDetailsViewRefreshTags();
 
-    if (previouslySelected) {
-      const replacement = this.imageElementService.imageElements.find((element: ImageElement) => (
-        element.uuid === previouslySelected.uuid
-      ));
-      if (replacement) {
-        this.currentClickedItemName = replacement.cleanName;
-        this.updateCurrentClickedItem(replacement);
-      } else {
-        this.currentClickedItem = undefined;
-        this.currentClickedItemName = '';
-      }
-    }
+    this.reconcileVideoSelection();
 
     this.cd.detectChanges();
     setTimeout(() => this.virtualScroller()?.refresh(), 0);
@@ -2461,8 +2457,14 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * @param eventObject - VideoClickEmit
    * @param item        - ImageElement
    * @param doubleClick - boolean -- happens only on `app-file-item` -- added as a quick hack
+   * @param origin      - Details preview clicks preserve the thumbnail until playback
    */
-  public handleClick(eventObject: VideoClickEmit, item: ImageElement, doubleClick?: boolean) {
+  public handleClick(
+    eventObject: VideoClickEmit,
+    item: ImageElement,
+    doubleClick?: boolean,
+    origin: 'gallery' | 'details-preview' = 'gallery',
+  ) {
 
     console.log(item);
 
@@ -2474,8 +2476,24 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     }
 
     if (this.settingsButtons.doubleClickMode.toggled && !(eventObject.doubleClick || doubleClick)) {
-      // when double-clicking, this runs twice anyway
-      this.assignSelectedFile(item);
+      if (origin === 'details-preview') {
+        // Recreating or clearing this preview on click prevents its dblclick event.
+        this.selectedVideo = item;
+        return;
+      }
+      const repeatedClick = eventObject.mouseEvent.detail > 1;
+      const modifiedClick = eventObject.mouseEvent.ctrlKey || eventObject.mouseEvent.metaKey
+        || eventObject.mouseEvent.shiftKey;
+      if (this.selectedVideo === item && !repeatedClick && !modifiedClick) {
+        this.clearVideoSelection();
+        if (this.settingsButtons.autoOpenDetails.toggled
+            && this.settingsButtons.showDetailsTray.toggled) {
+          this.toggleButton('showDetailsTray');
+        }
+      } else {
+        // The second click of a double-click preserves selection before playback.
+        this.assignSelectedFile(item);
+      }
 
       return;
     }
@@ -2497,7 +2515,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       // If Shift key is pressed, open the file in the explorer
       this.currentRightClickedItem = item; // to make `openContainingFolderNow()` work correctly
       this.openContainingFolderNow();
-    }else {
+    } else {
+      this.assignSelectedFile(item);
       this.openVideo(item, eventObject.thumbIndex);
       //  `openVideo` method handles the `not connected` case
     }
@@ -2913,7 +2932,9 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * A helper function for `toggleBotton`
    */
   closeWorkspaceTray(): void {
-    this.bottomTrayTabs()?.nativeElement.querySelector<HTMLButtonElement>('.active-tab')?.focus();
+    const trigger = this.workspaceTrayButtons()?.nativeElement
+      .querySelector<HTMLButtonElement>('[data-workspace-tray][aria-pressed="true"]');
+    trigger?.focus();
     this.toggleAllTrayViewsButtonsOff();
   }
 
@@ -2995,7 +3016,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         break;
 
       case ('toggleMinimalMode'):
-        this.toggleButton('hideTop');
         this.toggleButton('hideSidebar');
         this.toggleButtonOff('showTagTray');
         this.toggleRibbon();
@@ -3180,9 +3200,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         this.scheduleGalleryLayoutRefresh();
       }
       if (uniqueKey === 'hideSidebar') {
-        this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
-      }
-      if (uniqueKey === 'hideTop') {
         this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
       }
     }
@@ -3458,6 +3475,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.imageElementService.imageElements = this.imageElementService.imageElements.slice();
     this.ifShowDetailsViewRefreshTags();
 
+    this.reconcileVideoSelection();
+
     // Recreate the bottom Details tray when its selected item was edited.
     if (this.currentClickedItem) {
       this.currentClickedItemName = this.currentClickedItem.cleanName;
@@ -3474,6 +3493,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.catalogueReadOnly) {
       return;
     }
+    this.reconcileVideoSelection();
     const activeImages = this.imageElementService.imageElements.filter((element: ImageElement) => (
       !element.deleted && !element.missing
     ));
@@ -3776,25 +3796,83 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     actions[next].focus();
   }
 
-  /**
-   * When in double-click mode and a video is clicked - `currentClickedItemName` updated
-   * @param item
-   */
+  /** Select a video without changing the batch-tagging selection. */
   assignSelectedFile(item: ImageElement): void {
+    this.selectedVideo = item;
     this.currentClickedItemName = item.cleanName;
     this.updateCurrentClickedItem(item);
+    if (this.settingsButtons.autoOpenDetails.toggled
+        && !this.settingsButtons.showDetailsTray.toggled) {
+      this.toggleButton('showDetailsTray');
+    }
   }
 
-  /**
-   * If the `showDetailsTray` is open, update the `currentClickedItem`
-   * @param item
-   */
+  /** Refresh the tray's preview without treating metadata updates as a selection. */
   updateCurrentClickedItem(item: ImageElement): void {
-    // to update the view, we must first destroy the component with `null` since component sets thumbnail at `ngOnInit`
+    clearTimeout(this.currentClickedItemRefreshTimeout);
+    const catalogueSession = this.catalogueSessionGeneration;
+    // Recreate the preview because its initial thumbnail is set in ngOnInit.
+    this.pendingClickedItem = item;
     this.currentClickedItem = null;
-    setTimeout(() => {
+    this.currentClickedItemRefreshTimeout = setTimeout(() => {
+      this.currentClickedItemRefreshTimeout = undefined;
+      if (catalogueSession !== this.catalogueSessionGeneration || this.pendingClickedItem !== item) {
+        return;
+      }
+      if (item.deleted) {
+        this.reconcileVideoSelection();
+        return;
+      }
+      this.pendingClickedItem = undefined;
       this.currentClickedItem = item;
     });
+  }
+
+  private clearVideoSelection(): void {
+    clearTimeout(this.currentClickedItemRefreshTimeout);
+    this.currentClickedItemRefreshTimeout = undefined;
+    this.pendingClickedItem = undefined;
+    this.selectedVideo = undefined;
+    this.currentClickedItem = undefined;
+    this.currentClickedItemName = '';
+  }
+
+  /** Preserve selection when a rescan replaces a failed or changed video's metadata. */
+  private replaceSelectedVideo(previous: ImageElement, replacement: ImageElement): void {
+    if (this.selectedVideo === previous) {
+      this.selectedVideo = replacement;
+    }
+    if ((this.pendingClickedItem || this.currentClickedItem) === previous) {
+      this.currentClickedItemName = replacement.cleanName;
+      this.updateCurrentClickedItem(replacement);
+    }
+  }
+
+  /** Keep cloned surviving entries selected and drop entries removed from the catalogue. */
+  private reconcileVideoSelection(): void {
+    const findSurvivingEntry = (item: ImageElement): ImageElement | undefined => (
+      this.imageElementService.imageElements.find((candidate: ImageElement) => (
+        !candidate.deleted && (candidate === item || (Boolean(item.uuid) && candidate.uuid === item.uuid))
+      ))
+    );
+    if (this.selectedVideo) {
+      this.selectedVideo = findSurvivingEntry(this.selectedVideo);
+    }
+    const trayItem = this.pendingClickedItem || this.currentClickedItem;
+    if (!trayItem) {
+      return;
+    }
+    const replacement = findSurvivingEntry(trayItem);
+    if (!replacement) {
+      clearTimeout(this.currentClickedItemRefreshTimeout);
+      this.currentClickedItemRefreshTimeout = undefined;
+      this.pendingClickedItem = undefined;
+      this.currentClickedItem = undefined;
+      this.currentClickedItemName = '';
+    } else if (replacement !== trayItem) {
+      this.currentClickedItemName = replacement.cleanName;
+      this.updateCurrentClickedItem(replacement);
+    }
   }
 
   /**

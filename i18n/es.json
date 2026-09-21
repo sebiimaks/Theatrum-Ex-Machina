@@ -510,6 +510,9 @@
     "videos": "videos"
   },
   "WORKBENCH": {
+    "addVideoNotes": "Añadir notas del video",
+    "autoDetails": "Abrir detalles automáticamente",
+    "autoDetailsDescription": "Abrir automáticamente la barra de detalles al seleccionar un video.",
     "emptyCatalogueTitle": "Este catálogo está vacío",
     "emptyCatalogueDescription": "Agregue una carpeta de videos o compruebe las fuentes existentes para empezar a explorar.",
     "emptyResultsDescription": "Pruebe otra búsqueda, borre los filtros o elija otra colección.",

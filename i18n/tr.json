@@ -509,6 +509,9 @@
     "videos": "videolar"
   },
   "WORKBENCH": {
+    "addVideoNotes": "Video notları ekle",
+    "autoDetails": "Ayrıntıları otomatik aç",
+    "autoDetailsDescription": "Bir video seçildiğinde ayrıntılar çubuğunu otomatik olarak aç.",
     "emptyCatalogueTitle": "Bu katalog boş",
     "emptyCatalogueDescription": "Göz atmaya başlamak için bir video klasörü ekleyin veya mevcut kaynaklarınızı kontrol edin.",
     "emptyResultsDescription": "Başka bir arama deneyin, filtreleri temizleyin veya başka bir koleksiyon seçin.",

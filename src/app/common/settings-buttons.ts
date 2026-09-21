@@ -28,7 +28,7 @@ export type SettingsButtonKey = 'autoFileTags'
  | 'fuzzy'
  | 'hideOffline'
  | 'hideSidebar'
- | 'hideTop'
+ | 'autoOpenDetails'
  | 'hoverScrub'
  | 'magic'
  | 'makeLarger'
@@ -209,7 +209,7 @@ export const SettingsButtonsGroups: SettingsButtonKey[][] = [
     'dragVideoOutOfApp', // Drag video outside of app
   ],
   [ // 13
-    'hideTop', // Hide top bar
+    'autoOpenDetails', // Open the Details bar when selecting a video
     'flatIcons', // Button style
   ],
   [ // 14 - Create a new hub ---------------------------- 3rd tab
@@ -574,12 +574,12 @@ export const SettingsButtons: SettingsButtonsType = {
     title: 'BUTTONS.hideSidebarHint',
     toggled: false
   },
-  'hideTop': {
-    description: 'BUTTONS.hideTopDescription',
+  'autoOpenDetails': {
+    description: 'WORKBENCH.autoDetailsDescription',
     hidden: false,
-    iconName: 'icon-chevron-up',
-    settingsHeading: 'SETTINGS.hideTopBar',
-    title: 'BUTTONS.hideTopHint',
+    iconName: 'icon-show-details',
+    settingsHeading: 'WORKBENCH.autoDetails',
+    title: 'WORKBENCH.autoDetails',
     toggled: false
   },
   'hoverScrub': {

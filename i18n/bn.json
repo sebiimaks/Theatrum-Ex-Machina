@@ -509,6 +509,9 @@
     "videos": "ভিডিও"
   },
   "WORKBENCH": {
+    "addVideoNotes": "ভিডিওর নোট যোগ করুন",
+    "autoDetails": "স্বয়ংক্রিয়ভাবে বিস্তারিত খুলুন",
+    "autoDetailsDescription": "ভিডিও নির্বাচন করলে স্বয়ংক্রিয়ভাবে বিস্তারিত বার খুলুন।",
     "emptyCatalogueTitle": "এই ক্যাটালগ খালি",
     "emptyCatalogueDescription": "ব্রাউজ করা শুরু করতে একটি ভিডিও ফোল্ডার যোগ করুন বা বর্তমান উৎসগুলো পরীক্ষা করুন।",
     "emptyResultsDescription": "অন্য কিছু খুঁজুন, ফিল্টার মুছুন বা অন্য সংগ্রহ বেছে নিন।",

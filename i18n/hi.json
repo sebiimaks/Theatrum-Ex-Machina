@@ -510,6 +510,9 @@
     "videos": "वीडियो"
   },
   "WORKBENCH": {
+    "addVideoNotes": "वीडियो नोट्स जोड़ें",
+    "autoDetails": "विवरण अपने आप खोलें",
+    "autoDetailsDescription": "वीडियो चुनने पर विवरण बार अपने आप खोलें।",
     "emptyCatalogueTitle": "यह कैटलॉग खाली है",
     "emptyCatalogueDescription": "ब्राउज़ करना शुरू करने के लिए वीडियो फ़ोल्डर जोड़ें या मौजूदा स्रोतों की जाँच करें।",
     "emptyResultsDescription": "कोई दूसरा शब्द खोजें, फ़िल्टर हटाएँ या दूसरा संग्रह चुनें।",

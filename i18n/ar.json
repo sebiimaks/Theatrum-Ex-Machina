@@ -509,6 +509,9 @@
     "videos": "أشرطة فيديو"
   },
   "WORKBENCH": {
+    "addVideoNotes": "أضف ملاحظات للفيديو",
+    "autoDetails": "فتح التفاصيل تلقائيًا",
+    "autoDetailsDescription": "فتح شريط التفاصيل تلقائيًا عند تحديد فيديو.",
     "emptyCatalogueTitle": "هذا الفهرس فارغ",
     "emptyCatalogueDescription": "أضف مجلد فيديو أو تحقق من المصادر الحالية لبدء التصفح.",
     "emptyResultsDescription": "جرّب بحثًا مختلفًا، أو امسح عوامل التصفية، أو اختر مجموعة أخرى.",

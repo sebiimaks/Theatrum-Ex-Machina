@@ -210,6 +210,12 @@
     transform: translate(-20px, 30px);
   }
 
+  .details-tray-meta {
+    flex: 1;
+    margin-right: 28px;
+    min-width: 0;
+  }
+
   .must-click-first {
     animation: preventFlicker;
     animation-duration: 0.1s;
@@ -331,5 +337,16 @@
     transform: none;
     span { min-width: 0; overflow-wrap: anywhere; }
     kbd { color: var(--app-text-secondary); flex-shrink: 0; font: inherit; font-size: 10px; }
+  }
+}
+
+@media (max-width: 600px) {
+  .current-clicked {
+    flex-direction: column;
+
+    .details-tray-meta {
+      margin: 0 44px 12px 10px;
+      transform: none;
+    }
   }
 }

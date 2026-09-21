@@ -38,7 +38,7 @@
 }
 
 <!-- Progress indicator - "Donut" -->
-@if (importStage !== 'done' && !settingsButtons['hideTop'].toggled) {
+@if (importStage !== 'done') {
   <div
     class="cancel-progress"
     @donutAppear
@@ -52,7 +52,7 @@
   </div>
 }
 
-@if (importStage !== 'done' && !settingsButtons['hideTop'].toggled) {
+@if (importStage !== 'done') {
   <app-donut
     class="screenShotProgressPercent"
     [percent]="extractionPercent"
@@ -344,30 +344,6 @@
 
   <!-- END OF SETTINGS MODAL ------------------------------------------------------------------- -->
 
-@if (!settingsButtons['hideTop'].toggled) {
-  <header
-    class="top-of-buttons"
-    [ngClass]="{ 'top-of-buttons-dark-mode': settingsButtons['darkMode'].toggled }"
-    @topAnimation
-  >
-    <app-top-component
-      class="top-content-position"
-
-      [currentImageElement]="currentClickedItem"
-      [darkMode]="settingsButtons['darkMode'].toggled"
-      [fileString]="currentClickedItemName"
-      [folderPath]="appState.selectedOutputFolder"
-      [folderString]="currentPlayingFolder"
-      [hubName]="appState.hubName"
-
-      (onFileWordClicked)="handleFileWordClicked($event)"
-      (onFolderWordClicked)="handleFolderWordClicked($event)"
-      (onOpenDetails)="openThumbnailSheet($event)"
-      (onOpenInExplorer)="openInExplorer()"
-      (onPlayVideo)="openVideo($event, 0)"
-     />
-  </header>
-}
 
   <div
     class="window-content"
@@ -464,13 +440,6 @@
           {{ 'SYSTEM.catalogueReadOnly' | translate }}
         </span>
       }
-    @if (importStage !== 'done' && settingsButtons['hideTop'].toggled) {
-      <div
-        class="scanning-indicator scanning-indicator-right"
-        title="{{ 'WIZARD.importInProgress' | translate }}"
-        @slowFadeOut
-      ></div>
-    }
 
     </div>
 
@@ -498,7 +467,6 @@
       [ngStyle]="{
           'height': 'max(0px, calc(100vh - ' + (
                         appState.menuHidden | sidebarHeightPipe
-                          : settingsButtons['hideTop'].toggled
                           : (
                                  settingsButtons['showDetailsTray'].toggled
                               || settingsButtons['showFreq'].toggled
@@ -866,14 +834,27 @@
     <!-- ============================================== -->
 
     <section class="workbench-gallery-header" [class.workbench-gallery-header-full]="settingsButtons['hideSidebar'].toggled" [class.workbench-gallery-header-tags]="settingsButtons['showTagTray'].toggled">
-      <div class="workbench-gallery-title"><h1>{{ workspaceCollectionLabel | translate }}</h1><span aria-live="polite">{{ numberOfVideosFound | number }} {{ (numberOfVideosFound === 1 ? 'WORKBENCH.video' : 'WORKBENCH.videos') | translate }}</span></div>
-      <div class="workbench-gallery-actions">
+      <div class="workbench-gallery-summary">
+        <div class="workbench-gallery-title"><h1>{{ workspaceCollectionLabel | translate }}</h1><span aria-live="polite">{{ numberOfVideosFound | number }} {{ (numberOfVideosFound === 1 ? 'WORKBENCH.video' : 'WORKBENCH.videos') | translate }}</span></div>
+        <div class="workbench-preview-size">
+          <button type="button" (click)="decreaseSize()" [disabled]="appState.currentView === 'showFiles'" [attr.aria-label]="settingsButtons['makeSmaller'].title | translate" [title]="settingsButtons['makeSmaller'].title | translate">−</button>
+          <button type="button" (click)="increaseSize()" [disabled]="appState.currentView === 'showFiles'" [attr.aria-label]="settingsButtons['makeLarger'].title | translate" [title]="settingsButtons['makeLarger'].title | translate">+</button>
+        </div>
+      </div>
+      <div #workspaceTrayButtons class="workbench-gallery-actions">
         <app-sort-order (sortTypeChange)="selectFilterOrder($event)" [settingsButtons]="settingsButtons" />
         <button type="button" (click)="toggleButton('hideSidebar')" [attr.aria-pressed]="!settingsButtons['hideSidebar'].toggled"><app-icon [icon]="'icon-looking-glass'" [size]="16" />{{ 'WORKBENCH.filters' | translate }}</button>
-        <button type="button" (click)="toggleButton('showTagTray')" [attr.aria-pressed]="settingsButtons['showTagTray'].toggled"><app-icon [icon]="'icon-tag'" [size]="16" />{{ 'WORKBENCH.tags' | translate }}</button>
-        <button type="button" (click)="toggleButton('showDetailsTray')" [attr.aria-pressed]="settingsButtons['showDetailsTray'].toggled"><app-icon [icon]="'icon-show-details'" [size]="16" />{{ 'WORKBENCH.details' | translate }}</button>
-        <button type="button" (click)="decreaseSize()" [disabled]="appState.currentView === 'showFiles'" [attr.aria-label]="settingsButtons['makeSmaller'].title | translate">−</button>
-        <button type="button" (click)="increaseSize()" [disabled]="appState.currentView === 'showFiles'" [attr.aria-label]="settingsButtons['makeLarger'].title | translate">+</button>
+        @if (!settingsButtons['showFreq'].hidden) {
+          <button type="button" data-workspace-tray="showFreq" (click)="toggleButton('showFreq')" [attr.aria-pressed]="settingsButtons['showFreq'].toggled" [title]="'SETTINGS.trayCloud' | translate"><app-icon [icon]="'icon-cloud'" [size]="16" />{{ 'SETTINGS.trayCloud' | translate }}</button>
+        }
+        @if (!settingsButtons['showRelatedVideosTray'].hidden) {
+          <button type="button" data-workspace-tray="showRelatedVideosTray" (click)="toggleButton('showRelatedVideosTray')" [attr.aria-pressed]="settingsButtons['showRelatedVideosTray'].toggled" [title]="'SETTINGS.traySimilar' | translate"><app-icon [icon]="'icon-show-similar'" [size]="16" />{{ 'SETTINGS.traySimilar' | translate }}</button>
+        }
+        @if (!settingsButtons['showRecentlyPlayed'].hidden) {
+          <button type="button" data-workspace-tray="showRecentlyPlayed" (click)="toggleButton('showRecentlyPlayed')" [attr.aria-pressed]="settingsButtons['showRecentlyPlayed'].toggled" [title]="'SETTINGS.recentlyPlayed' | translate"><app-icon [icon]="'icon-recent-history'" [size]="16" />{{ 'SETTINGS.recentlyPlayed' | translate }}</button>
+        }
+        <button type="button" data-workspace-tray="showDetailsTray" (click)="toggleButton('showDetailsTray')" [attr.aria-pressed]="settingsButtons['showDetailsTray'].toggled"><app-icon [icon]="'icon-show-details'" [size]="16" />{{ 'WORKBENCH.details' | translate }}</button>
+        <button type="button" (click)="toggleButton('showTagTray')" [attr.aria-pressed]="settingsButtons['showTagTray'].toggled" [title]="'WORKBENCH.tags' | translate"><app-icon [icon]="'icon-tag'" [size]="16" />{{ 'WORKBENCH.tags' | translate }}</button>
       </div>
     </section>
     @if (appState.currentView === 'showFiles' && settingsButtons['showMoreInfo'].toggled) {
@@ -891,7 +872,6 @@
       [ngStyle]="{
           'height': 'max(0px, calc(100vh - ' + (
                         appState.menuHidden | sidebarHeightPipe
-                          : settingsButtons['hideTop'].toggled
                           : (
                                  settingsButtons['showDetailsTray'].toggled
                               || settingsButtons['showFreq'].toggled
@@ -1032,6 +1012,7 @@
     @if (appState.currentView === 'showThumbnails') {
       @for (item of scroll.viewPortItems; track item.uuid) {
         <app-thumbnail
+          [class.workbench-video-selected]="settingsButtons['doubleClickMode'].toggled && !batchTaggingMode && selectedVideo === item"
           (videoClick)=" (item.cleanName === '*FOLDER*') ? handleFolderIconClicked(item.partialPath) : handleClick($event, item)"
           (rightClick)=" (item.cleanName === '*FOLDER*') ? doNothing()                               : rightMouseClicked($event.mouseEvent, $event.item)"
 
@@ -1080,6 +1061,7 @@
     @if (appState.currentView === 'showFilmstrip') {
       @for (item of scroll.viewPortItems; track item.uuid) {
         <app-filmstrip-item
+          [class.workbench-video-selected]="settingsButtons['doubleClickMode'].toggled && !batchTaggingMode && selectedVideo === item"
           (videoClick)="handleClick($event, item)"
           (rightClick)="(item.cleanName === '*FOLDER*') ? doNothing() : rightMouseClicked($event.mouseEvent, $event.item)"
 
@@ -1118,6 +1100,7 @@
     @if (appState.currentView === 'showFullView') {
       @for (item of scroll.viewPortItems; track item.uuid) {
         <app-full-item
+          [class.workbench-video-selected]="settingsButtons['doubleClickMode'].toggled && !batchTaggingMode && selectedVideo === item"
           (videoClick)="handleClick($event, item)"
           (rightClick)="rightMouseClicked($event.mouseEvent, $event.item)"
 
@@ -1149,6 +1132,7 @@
     @if (appState.currentView === 'showFiles') {
       @for (item of scroll.viewPortItems; track item.uuid) {
         <app-file-item
+          [class.workbench-video-selected]="settingsButtons['doubleClickMode'].toggled && !batchTaggingMode && selectedVideo === item"
           (click)="      (item.cleanName === '*FOLDER*') ? handleFolderIconClicked(item.partialPath) : handleClick({ mouseEvent: $event }, item)"
           (dblclick)="   (item.cleanName === '*FOLDER*') ? handleFolderIconClicked(item.partialPath) : handleClick({ mouseEvent: $event }, item, true)"
           (contextmenu)="(item.cleanName === '*FOLDER*') ? doNothing()                               : rightMouseClicked($event, item)"
@@ -1174,6 +1158,7 @@
     @if (appState.currentView === 'showDetails' || appState.currentView === 'showDetails2') {
       @for (item of scroll.viewPortItems; track item.uuid) {
         <app-details-item
+          [class.workbench-video-selected]="settingsButtons['doubleClickMode'].toggled && !batchTaggingMode && selectedVideo === item"
           (videoClick)="handleClick($event, item)"
           (rightClick)="rightMouseClicked($event.mouseEvent, $event.item)"
           (filterTag)="handleTagWordClicked($event.tag.name, $event.event)"
@@ -1222,6 +1207,7 @@
     @if (appState.currentView === 'showClips') {
       @for (item of scroll.viewPortItems; track item.uuid) {
         <app-clip-item
+          [class.workbench-video-selected]="settingsButtons['doubleClickMode'].toggled && !batchTaggingMode && selectedVideo === item"
           (videoClick)="(item.cleanName === '*FOLDER*') ? handleFolderIconClicked(item.partialPath) : handleClick($event, item)"
           (rightClick)="(item.cleanName === '*FOLDER*') ? doNothing()                               : rightMouseClicked($event.mouseEvent, $event.item)"
 
@@ -1263,7 +1249,6 @@
       [class.workbench-empty-tags]="settingsButtons['showTagTray'].toggled"
       [style.margin-top.px]="workspaceGalleryInset"
       [style.height]="'max(0px, calc(100vh - ' + (appState.menuHidden | sidebarHeightPipe
-        : settingsButtons['hideTop'].toggled
         : (settingsButtons['showDetailsTray'].toggled || settingsButtons['showFreq'].toggled
           || settingsButtons['showRecentlyPlayed'].toggled || settingsButtons['showRelatedVideosTray'].toggled))
         + ' - ' + workspaceGalleryInset + 'px))'"
@@ -1298,14 +1283,13 @@
       [ngStyle]="{
         'height': 'max(0px, calc(100vh - ' + (
           appState.menuHidden | sidebarHeightPipe
-            : settingsButtons['hideTop'].toggled
             : (
                  settingsButtons['showDetailsTray'].toggled
               || settingsButtons['showFreq'].toggled
               || settingsButtons['showRecentlyPlayed'].toggled
               || settingsButtons['showRelatedVideosTray'].toggled
             )
-        ) + '))'
+        ) + ' - var(--app-tag-panel-toolbar-inset, 0px)))'
       }"
       @modalAnimation
     >
@@ -1330,74 +1314,9 @@
 
   </div> <!-- end of window-content -->
 
-  @if (!wizard.showWizard && !settingsButtons['showTagTray'].hidden && !settingsButtons['showTagTray'].toggled) {
-    <button
-      class="catalogueEditorButton tag-panel-button"
-      [class.tag-panel-button-raised]="settingsButtons['showDetailsTray'].toggled
-                                      || settingsButtons['showFreq'].toggled
-                                      || settingsButtons['showRecentlyPlayed'].toggled
-                                      || settingsButtons['showRelatedVideosTray'].toggled"
-      (click)="toggleButton('showTagTray')"
-      type="button"
-    >
-      <app-icon class="tag-panel-button-icon" [icon]="'icon-tag'" [size]="14" />
-      <span>{{ 'SETTINGS.trayTags' | translate }}</span>
-    </button>
-  }
-
 </div> <!-- end of window -->
 
 <!-- ===========    Bottom Tray Section    =========== -->
-
-<!-- -----------       five tabs     ----------------- -->
-
-<div
-  #bottomTrayTabs
-  class="all-settings-tabs bottom-tray-tabs"
-  [ngClass]="{
-    'bottom-tray-tabs-dark': settingsButtons['darkMode'].toggled,
-    'bottom-tray-tabs-open': settingsButtons['showDetailsTray'].toggled
-                          || settingsButtons['showFreq'].toggled
-                          || settingsButtons['showRecentlyPlayed'].toggled
-                          || settingsButtons['showRelatedVideosTray'].toggled
-  }"
->
-@if (                         !settingsButtons['showFreq'].hidden) {
-  <button
-    (click)="                     toggleButton('showFreq')"
-    [ngClass]="{ 'active-tab': settingsButtons['showFreq'].toggled }"
-  >
-    {{ 'SETTINGS.trayCloud'     | translate }}
-  </button>
-}
-
-@if (                         !settingsButtons['showRelatedVideosTray'].hidden) {
-  <button
-    (click)="                     toggleButton('showRelatedVideosTray')"
-    [ngClass]="{ 'active-tab': settingsButtons['showRelatedVideosTray'].toggled }"
-  >
-    {{ 'SETTINGS.traySimilar'   | translate }}
-  </button>
-}
-
-@if (                         !settingsButtons['showRecentlyPlayed'].hidden) {
-  <button
-    (click)="                     toggleButton('showRecentlyPlayed')"
-    [ngClass]="{ 'active-tab': settingsButtons['showRecentlyPlayed'].toggled }"
-  >
-    {{ 'SETTINGS.recentlyPlayed' | translate }}
-  </button>
-}
-
-@if (                         !settingsButtons['showDetailsTray'].hidden) {
-  <button
-    (click)="                     toggleButton('showDetailsTray')"
-    [ngClass]="{ 'active-tab': settingsButtons['showDetailsTray'].toggled }"
-  >
-    {{ 'SETTINGS.showDetailsTray' | translate }}
-  </button>
-}
-</div>
 
 <!-- -----------       bottom tray contents     ----------------- -->
 
@@ -1482,7 +1401,7 @@
     @if (currentClickedItem) {
       <app-thumbnail
         (rightClick)="rightMouseClicked($event.mouseEvent, $event.item)"
-        (videoClick)="handleClick($event, currentClickedItem)"
+        (videoClick)="handleClick($event, currentClickedItem, false, 'details-preview')"
         (sheetClick)="this.openThumbnailSheet(currentClickedItem)"
 
         [elHeight]="144"
@@ -1503,7 +1422,7 @@
        />
 
       <app-meta-item
-        class="meta-container top-offset"
+        class="meta-container top-offset details-tray-meta"
 
         (filterTag)="handleTagWordClicked($event.tag.name, $event.event)"
 
@@ -1519,7 +1438,8 @@
         [showAutoFolderTags]="settingsButtons['autoFolderTags'].toggled"
         [showManualTags]="settingsButtons['manualTags'].toggled"
         [showMeta]="settingsButtons['showMoreInfo'].toggled"
-        [showVideoNotes]="settingsButtons['showVideoNotes'].toggled"
+        [showVideoNotes]="true"
+        [notesPlaceholder]="'WORKBENCH.addVideoNotes'"
 
         [selectedSourceFolder]="sourceFolderService.selectedSourceFolder[currentClickedItem.inputSource].path"
         [renameResponse]="renameFileResponseBehaviorSubject.asObservable()"
@@ -1534,7 +1454,7 @@
 
 </div>
 </div>
-}   <!-- end of bottom tray section (just below all the tabs) -->
+}   <!-- end of bottom tray section -->
 
 <!-- WIZARD -->
 @if (wizard.showWizard) {

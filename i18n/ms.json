@@ -509,6 +509,9 @@
     "videos": "video"
   },
   "WORKBENCH": {
+    "addVideoNotes": "Tambah nota video",
+    "autoDetails": "Buka butiran secara automatik",
+    "autoDetailsDescription": "Buka bar butiran secara automatik apabila memilih video.",
     "emptyCatalogueTitle": "Katalog ini kosong",
     "emptyCatalogueDescription": "Tambah folder video atau semak sumber sedia ada untuk mula menyemak imbas.",
     "emptyResultsDescription": "Cuba carian lain, kosongkan penapis atau pilih koleksi lain.",

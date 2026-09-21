@@ -8,6 +8,8 @@
 
     @if (!settingsButtons[buttonKey].hidden && settingsButtons[buttonKey].iconName) {
       <button
+        [class.auto-details-button]="buttonKey === 'autoOpenDetails'"
+        [attr.aria-pressed]="buttonKey === 'autoOpenDetails' ? settingsButtons[buttonKey].toggled : null"
         (blur)="clearFocusedButtonLabel(buttonKey)"
         (click)="toggleButton.emit(buttonKey)"
         (focus)="showFocusedButtonLabel(buttonKey, $event)"
@@ -22,6 +24,9 @@
         @buttonAnimation
       >
         <app-icon class="icon" [icon]="settingsButtons[buttonKey].iconName" [size]="18" />
+        @if (buttonKey === 'autoOpenDetails') {
+          <span class="auto-details-state" aria-hidden="true">{{ settingsButtons[buttonKey].toggled ? '✓' : '−' }}</span>
+        }
       </button>
     }
 

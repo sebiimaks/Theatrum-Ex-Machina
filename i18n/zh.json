@@ -510,6 +510,9 @@
     "videos": "视频"
   },
   "WORKBENCH": {
+    "addVideoNotes": "添加视频备注",
+    "autoDetails": "自动打开详细信息",
+    "autoDetailsDescription": "选择视频时自动打开详细信息栏。",
     "emptyCatalogueTitle": "此目录为空",
     "emptyCatalogueDescription": "添加视频文件夹或检查现有来源，即可开始浏览。",
     "emptyResultsDescription": "请尝试其他搜索词、清除筛选条件或选择其他合集。",

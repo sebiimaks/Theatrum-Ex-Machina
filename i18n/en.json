@@ -685,6 +685,9 @@
     "videos": "videos"
   },
   "WORKBENCH": {
+    "addVideoNotes": "Add video notes",
+    "autoDetails": "Auto-open Details",
+    "autoDetailsDescription": "Automatically open the Details bar when selecting a video.",
     "emptyCatalogueTitle": "This catalogue is empty",
     "emptyCatalogueDescription": "Add a video folder or check your existing sources to start browsing.",
     "emptyResultsDescription": "Try a different search, clear your filters, or choose another collection.",

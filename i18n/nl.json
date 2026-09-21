@@ -510,6 +510,9 @@
     "videos": "videos"
   },
   "WORKBENCH": {
+    "addVideoNotes": "Videonotities toevoegen",
+    "autoDetails": "Details automatisch openen",
+    "autoDetailsDescription": "Open de detailbalk automatisch wanneer je een video selecteert.",
     "emptyCatalogueTitle": "Deze catalogus is leeg",
     "emptyCatalogueDescription": "Voeg een videomap toe of controleer je bestaande bronnen om te beginnen met bladeren.",
     "emptyResultsDescription": "Probeer een andere zoekopdracht, wis je filters of kies een andere collectie.",

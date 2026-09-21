@@ -510,6 +510,9 @@
     "videos": "videa"
   },
   "WORKBENCH": {
+    "addVideoNotes": "Přidat poznámky k videu",
+    "autoDetails": "Automaticky otevírat podrobnosti",
+    "autoDetailsDescription": "Při výběru videa automaticky otevřít panel podrobností.",
     "emptyCatalogueTitle": "Tento katalog je prázdný",
     "emptyCatalogueDescription": "Začněte přidáním složky s videi nebo kontrolou stávajících zdrojů.",
     "emptyResultsDescription": "Zkuste jiné hledání, vymažte filtry nebo vyberte jinou kolekci.",

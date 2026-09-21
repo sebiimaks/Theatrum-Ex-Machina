@@ -273,3 +273,41 @@ textarea {
     }
   }
 }
+
+// The bottom Details tray keeps notes alongside the selected video's metadata.
+:host(.details-tray-meta) {
+  .meta-container-with-side-notes {
+    height: auto;
+    padding-right: calc(42% + 24px);
+    position: relative;
+    width: 100% !important;
+
+    .meta-title { max-width: 100% !important; }
+
+    .video-notes {
+      background: var(--app-control-background);
+      border: 1px solid var(--app-border-strong);
+      border-radius: var(--app-control-radius);
+      height: 132px;
+      line-height: 1.6;
+      margin: 0;
+      padding: 12px;
+      position: absolute;
+      right: 0;
+      top: -12px;
+      width: 42%;
+    }
+  }
+}
+
+@media (max-width: 1000px) {
+  :host(.details-tray-meta) .meta-container-with-side-notes {
+    padding-right: 0;
+
+    .video-notes {
+      margin: 12px 0 20px;
+      position: static;
+      width: 100%;
+    }
+  }
+}

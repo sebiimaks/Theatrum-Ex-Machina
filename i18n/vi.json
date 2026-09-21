@@ -509,6 +509,9 @@
     "videos": "video"
   },
   "WORKBENCH": {
+    "addVideoNotes": "Thêm ghi chú video",
+    "autoDetails": "Tự động mở chi tiết",
+    "autoDetailsDescription": "Tự động mở thanh chi tiết khi chọn video.",
     "emptyCatalogueTitle": "Danh mục này trống",
     "emptyCatalogueDescription": "Thêm thư mục video hoặc kiểm tra các nguồn hiện có để bắt đầu duyệt.",
     "emptyResultsDescription": "Thử tìm kiếm khác, xóa bộ lọc hoặc chọn bộ sưu tập khác.",

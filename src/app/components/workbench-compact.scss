@@ -118,7 +118,7 @@
       background: var(--app-elevated-background);
       height: 30px;
       margin: 0;
-      top: 0;
+      top: 4px;
       transform: none;
     }
 
@@ -167,16 +167,6 @@
   overflow: auto;
   width: 100%;
 }
-
-.bottom-tray-tabs {
-  max-width: calc(100vw - 10px);
-  overflow-x: auto;
-  white-space: nowrap;
-  z-index: 21 !important;
-}
-.bottom-tray-tabs-open { bottom: var(--app-bottom-tray-height); }
-.catalogueEditorButton.tag-panel-button { z-index: 21; }
-.catalogueEditorButton.tag-panel-button-raised { bottom: calc(var(--app-bottom-tray-height) + 12px); }
 
 @media (max-height: 520px) {
   :host {

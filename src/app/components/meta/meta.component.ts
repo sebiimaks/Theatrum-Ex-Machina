@@ -28,7 +28,6 @@ import { SettingsButtons } from '../../common/settings-buttons';
 export class MetaComponent implements OnInit, OnDestroy {
 
   readonly yearInput = viewChild<ElementRef>('yearInput');
-  readonly videoNotes = viewChild<ElementRef>('videoNotes');
 
   readonly filterTag = output<TagEmit>();
 
@@ -39,6 +38,7 @@ export class MetaComponent implements OnInit, OnDestroy {
   readonly individualTagSegments = input<boolean>(false);
   readonly largerFont = input<boolean>();
   readonly maxWidth = input<number>();
+  readonly notesPlaceholder = input<string>('TAGS.notes');
   readonly selectedSourceFolder = input<string>();
   readonly showAutoFileTags = input<boolean>();
   readonly showAutoFolderTags = input<boolean>();
@@ -292,14 +292,13 @@ export class MetaComponent implements OnInit, OnDestroy {
     this.renameError = false;
   }
 
-  /**
-   * When user clicks outside (that is `onBlur` event) save the currently-written notes to imageElement
-   * @param event
-   */
-  saveVideoNotes(event): void {
-    const videoNotes = this.videoNotes();
-    console.log(videoNotes.nativeElement.value);
-    this.video.notes = videoNotes.nativeElement.value;
+  /** Keep notes in the catalogue model before the selected video's panel closes. */
+  saveVideoNotes(notes: string): void {
+    if ((this.video.notes || '') === notes) {
+      return;
+    }
+    this.video.notes = notes;
+    this.imageElementService.finalArrayNeedsSaving = true;
   }
 
   ngOnDestroy(): void {

@@ -32,7 +32,7 @@ export const SettingsWorkspaceCategories: SettingsWorkspaceCategory[] = [
   {
     id: 'appearance', label: 'WORKBENCH.settingsAppearance', description: 'WORKBENCH.settingsAppearanceDescription', iconName: 'icon-darken',
     sections: [
-      { id: 'interface', heading: 'WORKBENCH.settingsAppearance', buttonKeys: ['darkMode', 'flatIcons', 'fontSizeLarger', 'hideTop', 'hideSidebar'] },
+      { id: 'interface', heading: 'WORKBENCH.settingsAppearance', buttonKeys: ['darkMode', 'flatIcons', 'fontSizeLarger', 'hideSidebar'] },
       { id: 'app-zoom', heading: 'SETTINGS.changeAppZoom', buttonKeys: [], kind: 'zoom', searchLabels: ['SETTINGS.resetZoom'] },
       { id: 'language', heading: 'SETTINGS.changeLanguage', buttonKeys: [], kind: 'language' },
     ],
@@ -43,7 +43,7 @@ export const SettingsWorkspaceCategories: SettingsWorkspaceCategory[] = [
       { id: 'gallery-view', heading: 'SETTINGS.galleryAndView', buttonKeys: ['showThumbnails', 'showFilmstrip', 'showFullView', 'showDetails', 'showDetails2', 'showFiles', 'showClips'] },
       { id: 'gallery-layout', heading: 'SETTINGS.miscView', buttonKeys: ['compactView', 'showCleanNameInCompactView', 'showMoreInfo', 'favorites', 'makeSmaller', 'makeLarger'] },
       { id: 'gallery-browsing', heading: 'SETTINGS.folderView', buttonKeys: ['showFolders', 'randomizeFoldersScreenshots', 'showOnlyFavorites', 'showOnlyPlaylist', 'shuffleGalleryNow'] },
-      { id: 'gallery-panels', heading: 'WORKBENCH.settingsPanels', buttonKeys: ['showFreq', 'showRelatedVideosTray', 'showRecentlyPlayed', 'showDetailsTray'] },
+      { id: 'gallery-panels', heading: 'WORKBENCH.settingsPanels', buttonKeys: ['autoOpenDetails', 'showFreq', 'showRelatedVideosTray', 'showRecentlyPlayed', 'showDetailsTray'] },
       { id: 'gallery-thumbnails', heading: 'SETTINGS.thumbnailHeading', buttonKeys: ['hoverScrub', 'thumbAutoAdvance', 'returnToFirstScreenshot'] },
       { id: 'gallery-clips', heading: 'SETTINGS.clipsHeading', buttonKeys: ['muteClips', 'autoplayClips', 'clipsThumbnail'] },
     ],

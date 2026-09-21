@@ -509,6 +509,9 @@
     "videos": "Videos"
   },
   "WORKBENCH": {
+    "addVideoNotes": "Videoanmerkungen hinzufügen",
+    "autoDetails": "Details automatisch öffnen",
+    "autoDetailsDescription": "Die Detailleiste beim Auswählen eines Videos automatisch öffnen.",
     "emptyCatalogueTitle": "Dieser Katalog ist leer",
     "emptyCatalogueDescription": "Fügen Sie einen Videoordner hinzu oder prüfen Sie Ihre vorhandenen Quellen, um Videos zu durchsuchen.",
     "emptyResultsDescription": "Versuchen Sie eine andere Suche, löschen Sie Ihre Filter oder wählen Sie eine andere Sammlung.",

@@ -130,3 +130,25 @@
     opacity: 1;
   }
 }
+
+// Single-video selection stays visible in compact cards without a batch checkmark.
+:host(.workbench-video-selected) .workbench-card {
+  > .video-box,
+  > .filmstrip-container {
+    position: relative;
+
+    // Paint above transformed previews without intercepting their controls.
+    &::after {
+      border: 3px solid var(--app-accent);
+      border-radius: inherit;
+      box-sizing: border-box;
+      content: '';
+      inset: 0;
+      pointer-events: none;
+      position: absolute;
+      z-index: 3;
+    }
+  }
+
+  .title { color: var(--app-accent-text); }
+}

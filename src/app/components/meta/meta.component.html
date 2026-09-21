@@ -191,9 +191,10 @@
     class="video-notes"
     [attr.aria-label]="'WORKBENCH.videoNotes' | translate"
     [ngClass]="{ 'notes-dark-mode': darkMode() }"
-    (blur)="saveVideoNotes($event)"
-    placeholder="{{ 'TAGS.notes' | translate }}"
-  >{{ video.notes }}</textarea>
+    (input)="saveVideoNotes(videoNotes.value)"
+    [value]="video.notes || ''"
+    [placeholder]="notesPlaceholder() | translate"
+  ></textarea>
 }
 
 </div>

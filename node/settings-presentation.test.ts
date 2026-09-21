@@ -125,7 +125,8 @@ test('keeps native setting controls, independent toolbar visibility, and custom 
   assert.match(template, /\[attr\.aria-label\]="'WORKBENCH\.increaseZoom' \| translate"[^>]*><span aria-hidden="true">\+<\/span>/);
   assert.equal(sections.filter((section) => section.heading === 'SETTINGS.changeAppZoom' && section.kind === 'zoom').length, 1);
   assert.equal(sections.filter((section) => section.heading === 'SETTINGS.changeLanguage' && section.kind === 'language').length, 1);
-  assert.match(template, /\(change\)="changeLanguage\.emit\(langSelect\.value\)"/);
+  assert.match(template, /<select id="settings-language" \[ngModel\]="appState\.language" \(ngModelChange\)="changeLanguage\.emit\(\$event\)">/);
+  assert.match(template, /<option \[value\]="language\[0\]">\{\{ language\[1\] \}\}<\/option>/);
   assert.match(template, /openExternalLink\(\$event, 'https:\/\/github\.com\/sebiimaks\/Theatrum-Ex-Machina'\)/);
 });
 

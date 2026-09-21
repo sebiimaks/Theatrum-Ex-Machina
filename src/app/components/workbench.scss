@@ -184,6 +184,12 @@
   justify-content: space-between;
   padding: 4px 13px;
 }
+.workbench-gallery-summary {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 12px;
+}
 .workbench-gallery-title {
   align-items: baseline;
   display: flex;
@@ -192,7 +198,7 @@
   h1 { font-size: 15px; font-weight: 500; margin: 0; }
   > span { color: var(--app-text-secondary); font-size: 11px; white-space: nowrap; }
 }
-.workbench-gallery-actions {
+.workbench-gallery-actions, .workbench-preview-size {
   align-items: center;
   display: flex;
   gap: 3px;
@@ -215,6 +221,12 @@
     &[aria-pressed="true"] { background: var(--app-accent-soft); color: var(--app-accent-text); }
     &:disabled { opacity: 0.35; cursor: default; }
   }
+}
+.workbench-preview-size {
+  flex-shrink: 0;
+  button { font-size: 15px; justify-content: center; padding: 4px; width: 30px; }
+}
+.workbench-gallery-actions {
   app-icon { display: inline-flex; }
   app-sort-order { display: block; max-width: 170px; min-width: 90px; }
   ::ng-deep .sort-filter { height: 32px !important; }
@@ -304,7 +316,14 @@
   top: var(--app-titlebar-height);
   width: calc(100% - 228px);
   z-index: 600;
-  .modal-fade-out { background: none; height: 0; }
+  // The old fade strip's negative offsets move Close outside this scrollport.
+  .modal-fade-out {
+    background: none;
+    height: 0;
+    margin: 0;
+    top: 4px;
+    transform: none;
+  }
 }
 .workbench-settings-close {
   align-items: center;
@@ -319,7 +338,7 @@
   padding: 5px;
   position: absolute;
   right: 0;
-  top: -16px;
+  top: 0;
   width: 30px;
 }
 
@@ -329,7 +348,6 @@
   .workbench-toolbar-label, .workbench-view > span { display: none; }
   .workbench-gallery-title > span { display: none; }
   .workbench-gallery-actions button { font-size: 0; gap: 0; padding: 4px 6px; }
-  .workbench-gallery-actions button:nth-last-child(-n+2) { font-size: 15px; }
 }
 @media (max-width: 850px) {
   .workbench-gallery-header.workbench-gallery-header-tags, .workbench-file-heading.workbench-gallery-header-tags { width: calc(100vw - #{variables.$sidebar-width}); }
@@ -344,6 +362,7 @@
   .workbench-window .settings-review-modal { left: 180px; padding: 24px 15px 40px; width: calc(100% - 180px); }
   .workbench-gallery-title { display: none; }
   .workbench-gallery-actions { justify-content: flex-start; width: 100%; }
+  .workbench-gallery-actions app-sort-order { max-width: 110px; }
 }
 .workbench-settings-results {
   margin: 20px 0;
