@@ -1,6 +1,6 @@
 # Theatrum Ex Machina
 
-![Theatrum Ex Machina](./screens/20260816_main_hub_01.png)
+![Theatrum Ex Machina](./screens/20260816_main_hub_old.png)
 
 **Theatrum Ex Machina** is a personal fork of [Video Hub App](http://www.videohubapp.com/), maintained at [sebiimaks/Theatrum-Ex-Machina](https://github.com/sebiimaks/Theatrum-Ex-Machina). Its name and logo are fork-specific branding and are not associated with or endorsed by the original developer.
 
