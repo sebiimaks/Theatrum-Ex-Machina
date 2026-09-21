@@ -1,7 +1,7 @@
 {
   "name": "theatrum-ex-machina",
   "productName": "Theatrum Ex Machina",
-  "version": "1.1.3",
+  "version": "2.0.0",
   "description": "Theatrum Ex Machina - a personal fork of Video Hub App for browsing, searching, previewing, and managing videos",
   "homepage": "https://github.com/sebiimaks/Theatrum-Ex-Machina",
   "repository": {
@@ -43,7 +43,8 @@
     "electron": "npm run legal:generate && npm run release:preflight && npm run media:prepare && npm run build:prod && electron-builder build && npm run media:source && npm run buildsize",
     "electron:linux:release": "npm run legal:generate && npm run release:preflight && npm run media:prepare && npm run build:prod && electron-builder build --linux deb --x64 --publish never && npm run media:source:linux && npm run verify:linux:release && npm run buildsize",
     "electron:linux:test": "npm run media:prepare && npm run build:prod && electron-builder build --linux deb --x64 --publish never --config.directories.output=release-test && npm run media:source:linux:test && npm run verify:linux:test",
-    "electron:mac:release": "npm run legal:generate && npm run release:preflight && npm run media:prepare && npm run build:prod && electron-builder build --mac dmg --arm64 && npm run media:source && npm run verify:mac:release && npm run buildsize",
+    "electron:mac:release": "npm run legal:generate && npm run release:preflight && npm run media:prepare && npm run build:prod && electron-builder build --mac dmg --arm64 --publish never && npm run media:source && npm run verify:mac:release && npm run buildsize",
+    "electron:mac:local": "npm run legal:generate && npm run release:preflight && npm run media:prepare && npm run build:prod && electron-builder build --mac zip --arm64 --publish never && npm run media:source && npm run verify:mac:release && npm run buildsize",
     "electron:mac:test": "npm run media:prepare && npm run build:prod && electron-builder build --mac dir --arm64 --config.directories.output=release-test && npm run media:source:test && npm run verify:mac:test",
     "electron:serve": "wait-on tcp:4200 && npm run electron:serve-tsc && npx electron . --serve",
     "electron:serve-tsc": "tsc -p tsconfig-serve.json",

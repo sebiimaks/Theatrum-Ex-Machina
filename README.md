@@ -6,8 +6,8 @@
 
 **Fork changes are made utilising LLMs. The fork is not supported or endorsed by the original developer. Use this software at your own risk.**
 
-- Current fork version: `v1.1.3`
-- Change summary updated: 04/09/2026
+- Current fork version: `v2.0.0`
+- Change summary updated: 21/09/2026
 
 # Fork Changelog
 
@@ -16,7 +16,24 @@ This changelog covers material fork-specific changes made after the upstream bas
 `v1.0.0` begins the independent Theatrum Ex Machina version line. Earlier entries preserve the fork's pre-1.0 development history.
 
 <details>
-<summary><strong>Unreleased</strong></summary>
+<summary><strong>v2.0.0 — 21 September 2026</strong></summary>
+
+![Theatrum Ex Machina 2.0.0](./screens/20260921_main_hub.png)
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/db29b8a0"><code>db29b8a0</code></a> — <strong>Redesign the library workspace and settings</strong></summary>
+<p>Reworked the main library with catalogue navigation, clearer search and filters, consistent gallery controls, and light and dark themes. Settings now have searchable categories, while the video inspector, catalogue editor, import wizard, and dialogs follow the same interface conventions. Pinned controls remain available with their existing expand/collapse behavior.</p>
+</details>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/2034ec3e"><code>2034ec3e</code></a> — <strong>Refine compact layouts and catalogue workflows</strong></summary>
+<p>Improved compact and narrow-window layouts, translated the new interface labels, made hierarchical tag branches collapsible, and limited Recently played to videos with playback history. Native catalogue creation, preview refresh, and dialog keyboard behavior received additional validation.</p>
+</details>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/b90a0428"><code>b90a0428</code></a> — <strong>Unify Details controls and video selection</strong></summary>
+<p>Moved Word cloud, Similar, Recent, Details, and Tags controls into the gallery toolbar and placed preview-size controls beside the video count. Replaced the upper video preview with an optional Auto-open Details control, added selection highlighting and separate-click deselection in double-click mode, and retained double-click playback. The bottom Details panel now includes editable notes on the right; notes-only edits are marked for catalogue saving. Settings close buttons and narrow-window panels remain reachable.</p>
+</details>
 
 <details>
 <summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/d49be2e12e34af7cf4847a3bddf78f0b1119b31e"><code>d49be2e1</code></a> — <strong>Hide Tags controls from the opening wizard</strong></summary>
@@ -380,6 +397,8 @@ Before building, install the project's development prerequisites and review `LIC
 On an Apple Silicon Mac, run `npm run electron:mac:release`. The command builds an unsigned and unnotarized ARM64 DMG, creates the matching media-source archive, and verifies the packaged application and licensing payload. Outputs are written to the ignored `release/` directory. The reproducible unpacked staging application may be deleted after verification.
 
 ### Debian/Ubuntu AMD64 CI Test Builds
+
+For a workspace-local macOS production build, run `npm run electron:mac:local` from the clean, designated `main` release worktree. It runs the release preflight, creates the application and a ZIP in `release/`, includes the matching media source archive, and verifies the packaged application without publishing or installing it.
 
 Run the manual [Linux Debian package workflow](https://github.com/sebiimaks/Theatrum-Ex-Machina/actions/workflows/linux-deb.yml) to build natively on GitHub's Ubuntu 22.04 AMD64 runner. The workflow compiles the reviewed FFmpeg and x264 sources for Linux, runs the static and automated test suites, builds and installs the `.deb`, verifies its architecture, linkage, application contents, desktop integration, licensing and matching corresponding source, exercises media extraction, starts the packaged app under Xvfb, and verifies SHA-256 checksums.
 
