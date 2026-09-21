@@ -1,34 +1,47 @@
-<div
-  (click)="closeRename.emit()"
-  [ngClass]="{ 'close-rename-dark': settingsButtons().darkMode.toggled }"
-  class="close-settings close-rename"
-  title="{{ 'RIGHTCLICK.cancelRename' | translate }}"
->
-  <app-icon class="close-modal-icon" [icon]="'icon-close'" />
-</div>
+<section cdkTrapFocus [cdkTrapFocusAutoCapture]="true"
+  appDialogKeyboard (dialogEscape)="requestClose()"
+  class="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-dialog-title" aria-describedby="rename-dialog-help">
+  <header class="rename-dialog-heading">
+    <div>
+      <h1 id="rename-dialog-title">{{ 'RIGHTCLICK.renameFile' | translate }}</h1>
+      <p id="rename-dialog-help">{{ 'WORKBENCH.renameFileHelp' | translate }}</p>
+    </div>
+    <button
+      type="button"
+      (click)="requestClose()"
+      [attr.aria-disabled]="renameFile()?.nodeRenamingFile"
+      class="close-rename"
+      title="{{ 'RIGHTCLICK.cancelRename' | translate }}"
+      [attr.aria-label]="'RIGHTCLICK.cancelRename' | translate"
+    >
+      <app-icon [icon]="'icon-close'" [size]="18" />
+    </button>
+  </header>
 
-<span class="rename-heading">{{ 'RIGHTCLICK.renameTitle' | translate }}</span>
+  <div class="rename-preview">
+    <app-filmstrip-item
+      [darkMode]="settingsButtons().darkMode.toggled"
+      [elHeight]="150"
+      [folderPath]="appState().selectedOutputFolder"
+      [hoverScrub]="true"
+      [hubName]="appState().hubName"
+      [imgHeight]="100"
+      [largerFont]="true"
+      [showMeta]="true"
+      [video]="currentRightClickedItem()"
+    />
+  </div>
 
-<app-filmstrip-item
-  [darkMode]="settingsButtons().darkMode.toggled"
-  [elHeight]="150"
-  [folderPath]="appState().selectedOutputFolder"
-  [hoverScrub]="true"
-  [hubName]="appState().hubName"
-  [imgHeight]="100"
-  [largerFont]="true"
-  [showMeta]="true"
-  [video]="currentRightClickedItem()"
- />
+  <div class="rename-current">
+    <span>{{ 'WORKBENCH.currentFilename' | translate }}</span>
+    <code>{{ currentRightClickedItem().fileName }}</code>
+  </div>
 
-<span class="rename-from">{{ 'RIGHTCLICK.renameFrom' | translate }}</span>
-<span class="rename-to">{{ 'RIGHTCLICK.renameTo' | translate }}</span>
-
-<app-rename-file
-  [selectedSourceFolder]="basePath()"
-  [currentRightClickedItem]="currentRightClickedItem()"
-  [macVersion]="macVersion()"
-  [darkMode]="settingsButtons().darkMode.toggled"
-
-  [renameResponse]="renameResponse().asObservable()"
- />
+  <app-rename-file
+    [selectedSourceFolder]="basePath()"
+    [currentRightClickedItem]="currentRightClickedItem()"
+    [macVersion]="macVersion()"
+    [darkMode]="settingsButtons().darkMode.toggled"
+    [renameResponse]="renameResponse().asObservable()"
+  />
+</section>

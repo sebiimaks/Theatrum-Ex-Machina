@@ -9,6 +9,7 @@ import { NgModule } from '@angular/core';
 import { AppRoutingModule } from './app-routing.module';
 
 // External
+import { A11yModule } from '@angular/cdk/a11y';
 import { MatDialogModule } from '@angular/material/dialog';
 import { MatSnackBarModule } from '@angular/material/snack-bar';
 import { TranslateModule } from '@ngx-translate/core';
@@ -38,6 +39,7 @@ import { ButtonComponent } from './components/button/button.component';
 import { CatalogueEditorComponent } from './components/catalogue-editor/catalogue-editor.component';
 import { ClipComponent } from './components/views/clip/clip.component';
 import { DetailsComponent } from './components/views/details/details.component';
+import { DialogKeyboardDirective } from './components/dialog-keyboard.directive';
 import { DonutComponent } from './components/donut/donut.component';
 import { FileComponent } from './components/views/file/file.component';
 import { FilmstripComponent } from './components/views/filmstrip/filmstrip.component';
@@ -94,6 +96,7 @@ import { MagicSearchPipe } from './pipes/magic-search.pipe';
 import { ManualTagSortPipe } from './pipes/manual-tags-sort.pipe';
 import { PlaylistOnlyPipe } from './pipes/playlist-only.pipe';
 import { PlaylistPipe } from './pipes/playlist.pipe';
+import { RecentlyPlayedOnlyPipe } from './pipes/recently-played-only.pipe';
 import { RegexSearchPipe } from './pipes/regex-search.pipe';
 import { ResolutionFilterPipe } from './pipes/resolution-filter.pipe';
 import { ReturnZeroPipe } from './pipes/return-zero.pipe';
@@ -130,6 +133,7 @@ import { YearPipe } from './pipes/year.pipe';
     CountPipe,
     DeleteFilePipe,
     DetailsComponent,
+    DialogKeyboardDirective,
     DonutComponent,
     DuplicateFinderPipe,
     FavoritesOnlyPipe,
@@ -155,6 +159,7 @@ import { YearPipe } from './pipes/year.pipe';
     PlaylistOnlyPipe,
     PlaylistPipe,
     RecentlyOpenedComponent,
+    RecentlyPlayedOnlyPipe,
     RegexSearchPipe,
     RenameFileComponent,
     RenameModalComponent,
@@ -200,6 +205,7 @@ import { YearPipe } from './pipes/year.pipe';
     YearPipe,
   ],
   imports: [
+    A11yModule,
     AppRoutingModule,
     BrowserAnimationsModule,
     BrowserModule,

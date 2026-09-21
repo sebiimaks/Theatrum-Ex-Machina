@@ -1607,7 +1607,11 @@ trustedIpcOn('renderer-startup-complete', () => {
 /**
  * Start extracting the screenshots into a chosen output folder from a chosen input folder
  */
-trustedIpcOn('start-the-import', (event, wizard: WizardOptions) => {
+trustedIpcOn('start-the-import', (
+  event,
+  wizard: WizardOptions,
+  finalObjectToSave: FinalObject | null = null,
+) => {
 
   if (
     catalogueOpenOperationActive
@@ -1690,69 +1694,121 @@ trustedIpcOn('start-the-import', (event, wizard: WizardOptions) => {
     event.sender.send('please-fix-hub-name');
     finishCatalogueOpenOperation(operationGeneration);
   } else {
+    const createCatalogue = (): void => {
+      assertCurrentCatalogueOpenOperation(operationGeneration);
+      try {
+        console.log('Catalogue asset folder did not exist, creating');
+        fs.mkdirSync(hubAssetsDirectory);
+        fs.mkdirSync(path.join(hubAssetsDirectory, 'filmstrips'));
+        fs.mkdirSync(path.join(hubAssetsDirectory, 'thumbnails'));
+        fs.mkdirSync(path.join(hubAssetsDirectory, 'clips'));
+      } catch (error) {
+        removeEmptyCatalogueAssetFolders(hubAssetsDirectory);
+        const directoryError = error instanceof Error ? error.message : String(error);
+        void dialog.showMessageBox(win, {
+          buttons: ['OK'],
+          detail: directoryError,
+          message: 'The catalogue asset folders could not be created.',
+          title: 'Catalogue Creation Failed',
+          type: 'error',
+        });
+        finishCatalogueOpenOperation(operationGeneration);
+        return;
+      }
 
-    try {
-      console.log('Catalogue asset folder did not exist, creating');
-      fs.mkdirSync(hubAssetsDirectory);
-      fs.mkdirSync(path.join(hubAssetsDirectory, 'filmstrips'));
-      fs.mkdirSync(path.join(hubAssetsDirectory, 'thumbnails'));
-      fs.mkdirSync(path.join(hubAssetsDirectory, 'clips'));
-    } catch (error) {
-      removeEmptyCatalogueAssetFolders(hubAssetsDirectory);
-      const directoryError = error instanceof Error ? error.message : String(error);
-      void dialog.showMessageBox(win, {
-        buttons: ['OK'],
-        detail: directoryError,
-        message: 'The catalogue asset folders could not be created.',
-        title: 'Catalogue Creation Failed',
-        type: 'error',
+      let sourceCanonicalPath: string;
+      try {
+        sourceCanonicalPath = fs.realpathSync.native(sourceRoot);
+      } catch (error) {
+        removeEmptyCatalogueAssetFolders(hubAssetsDirectory);
+        const sourceError = error instanceof Error ? error.message : String(error);
+        void dialog.showMessageBox(win, {
+          buttons: ['OK'],
+          detail: sourceError,
+          message: 'The selected source folder is no longer available.',
+          title: 'Catalogue Creation Failed',
+          type: 'error',
+        });
+        finishCatalogueOpenOperation(operationGeneration);
+        return;
+      }
+
+      const finalObject: FinalObject = {
+        addTags: [],
+        hubName,
+        images: [],
+        inputDirs: { 0: { path: sourceRoot, watch: false } },
+        numOfFolders: 0,
+        removeTags: [],
+        screenshotSettings: sanitizeScreenshotSettings({
+          clipHeight: wizard.clipHeight,
+          clipSnippetLength: wizard.clipSnippetLength,
+          clipSnippets: wizard.extractClips ? wizard.clipSnippets : 0,
+          fixed: wizard.isFixedNumberOfScreenshots,
+          height: wizard.screenshotSizeForImport,
+          n: wizard.isFixedNumberOfScreenshots ? wizard.ssConstant : wizard.ssVariable,
+        }),
+        version: GLOBALS.vhaFileVersion,
+      };
+
+      writeVhaFileAndStartExtraction(operationGeneration, {
+        assetDirectory: hubAssetsDirectory,
+        finalObject,
+        outputDirectory: outDir,
+        sourceCanonicalPath,
+        sourceRoot,
       });
-      finishCatalogueOpenOperation(operationGeneration);
-      return;
-    }
-
-    let sourceCanonicalPath: string;
-    try {
-      sourceCanonicalPath = fs.realpathSync.native(sourceRoot);
-    } catch (error) {
-      removeEmptyCatalogueAssetFolders(hubAssetsDirectory);
-      const sourceError = error instanceof Error ? error.message : String(error);
-      void dialog.showMessageBox(win, {
-        buttons: ['OK'],
-        detail: sourceError,
-        message: 'The selected source folder is no longer available.',
-        title: 'Catalogue Creation Failed',
-        type: 'error',
-      });
-      finishCatalogueOpenOperation(operationGeneration);
-      return;
-    }
-
-    const finalObject: FinalObject = {
-      addTags: [],
-      hubName,
-      images: [],
-      inputDirs: { 0: { path: sourceRoot, watch: false } },
-      numOfFolders: 0,
-      removeTags: [],
-      screenshotSettings: sanitizeScreenshotSettings({
-        clipHeight: wizard.clipHeight,
-        clipSnippetLength: wizard.clipSnippetLength,
-        clipSnippets: wizard.extractClips ? wizard.clipSnippets : 0,
-        fixed: wizard.isFixedNumberOfScreenshots,
-        height: wizard.screenshotSizeForImport,
-        n: wizard.isFixedNumberOfScreenshots ? wizard.ssConstant : wizard.ssVariable,
-      }),
-      version: GLOBALS.vhaFileVersion,
     };
 
-    writeVhaFileAndStartExtraction(operationGeneration, {
-      assetDirectory: hubAssetsDirectory,
-      finalObject,
-      outputDirectory: outDir,
-      sourceCanonicalPath,
-      sourceRoot,
-    });
+    // Preserve the current renderer document before publishing a new catalogue.
+    // Validate it against the still-active main-owned source/media authority;
+    // never let wizard selections become the authority for the old document.
+    if (finalObjectToSave !== null && GLOBALS.catalogueAccessMode === 'read-write') {
+      const saveFailed = (error: unknown): void => {
+        const detail = error instanceof Error ? error.message : String(error);
+        void dialog.showMessageBox(win, {
+          buttons: ['OK'],
+          detail,
+          message: 'The current catalogue could not be saved, so the new catalogue was not created.',
+          title: 'Catalogue Save Failed',
+          type: 'error',
+        });
+        event.sender.send('current-vha-file-save-failed', detail);
+        finishCatalogueOpenOperation(operationGeneration);
+      };
+      let authorizedFinalObject: FinalObject;
+      let nextMediaAuthority: Set<string>;
+      try {
+        if (!GLOBALS.currentlyOpenVhaFile) {
+          throw new Error('There is no current catalogue to save.');
+        }
+        authorizedFinalObject = prepareAuthorizedCatalogueWrite(
+          finalObjectToSave,
+          GLOBALS.selectedSourceFolders,
+          GLOBALS.hubName,
+        );
+        nextMediaAuthority = reconcileRendererCatalogueMediaAuthority(authorizedFinalObject.images);
+      } catch (error) {
+        saveFailed(error);
+        return;
+      }
+
+      writeVhaFileToDisk(authorizedFinalObject, GLOBALS.currentlyOpenVhaFile, (error: Error) => {
+        if (!isCurrentCatalogueOpenOperation(operationGeneration)) {
+          return;
+        }
+        if (error) {
+          saveFailed(error);
+          return;
+        }
+        reconcileSourceFoldersBeforeCatalogueSwitch(authorizedFinalObject.inputDirs);
+        GLOBALS.authorizedCatalogueImageHashes = catalogueMediaAuthorityHashes(nextMediaAuthority);
+        GLOBALS.authorizedCatalogueMediaLocations = nextMediaAuthority;
+        createCatalogue();
+      });
+    } else {
+      createCatalogue();
+    }
   }
 
 });

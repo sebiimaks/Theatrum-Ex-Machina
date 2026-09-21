@@ -15,7 +15,8 @@
 }
 
 @for (item of (showRecentNotSimilar()
-               ? (imageElementService.imageElements | sortingPipe : 'lastPlayedDesc' : currentClickedItemName()
+               ? (imageElementService.imageElements | recentlyPlayedOnlyPipe : true : playbackRevision()
+                                                    | sortingPipe : 'lastPlayedDesc' : playbackRevision()
                                                     | slice : 0 : 12)
                : (imageElementService.imageElements | similarityPipe : true : currentClickedItemName()
                                                     | slice : 0 : 12)
@@ -47,14 +48,14 @@
 }
 
   @if(showRecentNotSimilar()) {
-    <div
+    <button type="button"
       (click)="showMoreRecentlyPlayed.emit()"
       class="more"
     >
       <span>
         {{ 'TAGS.showMore' | translate }}
       </span>
-    </div>
+    </button>
   }
 
 </div>

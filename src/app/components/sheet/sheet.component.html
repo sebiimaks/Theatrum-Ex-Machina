@@ -1,101 +1,145 @@
 <div
   class="sheet-modal"
+  cdkTrapFocus [cdkTrapFocusAutoCapture]="true"
+  appDialogKeyboard (dialogEscape)="closeSheet.emit()"
   [ngClass]="{ 'sheet-modal-dark-mode': darkMode() }"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="video-inspector-title"
 >
+  <header class="sheet-heading">
+    <div>
+      <span class="sheet-eyebrow">{{ 'WORKBENCH.details' | translate }}</span>
+      <h2 id="video-inspector-title">{{ 'WORKBENCH.inspectorTitle' | translate }}</h2>
+    </div>
+    <div class="sheet-dismiss-controls">
+      <span class="sheet-dismiss-hint"><kbd>Esc</kbd> {{ 'WORKBENCH.closeInspectorHint' | translate }}</span>
+      <button type="button" class="sheet-close-button" cdkFocusInitial (click)="closeSheet.emit()">
+        <span>{{ 'WORKBENCH.closeInspector' | translate }}</span>
+        <app-icon [icon]="'icon-close'" [size]="13" />
+      </button>
+    </div>
+  </header>
 
-  <app-meta-item
-    class="meta-container"
-    (filterTag)="filterTag.emit($event)"
+  <section class="sheet-information" [attr.aria-label]="'WORKBENCH.inspectorMetadata' | translate">
+    <app-meta-item
+      class="meta-container"
+      (filterTag)="filterTag.emit($event)"
 
-    [video]="video()"
+      [video]="video()"
 
-    [imgHeight]="imgHeight()"
-    [star]="star()"
+      [imgHeight]="imgHeight()"
+      [star]="star()"
 
-    [darkMode]="darkMode()"
-    [largerFont]="largerFont()"
-    [showAutoFileTags]="showAutoFileTags()"
-    [showAutoFolderTags]="showAutoFolderTags()"
-    [showManualTags]="showManualTags()"
-    [individualTagSegments]="true"
-    [showMeta]="showMeta()"
-    [showVideoNotes]="showVideoNotes()"
+      [darkMode]="darkMode()"
+      [largerFont]="largerFont()"
+      [showAutoFileTags]="showAutoFileTags()"
+      [showAutoFolderTags]="showAutoFolderTags()"
+      [showManualTags]="showManualTags()"
+      [individualTagSegments]="true"
+      [showMeta]="showMeta()"
+      [showVideoNotes]="showVideoNotes()"
+      [notesPlaceholder]="'WORKBENCH.addVideoNotes'"
 
-    [selectedSourceFolder]="selectedSourceFolder()"
-    [renameResponse]="renameResponse().asObservable()"
-   />
+      [selectedSourceFolder]="selectedSourceFolder()"
+      [renameResponse]="renameResponse().asObservable()"
+    />
+  </section>
 
-  <div class="details-zoom-buttons">
-
-    <button
-      (click)="decreaseZoomLevel()"
-      class="defaultSettingsButton"
-      [ngClass]="{ 'defaultSettingsButtonDark': darkMode() }"
-    >
-      <app-icon [icon]="'icon-minus'" [size]="15" />
-    </button>
-
-    <button
-      (click)="resetZoomLevel()"
-      class="defaultSettingsButton reset-button"
-      [ngClass]="{ 'defaultSettingsButtonDark': darkMode() }"
-    >
-      <span>{{ 'SETTINGS.resetZoom' | translate }}</span>
-    </button>
-
-    <button
-      (click)="increaseZoomLevel()"
-      class="defaultSettingsButton"
-      [ngClass]="{ 'defaultSettingsButtonDark': darkMode() }"
-    >
-      <app-icon [icon]="'icon-plus'" [size]="15" />
-    </button>
-
-  </div>
-
-  <div
+  <button
+    type="button"
     class="full-path"
     [ngClass]="{ 'dark-path': darkMode() }"
     (click)="copyToClipboard()"
     title="{{ 'BUTTONS.copyToClipboard' | translate }}"
+    [attr.aria-label]="('BUTTONS.copyToClipboard' | translate) + ': ' + pathToVideoFile"
   >
-    <div class="copy-to-clipboard">
-      <app-icon [icon]="'icon-clipboard'" />
+    <span class="path-content">
+      <span class="path-label">{{ 'WORKBENCH.fileLocation' | translate }}</span>
+      <span class="path-value" [innerHtml]="pathToVideoFile | folderArrowsPipe"></span>
+    </span>
+    <app-icon class="copy-to-clipboard" [icon]="'icon-clipboard'" />
+  </button>
+
+  <div class="sheet-preview-heading">
+    <div>
+      <h3>{{ 'WORKBENCH.previewFrames' | translate }}</h3>
+      <p id="sheet-frame-playback-help">{{ 'WORKBENCH.framePlaybackHelp' | translate }}</p>
     </div>
-    <span [innerHtml]="pathToVideoFile | folderArrowsPipe"></span>
+    <div class="details-zoom-buttons" role="group" [attr.aria-label]="'WORKBENCH.previewSize' | translate">
+      <button
+        type="button"
+        (click)="decreaseZoomLevel()"
+        class="defaultSettingsButton"
+        [ngClass]="{ 'defaultSettingsButtonDark': darkMode() }"
+        [disabled]="thumbnailsToDisplay >= 10"
+        [attr.aria-label]="'BUTTONS.makeSmallerDescription' | translate"
+        [attr.title]="'BUTTONS.makeSmallerDescription' | translate"
+      >
+        <app-icon [icon]="'icon-minus'" [size]="15" />
+      </button>
+      <button
+        type="button"
+        (click)="resetZoomLevel()"
+        class="defaultSettingsButton reset-button"
+        [ngClass]="{ 'defaultSettingsButtonDark': darkMode() }"
+      >
+        <span>{{ 'SETTINGS.resetZoom' | translate }}</span>
+      </button>
+      <button
+        type="button"
+        (click)="increaseZoomLevel()"
+        class="defaultSettingsButton"
+        [ngClass]="{ 'defaultSettingsButtonDark': darkMode() }"
+        [disabled]="thumbnailsToDisplay <= 1"
+        [attr.aria-label]="'BUTTONS.makeLargerDescription' | translate"
+        [attr.title]="'BUTTONS.makeLargerDescription' | translate"
+      >
+        <app-icon [icon]="'icon-plus'" [size]="15" />
+      </button>
+    </div>
   </div>
 
-  @for (i of arrayHack; track i) {
-    <div
-      [ngStyle]="{
+  <div class="sheet-previews">
+    @for (i of arrayHack; track i) {
+      <div
+        [ngStyle]="{
           height: 'calc((72vw / ' + thumbnailsToDisplay + ') * (9 / 16))',
           width: 'calc(72vw / ' + thumbnailsToDisplay + ')',
           padding: 'calc(2% / ' + thumbnailsToDisplay + ')'
         }"
-      class="filmstrip-container"
-    >
-      <div class="video-box">
-        <img
-          (click)="openVideoAtTime.emit({ mouseEvent: $event, thumbIndex: i })"
-          class="full-filmstrip"
-          [ngStyle]="{ height: '100%',
-                      transform: 'translate(' + (-percentOffset * i) + '%, 0)' }"
-          src="{{ pathToFilmstripJpg }}"
-        >
-        <div
-          class="set-favorite-thumb"
-          (click)="setDefaultScreenshot($event, i)"
-          [ngClass]="{ 'star-selected' : video().defaultScreen === i }"
-          title="{{ 'BUTTONS.setFavoriteThumb' | translate }}"
-        >
-          <app-icon [icon]="'icon-star'" />
+        class="filmstrip-container"
+      >
+        <div class="video-box">
+          <button
+            type="button"
+            class="frame-play"
+            aria-describedby="sheet-frame-playback-help"
+            (click)="openVideoAtTime.emit({ mouseEvent: $event, thumbIndex: i })"
+            [attr.aria-label]="'WORKBENCH.playFromTime' | translate: { time: ((video().duration / (video().screens + 1)) * (i+1) | lengthPipe) }"
+          >
+            <img
+              class="full-filmstrip"
+              [ngStyle]="{ height: '100%', transform: 'translate(' + (-percentOffset * i) + '%, 0)' }"
+              src="{{ pathToFilmstripJpg() }}"
+              alt=""
+            >
+            <span class="frame-play-symbol" aria-hidden="true"><app-icon [icon]="'icon-play'" [size]="24" /></span>
+            <span class="time">{{ (video().duration / (video().screens + 1)) * (i+1) | lengthPipe }}</span>
+          </button>
+          <button
+            type="button"
+            class="set-favorite-thumb"
+            (click)="setDefaultScreenshot($event, i)"
+            [ngClass]="{ 'star-selected': video().defaultScreen === i }"
+            [attr.aria-pressed]="video().defaultScreen === i"
+            [attr.aria-label]="('BUTTONS.setFavoriteThumb' | translate) + ': ' + ((video().duration / (video().screens + 1)) * (i+1) | lengthPipe)"
+            title="{{ 'BUTTONS.setFavoriteThumb' | translate }}"
+          >
+            <app-icon [icon]="'icon-star'" [size]="15" />
+          </button>
         </div>
-
-        <span class="time">
-          {{ (video().duration / (video().screens + 1)) * (i+1) | lengthPipe }}
-        </span>
-
       </div>
-    </div>
-  }
+    }
+  </div>
 </div>

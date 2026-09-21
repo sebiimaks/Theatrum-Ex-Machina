@@ -17,8 +17,13 @@
   box-sizing: border-box;
   color: var(--app-text-primary);
   font-size: 12px;
-  overflow: hidden;
-  position: absolute;
+  max-height: calc(100dvh - var(--app-context-menu-y, 0px));
+  max-width: calc(100vw - var(--app-context-menu-x, 0px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  position: fixed;
   z-index: 30;
 
   ul {
@@ -26,12 +31,28 @@
     padding: 10px;
 
     li {
-      cursor: pointer;
       list-style-type: none;
-      padding: 6px;
+    }
+
+    button {
+      background: transparent;
+      border: 0;
+      border-radius: var(--app-control-radius);
+      color: inherit;
+      cursor: pointer;
+      display: block;
+      font: inherit;
+      padding: 8px;
+      text-align: left;
+      width: 100%;
       transition: background-color var(--app-motion-fast), color var(--app-motion-fast);
 
-      &:hover {
+      &:focus-visible {
+        outline: 2px solid var(--app-accent);
+        outline-offset: -2px;
+      }
+
+      &:hover:not(:disabled) {
         background: var(--app-control-hover);
         color: var(--app-accent-text);
       }
@@ -53,7 +74,7 @@
 
   .right-click-disabled {
     color: var(--app-text-secondary);
-    pointer-events: none;
+    cursor: default;
   }
 }
 

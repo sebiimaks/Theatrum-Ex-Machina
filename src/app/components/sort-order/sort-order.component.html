@@ -11,6 +11,7 @@
 >
   <select
     #sortFilterElement
+    [attr.aria-label]="'WORKBENCH.sortVideos' | translate"
     (change)="sortTypeChange.emit($any(sortFilterElement).value)"
     class="language-drop-down sort-dropdown"
     [ngClass]="{ 'sort-dropdown-dark-mode': settingsButtons['darkMode'].toggled }"

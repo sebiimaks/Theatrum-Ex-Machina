@@ -5,8 +5,8 @@ import { join } from 'path';
 
 import {
   SettingsButtons,
-  SettingsSections,
 } from '../src/app/common/settings-buttons';
+import { SettingsWorkspaceCategories } from '../src/app/common/settings-workspace';
 
 const repositoryRoot = join(__dirname, '..');
 
@@ -14,22 +14,23 @@ function source(path: string): string {
   return readFileSync(join(repositoryRoot, path), 'utf8');
 }
 
-test('presents every setting exactly once in explicit review-ledger sections', () => {
+test('presents every setting exactly once in categorized responsive settings cards', () => {
   const template = source('src/app/components/settings/settings.component.html');
   const styles = source('src/app/components/settings/settings.component.scss');
-  const sectionKeys = SettingsSections.flatMap((tab) => (
-    tab.flatMap((section) => section.buttonKeys)
+  const sectionKeys = SettingsWorkspaceCategories.flatMap((category) => (
+    category.sections.flatMap((section) => section.buttonKeys)
   ));
 
   assert.equal(sectionKeys.length, Object.keys(SettingsButtons).length);
   assert.equal(new Set(sectionKeys).size, sectionKeys.length);
-  assert.match(template, /class="settings-ledger__index"/);
-  assert.match(template, /formatSectionIndex\(sectionIndex\)/);
-  assert.match(template, /class="settings-ledger__section-content"/);
-  assert.match(template, /class="settings-ledger__column-headings"/);
+  assert.deepEqual([...sectionKeys].sort(), Object.keys(SettingsButtons).sort());
+  assert.match(template, /@for \(section of sections; track section\.id\)/);
+  assert.match(template, /class="settings-card" \[attr\.aria-labelledby\]="'settings-section-' \+ section\.id"/);
+  assert.match(template, /class="settings-card__toolbar-label"/);
+  assert.match(template, /@if \(searchQuery\(\)\.trim\(\) && !sections\.length/);
   assert.doesNotMatch(template, /<br\s*\/?\s*>/i);
-  assert.match(styles, /grid-template-columns:\s*140px minmax\(0, 1fr\)/);
-  assert.match(styles, /@media \(max-width: 560px\)[\s\S]*grid-template-columns:\s*1fr/);
+  assert.match(styles, /grid-template-columns:\s*minmax\(0, 1fr\) 90px 36px/);
+  assert.match(styles, /@media \(max-width: 600px\)[\s\S]*\.settings-row__copy\s*\{\s*grid-column:\s*1 \/ -1/);
 });
 
 test('optionally shows clean names inside compact thumbnails without changing card dimensions', () => {
@@ -37,10 +38,12 @@ test('optionally shows clean names inside compact thumbnails without changing ca
   const thumbnailTemplate = source('src/app/components/views/thumbnail/thumbnail.component.html');
   const thumbnailComponent = source('src/app/components/views/thumbnail/thumbnail.component.ts');
   const thumbnailStyles = source('src/app/components/views/thumbnail/thumbnail.component.scss');
+  const galleryStyles = source('src/app/components/views/workbench-gallery.scss');
   const settingsTemplate = source('src/app/components/settings/settings.component.html');
   const settingsStyles = source('src/app/components/settings/settings.component.scss');
   const english = JSON.parse(source('i18n/en.json'));
-  const layoutSection = SettingsSections[1].find((section) => section.heading === 'SETTINGS.miscView');
+  const layoutSection = SettingsWorkspaceCategories.find((category) => category.id === 'gallery')
+    ?.sections.find((section) => section.id === 'gallery-layout');
 
   assert.ok(layoutSection);
   assert.equal(
@@ -55,8 +58,8 @@ test('optionally shows clean names inside compact thumbnails without changing ca
     english.BUTTONS.showCleanNameInCompactViewDescription,
     'Show clean name in compact view',
   );
-  assert.match(settingsTemplate, /\[class\.settings-ledger__row--nested\]/);
-  assert.match(settingsStyles, /\.settings-ledger__row--nested/);
+  assert.match(settingsTemplate, /\[class\.settings-row--nested\]/);
+  assert.match(settingsStyles, /\.settings-row--nested/);
 
   assert.equal((homeTemplate.match(/\[showCleanNameInCompactView\]/g) || []).length, 1);
   assert.match(
@@ -75,64 +78,86 @@ test('optionally shows clean names inside compact thumbnails without changing ca
   );
   assert.match(
     thumbnailStyles,
-    /\.compact-clean-name\s*\{[^}]*bottom:\s*2px[^}]*max-width:[^}]*pointer-events:\s*none[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/,
+    /\.compact-clean-name\s*\{[^}]*pointer-events:\s*none[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/,
   );
   assert.equal((thumbnailTemplate.match(/\[class\.compact-meta-line\]/g) || []).length, 2);
   assert.match(
-    thumbnailStyles,
-    /\.compact-meta-line\s*\{[^}]*bottom:\s*17px/,
+    galleryStyles,
+    /\.compact-meta-line\s*\{[^}]*bottom:\s*22px/,
   );
 
   assert.match(
     thumbnailTemplate,
     /\[class\.playlist-icon--after-heart\]="showFavorites\(\)"/,
   );
-  const playlistRule = thumbnailStyles.match(/\.playlist-icon\s*\{([^}]*)\}/)?.[1];
+  const playlistRule = galleryStyles.match(/\.playlist-icon\s*\{([^}]*)\}/)?.[1];
   assert.ok(playlistRule);
-  assert.match(playlistRule, /left:\s*3px/);
-  assert.match(playlistRule, /top:\s*3px/);
+  assert.match(playlistRule, /left:\s*5px/);
+  assert.match(galleryStyles, /\.workbench-gallery-action\s*\{[^}]*height:\s*26px[\s\S]*top:\s*5px/);
   assert.doesNotMatch(playlistRule, /bottom:|right:/);
   assert.match(
-    thumbnailStyles,
-    /\.playlist-icon--after-heart\s*\{[^}]*left:\s*23px/,
+    galleryStyles,
+    /\.playlist-icon--after-heart\s*\{[^}]*left:\s*35px/,
   );
 });
 
-test('keeps setting actions, toolbar visibility, and Main Settings controls wired', () => {
+test('keeps native setting controls, independent toolbar visibility, and custom controls wired', () => {
   const template = source('src/app/components/settings/settings.component.html');
+  const sections = SettingsWorkspaceCategories.flatMap((category) => category.sections);
 
-  assert.match(template, /\(toggleButton\)="toggleButton\.emit\(\$event\)"/);
-  assert.match(template, /\(click\)="toggleHideButton\.emit\(buttonKey\)"/);
+  assert.match(template, /role="switch"[\s\S]*\[attr\.aria-checked\]="settingsButtons\[buttonKey\]\.toggled" \(click\)="toggleButton\.emit\(buttonKey\)"/);
+  assert.match(template, /\[attr\.aria-labelledby\]="'setting-label-' \+ buttonKey"/);
+  assert.match(template, /class="settings-pin"[\s\S]*\[attr\.aria-pressed\]="!settingsButtons\[buttonKey\]\.hidden"[\s\S]*\(click\)="toggleHideButton\.emit\(buttonKey\)"/);
+  assert.match(template, /@if \(isAction\(buttonKey\)\)/);
+  assert.match(template, /@else if \(isView\(buttonKey\)\)/);
+  assert.equal((template.match(/\(click\)="toggleButton\.emit\(buttonKey\)"/g) || []).length, 3);
+  assert.equal((template.match(/\(click\)="toggleHideButton\.emit\(buttonKey\)"/g) || []).length, 1);
   assert.match(template, /\(click\)="chooseDefaultVideoPlayer\.emit\(\)"/);
+  assert.match(template, /\(click\)="appState\.preferredVideoPlayer = ''"/);
   assert.doesNotMatch(template, /\[\(ngModel\)\]="appState\.videoPlayerArgs"/);
   assert.match(template, /\[\(ngModel\)\]="additionalInput"/);
+  assert.match(template, /\(click\)="editAdditionalExtensions\(\)"/);
+  assert.match(template, /\(click\)="applyAdditionalExtensions\(\)"/);
   assert.match(template, /\(click\)="decreaseZoomLevel\.emit\(\)"/);
   assert.match(template, /\(click\)="resetZoomLevel\.emit\(\)"/);
   assert.match(template, /\(click\)="increaseZoomLevel\.emit\(\)"/);
-  assert.match(template, /aria-label="Decrease zoom"[\s\S]*class="zoom-icon-button"/);
-  assert.match(template, /class="zoom-control-symbol" aria-hidden="true">−<\/span>/);
-  assert.match(template, /aria-label="Increase zoom"[\s\S]*class="zoom-icon-button"/);
-  assert.match(template, /class="zoom-control-symbol" aria-hidden="true">\+<\/span>/);
-  assert.equal((template.match(/'SETTINGS\.changeAppZoom'/g) || []).length, 1);
-  assert.equal((template.match(/'SETTINGS\.changeLanguage'/g) || []).length, 1);
-  assert.equal((template.match(/settings-ledger__detail-row--controls-only/g) || []).length, 2);
-  assert.match(template, /\(change\)="changeLanguage\.emit\(langSelect\.value\)"/);
+  assert.match(template, /\[attr\.aria-label\]="'WORKBENCH\.decreaseZoom' \| translate"[^>]*><span aria-hidden="true">−<\/span>/);
+  assert.match(template, /\[attr\.aria-label\]="'WORKBENCH\.increaseZoom' \| translate"[^>]*><span aria-hidden="true">\+<\/span>/);
+  assert.equal(sections.filter((section) => section.heading === 'SETTINGS.changeAppZoom' && section.kind === 'zoom').length, 1);
+  assert.equal(sections.filter((section) => section.heading === 'SETTINGS.changeLanguage' && section.kind === 'language').length, 1);
+  assert.match(template, /<select id="settings-language" \[ngModel\]="appState\.language" \(ngModelChange\)="changeLanguage\.emit\(\$event\)">/);
+  assert.match(template, /<option \[value\]="language\[0\]">\{\{ language\[1\] \}\}<\/option>/);
   assert.match(template, /openExternalLink\(\$event, 'https:\/\/github\.com\/sebiimaks\/Theatrum-Ex-Machina'\)/);
 });
 
-test('uses one keyboard-accessible five-tab settings shell', () => {
+test('uses one keyboard-accessible vertical settings navigation with all eleven categories', () => {
   const template = source('src/app/components/home.component.html');
   const component = source('src/app/components/home.component.ts');
 
-  assert.equal((template.match(/role="tab"/g) || []).length, 5);
-  assert.match(template, /role="tablist"/);
+  assert.equal(SettingsWorkspaceCategories.length, 11);
+  assert.deepEqual(SettingsWorkspaceCategories.map((category) => category.id), [
+    'appearance', 'gallery', 'playback', 'search', 'sorting', 'tags',
+    'library', 'import', 'shortcuts', 'maintenance', 'about',
+  ]);
+  assert.match(component, /settingsCategories = SettingsWorkspaceCategories/);
+  assert.match(template, /@for \(category of settingsCategories; track category\.id\)/);
+  assert.equal((template.match(/role="tab"/g) || []).length, 1);
+  assert.match(template, /role="tablist" aria-orientation="vertical"/);
   assert.match(template, /role="tabpanel"/);
-  assert.equal((template.match(/\[attr\.tabindex\]/g) || []).length, 5);
-  assert.equal((template.match(/onSettingsTabKeydown\(\$event\)/g) || []).length, 5);
+  assert.match(template, /\[attr\.aria-selected\]="settingCategory === category\.id"/);
+  assert.match(template, /\[attr\.tabindex\]="settingCategory === category\.id \? 0 : -1"/);
+  assert.equal((template.match(/onSettingsTabKeydown\(\$event\)/g) || []).length, 1);
+  assert.match(component, /event\.key === 'ArrowDown'/);
+  assert.match(component, /event\.key === 'ArrowUp'/);
   assert.match(component, /event\.key === 'ArrowRight'/);
   assert.match(component, /event\.key === 'ArrowLeft'/);
   assert.match(component, /event\.key === 'Home'/);
   assert.match(component, /event\.key === 'End'/);
+  assert.match(component, /getElementById\('settings-tab-' \+ this\.settingCategory\)\?\.focus\(\)/);
+  assert.match(template, /\[settingCategory\]="settingCategory"/);
+  assert.match(template, /\[searchQuery\]="settingsSearchQuery"/);
+  assert.match(template, /@if \(settingCategory === 'library' && !settingsSearchQuery\.trim\(\)\) \{[\s\S]*<app-statistics/);
+  assert.match(template, /@if \(settingCategory === 'shortcuts' && !settingsSearchQuery\.trim\(\)\) \{[\s\S]*<app-shortcuts/);
 });
 
 test('keeps Current Hub operations inside three responsive ledger sections', () => {
@@ -277,7 +302,9 @@ test('queues external catalogue opens and visibly blocks read-only context mutat
   assert.match(homeComponent, /channel === 'regenerate-thumbnails'/);
   assert.match(homeComponent, /channel === 'regenerate-folder-thumbnails'/);
 
-  const disabledContextItems = homeTemplate.match(/\[attr\.aria-disabled\]="catalogueReadOnly/g) || [];
+  const contextMenuStart = homeTemplate.indexOf('class="right-click-menu"');
+  const contextMenu = homeTemplate.slice(contextMenuStart, homeTemplate.indexOf('@if (sheetOverlayShowing)', contextMenuStart));
+  const disabledContextItems = contextMenu.match(/\[disabled\]="catalogueReadOnly/g) || [];
   assert.equal(disabledContextItems.length, 3);
   assert.match(homeTemplate, /beginRenameFromContextMenu\(\)/);
   assert.match(translations, /"catalogueLoadedFromBackupTitle": "Catalogue Opened from Backup"/);
@@ -333,7 +360,8 @@ test('keeps every shortcut and its modifier guidance in the review ledger', () =
   assert.match(template, /class="shortcut-key disabled">w/);
   assert.match(template, /class="shortcut-key disabled">q/);
   assert.match(component, /event\.preventDefault\(\)/);
-  assert.match(component, /document\.activeElement/);
+  assert.match(component, /cancelShortcutChange\(\)/);
+  assert.doesNotMatch(component, /\.blur\(\)/);
 });
 
 test('presents the wizard as a responsive settings-style ledger', () => {
@@ -348,8 +376,8 @@ test('presents the wizard as a responsive settings-style ledger', () => {
   assert.doesNotMatch(template, /\sstyle="/);
   assert.doesNotMatch(template, /<br\s*\/?\s*>/i);
 
-  assert.match(styles, /\.wizard-ledger__section\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*140px minmax\(0, 1fr\)/);
-  assert.match(styles, /\.wizard-step-card\s*\{[^}]*background:\s*var\(--app-elevated-background\)[^}]*border:\s*1px solid var\(--app-border-subtle\)[^}]*border-radius:\s*var\(--app-panel-radius\)/);
+  assert.match(styles, /\.wizard-ledger__section\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*164px minmax\(0, 1fr\)/);
+  assert.match(styles, /\.wizard-step-card\s*\{[^}]*background:\s*var\(--app-elevated-background\)[^}]*border:\s*1px solid var\(--app-border-subtle\)[^}]*border-radius:\s*8px/);
   assert.match(styles, /@media \(max-width: 900px\)[\s\S]*\.wizard-ledger__section[\s\S]*grid-template-columns:\s*1fr/);
   assert.match(styles, /@media \(max-width: 620px\)[\s\S]*\.wizard-options-grid[\s\S]*grid-template-columns:\s*1fr/);
   assert.doesNotMatch(styles, /\bfloat\s*:/);

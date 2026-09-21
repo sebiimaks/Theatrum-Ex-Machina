@@ -1,0 +1,154 @@
+// This layer changes only presentation inside existing gallery measurements.
+// Keep card margins, measured heights and screenshot dimensions in the views.
+.workbench-card {
+  color: var(--app-text-primary);
+
+  > .video-box,
+  > .filmstrip-container {
+    border-radius: 8px;
+    outline: 1px solid var(--app-border-strong);
+    outline-offset: -1px;
+    box-shadow: none;
+    transition: outline-color var(--app-motion-fast);
+
+    &:hover,
+    &:focus-within {
+      outline-color: var(--app-accent);
+    }
+  }
+
+  &.workbench-card-selected > .video-box,
+  &.workbench-card-selected > .filmstrip-container {
+    outline: 2px solid var(--app-accent);
+    outline-offset: -2px;
+  }
+
+  .title {
+    color: var(--app-text-primary);
+    font-family: var(--app-font-sans);
+    font-weight: 500;
+    line-height: 17px;
+    width: calc(100% - 4px);
+  }
+
+  .title.larger-font { line-height: 18px; }
+
+  .time,
+  .rez {
+    background: rgb(10 18 21 / 86%);
+    border-radius: 4px;
+    bottom: 4px;
+    color: #f7fbfb;
+    font-family: var(--app-font-mono);
+    font-size: 10px;
+    line-height: 14px;
+    padding: 1px 4px;
+    pointer-events: none;
+  }
+
+  .time { right: 4px; }
+  .rez { left: 4px; }
+  .rez-new {
+    background: rgb(10 18 21 / 86%);
+    bottom: 0;
+    left: calc(100% + 3px);
+    opacity: 1;
+    right: auto;
+    transform: none;
+  }
+  .compact-clean-name { max-width: calc(100% - 8px); }
+  .compact-meta-line { bottom: 22px; }
+
+  .selected {
+    background: var(--app-accent);
+    border: 1px solid var(--app-elevated-background);
+    border-radius: 50%;
+    box-sizing: border-box;
+    fill: var(--app-gallery-background);
+    height: 24px;
+    left: 50%;
+    pointer-events: none;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 24px;
+    z-index: 3;
+  }
+
+  .workbench-gallery-action {
+    align-items: center;
+    background: rgb(10 18 21 / 82%);
+    border: 1px solid rgb(255 255 255 / 22%);
+    border-radius: 6px;
+    box-sizing: border-box;
+    color: #f7fbfb;
+    cursor: pointer;
+    display: inline-flex;
+    fill: currentColor;
+    height: 26px;
+    justify-content: center;
+    margin: 0;
+    opacity: 0.85;
+    padding: 4px;
+    position: absolute;
+    stroke: none;
+    top: 5px;
+    transition: background var(--app-motion-fast), opacity var(--app-motion-fast);
+    width: 26px;
+    z-index: 4;
+
+    app-icon { display: flex; pointer-events: none; }
+
+    &:hover,
+    &:focus-visible {
+      background: #142b31;
+      opacity: 1;
+    }
+    &:focus-visible {
+      outline: 2px solid var(--app-accent);
+      outline-offset: 2px;
+    }
+  }
+
+  // Actions stay discoverable, including when navigating without a pointer.
+  &:hover .workbench-gallery-action,
+  &:focus-within .workbench-gallery-action { opacity: 1; }
+
+  .heart { left: 5px; }
+  .heart-lit { color: #ff7998; }
+  .playlist-icon { left: 5px; overflow: visible; }
+  .playlist-icon--after-heart { left: 35px; }
+  .playlist-icon-active {
+    background: var(--app-accent-soft);
+    color: var(--app-accent-text);
+  }
+  .sheet-icon { left: auto; right: 5px; }
+
+  .not-connected {
+    background: #e9ad51;
+    border: 1px solid #fff1d8;
+    border-radius: 50%;
+    opacity: 1;
+  }
+}
+
+// Single-video selection stays visible in compact cards without a batch checkmark.
+:host(.workbench-video-selected) .workbench-card {
+  > .video-box,
+  > .filmstrip-container {
+    position: relative;
+
+    // Paint above transformed previews without intercepting their controls.
+    &::after {
+      border: 3px solid var(--app-accent);
+      border-radius: inherit;
+      box-sizing: border-box;
+      content: '';
+      inset: 0;
+      pointer-events: none;
+      position: absolute;
+      z-index: 3;
+    }
+  }
+
+  .title { color: var(--app-accent-text); }
+}

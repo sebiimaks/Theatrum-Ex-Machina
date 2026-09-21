@@ -68,6 +68,43 @@ body:has(.window-dark-mode),
   color-scheme: dark;
 }
 
+body:has(.workbench-window),
+.workbench-window {
+  --app-accent: #14716f;
+  --app-accent-text: #126b69;
+  --app-accent-soft: #d7efea;
+  --app-action-background: #14716f;
+  --app-action-hover: #105c5b;
+  --app-on-action: #ffffff;
+  --app-gallery-background: #f5f8f8;
+  --app-sidebar-background: #edf2f2;
+  --app-toolbar-background: #ffffff;
+  --app-title-background: #eaf0f0;
+  --app-elevated-background: #ffffff;
+  --app-tray-background: #ffffff;
+  --app-border-subtle: #dce5e5;
+  --app-border-strong: #c5d5d5;
+  --app-control-radius: 6px;
+}
+
+body:has(.workbench-window.window-dark-mode),
+.workbench-window.window-dark-mode {
+  --app-accent: #71d3c7;
+  --app-accent-text: #8ce1d5;
+  --app-accent-soft: #223f40;
+  --app-action-background: #71d3c7;
+  --app-action-hover: #8ce1d5;
+  --app-on-action: #10282b;
+  --app-gallery-background: #111a1d;
+  --app-sidebar-background: #152025;
+  --app-toolbar-background: #182429;
+  --app-title-background: #152025;
+  --app-elevated-background: #1a282d;
+  --app-tray-background: #182429;
+  --app-border-subtle: #293a40;
+  --app-border-strong: #3b5158;
+}
+
 .cdk-overlay-container {
   z-index: 8000;
 }

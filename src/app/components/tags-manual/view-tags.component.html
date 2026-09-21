@@ -2,7 +2,8 @@
 
 <div class="singleTag">
 
-  <span
+  <button
+    type="button"
     class="search-or-tag-general tag"
     [ngClass]="{ 'tag-draggable': draggable() }"
     [ngStyle]="{
@@ -27,7 +28,7 @@
         }
       </span>
     }
-  </span>
+  </button>
 
 @if (displayFrequency()) {
   <span class="frequency" [ngClass]="{ 'frequency-dark': darkMode() }">
@@ -36,12 +37,16 @@
 }
 
 @if (tag.removable) {
-  <app-icon
-    [icon]="'icon-close'"
+  <button
+    type="button"
     [ngClass]="{ 'remove-tag-dark': darkMode() }"
     class="remove-tag"
     (click)="removeTag(tag.colourPath || tag.name)"
-  />
+    [attr.aria-label]="'WORKBENCH.removeVideoTag' | translate: { tagName: tag.colourPath || tag.name }"
+    [attr.title]="'WORKBENCH.removeVideoTag' | translate: { tagName: tag.colourPath || tag.name }"
+  >
+    <app-icon [icon]="'icon-close'" [size]="11" />
+  </button>
 }
 
 </div>

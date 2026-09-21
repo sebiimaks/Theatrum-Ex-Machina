@@ -1,4 +1,7 @@
-<div class="wizard" [class.wizard-dark]="darkMode()">
+<div class="wizard" [class.wizard-dark]="darkMode()"
+  role="dialog" aria-modal="true" aria-labelledby="wizard-heading"
+  cdkTrapFocus [cdkTrapFocusAutoCapture]="true"
+  appDialogKeyboard (dialogEscape)="canCloseWizard() && hideWizard.emit()">
   @if (canCloseWizard()) {
     <button
       type="button"
@@ -12,6 +15,13 @@
   }
 
   <main class="wizard-ledger" @slowFadeIn>
+    <header class="wizard-heading">
+      <span class="wizard-brand" aria-hidden="true">T</span>
+      <div>
+        <h1 id="wizard-heading">{{ 'WORKBENCH.catalogueSetupTitle' | translate }}</h1>
+        <p>{{ 'WORKBENCH.catalogueSetupHelp' | translate }}</p>
+      </div>
+    </header>
     <section class="wizard-ledger__section wizard-ledger__section--open">
       <div class="wizard-ledger__index">
         <span>01</span>
@@ -21,8 +31,10 @@
       <div class="wizard-ledger__section-content">
         <div class="wizard-open-actions">
           <button
+            type="button"
             class="wizard-button"
             (click)="loadFromFile.emit()"
+            cdkFocusInitial
             title="{{ 'WIZARD.openPreviouslySaved' | translate }}"
           >
             {{ 'WIZARD.loadFromFile' | translate }}
@@ -44,20 +56,16 @@
 
             <ul>
               @for (historyItem of vhaFileHistory; track historyItem; let i = $index) {
-                <li
-                  (click)="openFromHistory.emit(i)"
-                  (keydown.enter)="openFromHistory.emit(i)"
-                  role="button"
-                  tabindex="0"
-                  @historyItemRemove
-                >
-                  <img
-                    class="history-icon"
-                    [src]="darkMode() ? './assets/logo-dark.png' : './assets/logo-light.png'"
-                    alt=""
-                  >
-                  <span class="history-name">{{ historyItem.hubName }}</span>
-                  <span class="path recent" [innerHtml]="historyItem.vhaFilePath | folderArrowsPipe"></span>
+                <li @historyItemRemove>
+                  <button type="button" class="history-open" (click)="openFromHistory.emit(i)">
+                    <img
+                      class="history-icon"
+                      [src]="darkMode() ? './assets/logo-dark.png' : './assets/logo-light.png'"
+                      alt=""
+                    >
+                    <span class="history-name">{{ historyItem.hubName }}</span>
+                    <span class="path recent" [innerHtml]="historyItem.vhaFilePath | folderArrowsPipe"></span>
+                  </button>
                   <button
                     type="button"
                     class="clear-history-item"
@@ -99,6 +107,8 @@
             </label>
             <input
               id="wizard-hub-name"
+              autocomplete="off"
+              spellcheck="false"
               [(ngModel)]="wizard.futureHubName"
               (keypress)="validateHubName($event)"
               class="filter-general input-filter hub-name-input"
@@ -120,6 +130,7 @@
           <div class="wizard-step-card__content">
             <span class="step-description">{{ 'WIZARD.importingFrom' | translate }}</span>
             <button
+              type="button"
               class="wizard-button"
               (click)="selectSourceDirectory.emit()"
               [disabled]="wizard.futureHubName === ''"
@@ -146,6 +157,7 @@
           <div class="wizard-step-card__content">
             <span class="step-description">{{ 'WIZARD.savingTo' | translate }}</span>
             <button
+              type="button"
               class="wizard-button"
               (click)="selectOutputDirectory.emit()"
               [disabled]="wizard.selectedSourceFolder[0].path === '' || wizard.futureHubName === ''"
@@ -158,100 +170,218 @@
           </div>
         </article>
 
-        <article class="wizard-step-card wizard-step-card--options">
-          <div
-            [ngClass]="{
-              'fulfilled': wizard.selectedOutputFolder !== '' && wizard.selectedSourceFolder[0].path !== ''
-            }"
-            class="steps"
-            aria-hidden="true"
-          >
-            4
-          </div>
-          <div class="wizard-step-card__content">
-            <div class="wizard-options-grid">
-              <div class="wizard-options-list">
-                <label
-                  class="ss-num-selection"
-                  [ngClass]="{
-                    'dim-row': !wizard.isFixedNumberOfScreenshots
-                      || wizard.selectedOutputFolder === ''
-                      || wizard.selectedSourceFolder[0].path === ''
-                      || wizard.futureHubName === ''
-                  }"
-                >
-                  <input
-                    type="radio"
-                    name="ss-num-selection"
-                    [checked]="wizard.isFixedNumberOfScreenshots"
-                    (change)="setScreensPerVideo(true)"
-                    [disabled]="wizard.selectedOutputFolder === ''
-                      || wizard.selectedSourceFolder[0].path === ''
-                      || wizard.futureHubName === ''"
+        <details class="wizard-preview-options">
+          <summary>
+            <span>{{ 'WORKBENCH.cataloguePreviewOptions' | translate }}</span>
+            <span class="wizard-preview-summary">
+              {{ wizard.screenshotSizeForImport }}px ·
+              @if (wizard.isFixedNumberOfScreenshots) {
+                {{ wizard.ssConstant }} {{ 'WIZARD.screenshotsPerVideo' | translate }}
+              } @else {
+                {{ 'WIZARD.oneScreenshotEvery' | translate }} {{ wizard.ssVariable }} {{ 'WIZARD.minutes' | translate }}
+              }
+            </span>
+          </summary>
+          <p class="wizard-preview-help">{{ 'WORKBENCH.cataloguePreviewHelp' | translate }}</p>
+          <article class="wizard-step-card wizard-step-card--options">
+            <div
+              [ngClass]="{
+                'fulfilled': wizard.selectedOutputFolder !== '' && wizard.selectedSourceFolder[0].path !== ''
+              }"
+              class="steps"
+              aria-hidden="true"
+            >
+              4
+            </div>
+            <div class="wizard-step-card__content">
+              <div class="wizard-options-grid">
+                <div class="wizard-options-list">
+                  <label
+                    class="ss-num-selection"
+                    [ngClass]="{
+                      'dim-row': !wizard.isFixedNumberOfScreenshots
+                        || wizard.selectedOutputFolder === ''
+                        || wizard.selectedSourceFolder[0].path === ''
+                        || wizard.futureHubName === ''
+                    }"
                   >
+                    <input
+                      type="radio"
+                      name="ss-num-selection"
+                      [checked]="wizard.isFixedNumberOfScreenshots"
+                      (change)="setScreensPerVideo(true)"
+                      [disabled]="wizard.selectedOutputFolder === ''
+                        || wizard.selectedSourceFolder[0].path === ''
+                        || wizard.futureHubName === ''"
+                    >
+                    <input
+                      #numOfScreensConstantInput
+                      [attr.aria-label]="'WIZARD.screenshotsPerVideo' | translate"
+                      (change)="selectNumOfScreens(numOfScreensConstantInput.value)"
+                      type="number"
+                      class="size-dropdown language-drop-down num-select"
+                      value="{{ wizard.ssConstant }}"
+                      min="3"
+                      max="30"
+                      (keydown)="preventNumberInputKeyboard($event)"
+                      [disabled]="wizard.selectedOutputFolder === ''
+                        || wizard.selectedSourceFolder[0].path === ''
+                        || wizard.futureHubName === ''
+                        || !wizard.isFixedNumberOfScreenshots"
+                    >
+                    <span>{{ 'WIZARD.screenshotsPerVideo' | translate }}</span>
+                  </label>
+
+                  <label
+                    class="ss-num-selection"
+                    [ngClass]="{ 'dim-row': wizard.isFixedNumberOfScreenshots }"
+                  >
+                    <input
+                      type="radio"
+                      name="ss-num-selection"
+                      [checked]="!wizard.isFixedNumberOfScreenshots"
+                      (change)="setScreensPerVideo(false)"
+                      [disabled]="wizard.selectedOutputFolder === ''
+                        || wizard.selectedSourceFolder[0].path === ''
+                        || wizard.futureHubName === ''"
+                    >
+                    <span>{{ 'WIZARD.oneScreenshotEvery' | translate }}</span>
+                    <input
+                      #numOfScreensVariableInput
+                      [attr.aria-label]="('WIZARD.oneScreenshotEvery' | translate) + ' (' + ('WIZARD.minutes' | translate) + ')'"
+                      (change)="selectNumOfScreens(numOfScreensVariableInput.value)"
+                      type="number"
+                      class="size-dropdown language-drop-down num-select"
+                      value="{{ wizard.ssVariable }}"
+                      min="1"
+                      max="20"
+                      (keydown)="preventNumberInputKeyboard($event)"
+                      [disabled]="wizard.selectedOutputFolder === ''
+                        || wizard.selectedSourceFolder[0].path === ''
+                        || wizard.futureHubName === ''
+                        || wizard.isFixedNumberOfScreenshots"
+                    >
+                    <span>{{ 'WIZARD.minutes' | translate }}</span>
+                  </label>
+
+                  <label class="wizard-size-row">
+                    <select
+                      #screenshotSelectElement
+                      (change)="selectScreenshotSize(screenshotSelectElement.value)"
+                      class="size-dropdown language-drop-down"
+                      [disabled]="wizard.selectedOutputFolder === ''
+                        || wizard.selectedSourceFolder[0].path === ''
+                        || wizard.futureHubName === ''"
+                    >
+                      <option value="144" [selected]="wizard.screenshotSizeForImport === 144">144px</option>
+                      <option value="216" [selected]="wizard.screenshotSizeForImport === 216">216px</option>
+                      <option value="288" [selected]="wizard.screenshotSizeForImport === 288">288px</option>
+                      <option value="360" [selected]="wizard.screenshotSizeForImport === 360">360px</option>
+                      <option value="432" [selected]="wizard.screenshotSizeForImport === 432">432px</option>
+                      <option value="504" [selected]="wizard.screenshotSizeForImport === 504">504px</option>
+                    </select>
+                    <span
+                      class="step-four-text"
+                      [ngClass]="{
+                        'dim-row': !(wizard.selectedOutputFolder !== '' && wizard.selectedSourceFolder[0].path !== '')
+                      }"
+                    >
+                      {{ 'WIZARD.sizeOfScreenshots' | translate }}
+                    </span>
+                  </label>
+                </div>
+
+                @if (wizard.selectedOutputFolder !== '') {
+                  <div
+                    class="screenshot-preview"
+                    [ngStyle]="{
+                      width: ((wizard.screenshotSizeForImport) * (16 / 9)) + 'px',
+                      height: wizard.screenshotSizeForImport + 'px'
+                    }"
+                  >
+                    <span>{{ 'WIZARD.imported' | translate }}</span>
+                    <span>{{ 'WIZARD.screenshot' | translate }}</span>
+                    <span>{{ 'WIZARD.size' | translate }}</span>
+                  </div>
+                }
+              </div>
+            </div>
+          </article>
+
+          <article class="wizard-step-card wizard-step-card--options">
+            <div
+              [ngClass]="{
+                'fulfilled': wizard.selectedOutputFolder !== '' && wizard.selectedSourceFolder[0].path !== ''
+              }"
+              class="steps"
+              aria-hidden="true"
+            >
+              5
+            </div>
+            <div class="wizard-step-card__content">
+              <label class="clip-selection" [ngClass]="{ 'dim-row': !wizard.extractClips }">
+                <input
+                  type="checkbox"
+                  [(ngModel)]="wizard.extractClips"
+                  class="clip-check-box"
+                  [disabled]="wizard.selectedOutputFolder === ''
+                    || wizard.selectedSourceFolder[0].path === ''
+                    || wizard.futureHubName === ''"
+                >
+                <span class="step-four-text">{{ 'WIZARD.extractClips' | translate }}</span>
+              </label>
+
+              <div class="clip-options" [ngClass]="{ 'dim-row': !wizard.extractClips }">
+                <label class="wizard-inline-option">
                   <input
-                    #numOfScreensConstantInput
-                    (change)="selectNumOfScreens(numOfScreensConstantInput.value)"
+                    #inputNumClipSnippets
+                    (change)="selectNumOfClipSnippets(inputNumClipSnippets.value)"
                     type="number"
                     class="size-dropdown language-drop-down num-select"
-                    value="{{ wizard.ssConstant }}"
+                    [value]="wizard.clipSnippets"
                     min="3"
-                    max="30"
+                    max="15"
                     (keydown)="preventNumberInputKeyboard($event)"
                     [disabled]="wizard.selectedOutputFolder === ''
                       || wizard.selectedSourceFolder[0].path === ''
                       || wizard.futureHubName === ''
-                      || !wizard.isFixedNumberOfScreenshots"
+                      || !wizard.extractClips"
                   >
-                  <span>{{ 'WIZARD.screenshotsPerVideo' | translate }}</span>
+                  <span class="step-four-text">{{ 'WIZARD.clipSnippets' | translate }}</span>
                 </label>
 
-                <label
-                  class="ss-num-selection"
-                  [ngClass]="{ 'dim-row': wizard.isFixedNumberOfScreenshots }"
-                >
+                <label class="wizard-inline-option">
+                  <span class="step-four-text">{{ 'WIZARD.eachSnippet' | translate }}</span>
                   <input
-                    type="radio"
-                    name="ss-num-selection"
-                    [checked]="!wizard.isFixedNumberOfScreenshots"
-                    (change)="setScreensPerVideo(false)"
-                    [disabled]="wizard.selectedOutputFolder === ''
-                      || wizard.selectedSourceFolder[0].path === ''
-                      || wizard.futureHubName === ''"
-                  >
-                  <span>{{ 'WIZARD.oneScreenshotEvery' | translate }}</span>
-                  <input
-                    #numOfScreensVariableInput
-                    (change)="selectNumOfScreens(numOfScreensVariableInput.value)"
+                    #lengthOfClipsInput
+                    (change)="selectLengthOfClipSnippets(lengthOfClipsInput.value)"
                     type="number"
                     class="size-dropdown language-drop-down num-select"
-                    value="{{ wizard.ssVariable }}"
+                    [value]="wizard.clipSnippetLength"
                     min="1"
-                    max="20"
+                    max="5"
                     (keydown)="preventNumberInputKeyboard($event)"
                     [disabled]="wizard.selectedOutputFolder === ''
                       || wizard.selectedSourceFolder[0].path === ''
                       || wizard.futureHubName === ''
-                      || wizard.isFixedNumberOfScreenshots"
+                      || !wizard.extractClips"
                   >
-                  <span>{{ 'WIZARD.minutes' | translate }}</span>
+                  <span class="step-four-text">{{ 'WIZARD.secondsLong' | translate }}</span>
                 </label>
 
-                <label class="wizard-size-row">
+                <label class="wizard-inline-option">
                   <select
-                    #screenshotSelectElement
-                    (change)="selectScreenshotSize(screenshotSelectElement.value)"
+                    #selectClipSizeElement
+                    (change)="selectClipSize(selectClipSizeElement.value)"
                     class="size-dropdown language-drop-down"
-                    [disabled]="wizard.selectedOutputFolder === ''
-                      || wizard.selectedSourceFolder[0].path === ''
-                      || wizard.futureHubName === ''"
+                    [disabled]="!wizard.extractClips"
                   >
-                    <option value="144" [selected]="wizard.screenshotSizeForImport === 144">144px</option>
-                    <option value="216" [selected]="wizard.screenshotSizeForImport === 216">216px</option>
-                    <option value="288" [selected]="wizard.screenshotSizeForImport === 288">288px</option>
-                    <option value="360" [selected]="wizard.screenshotSizeForImport === 360">360px</option>
-                    <option value="432" [selected]="wizard.screenshotSizeForImport === 432">432px</option>
-                    <option value="504" [selected]="wizard.screenshotSizeForImport === 504">504px</option>
+                    <option value="144" [selected]="wizard.clipHeight === 144">144px</option>
+                    <option value="216" [selected]="wizard.clipHeight === 216">216px</option>
+                    <option value="288" [selected]="wizard.clipHeight === 288">288px</option>
+                    <option value="360" [selected]="wizard.clipHeight === 360">360px</option>
+                    <option value="432" [selected]="wizard.clipHeight === 432">432px</option>
+                    <option value="504" [selected]="wizard.clipHeight === 504">504px</option>
                   </select>
                   <span
                     class="step-four-text"
@@ -259,115 +389,14 @@
                       'dim-row': !(wizard.selectedOutputFolder !== '' && wizard.selectedSourceFolder[0].path !== '')
                     }"
                   >
-                    {{ 'WIZARD.sizeOfScreenshots' | translate }}
+                    {{ 'WIZARD.sizeOfClips' | translate }}
                   </span>
                 </label>
               </div>
-
-              @if (wizard.selectedOutputFolder !== '') {
-                <div
-                  class="screenshot-preview"
-                  [ngStyle]="{
-                    width: ((wizard.screenshotSizeForImport) * (16 / 9)) + 'px',
-                    height: wizard.screenshotSizeForImport + 'px'
-                  }"
-                >
-                  <span>{{ 'WIZARD.imported' | translate }}</span>
-                  <span>{{ 'WIZARD.screenshot' | translate }}</span>
-                  <span>{{ 'WIZARD.size' | translate }}</span>
-                </div>
-              }
             </div>
-          </div>
-        </article>
+          </article>
 
-        <article class="wizard-step-card wizard-step-card--options">
-          <div
-            [ngClass]="{
-              'fulfilled': wizard.selectedOutputFolder !== '' && wizard.selectedSourceFolder[0].path !== ''
-            }"
-            class="steps"
-            aria-hidden="true"
-          >
-            5
-          </div>
-          <div class="wizard-step-card__content">
-            <label class="clip-selection" [ngClass]="{ 'dim-row': !wizard.extractClips }">
-              <input
-                type="checkbox"
-                [(ngModel)]="wizard.extractClips"
-                class="clip-check-box"
-                [disabled]="wizard.selectedOutputFolder === ''
-                  || wizard.selectedSourceFolder[0].path === ''
-                  || wizard.futureHubName === ''"
-              >
-              <span class="step-four-text">{{ 'WIZARD.extractClips' | translate }}</span>
-            </label>
-
-            <div class="clip-options" [ngClass]="{ 'dim-row': !wizard.extractClips }">
-              <label class="wizard-inline-option">
-                <input
-                  #inputNumClipSnippets
-                  (change)="selectNumOfClipSnippets(inputNumClipSnippets.value)"
-                  type="number"
-                  class="size-dropdown language-drop-down num-select"
-                  value="5"
-                  min="3"
-                  max="15"
-                  (keydown)="preventNumberInputKeyboard($event)"
-                  [disabled]="wizard.selectedOutputFolder === ''
-                    || wizard.selectedSourceFolder[0].path === ''
-                    || wizard.futureHubName === ''
-                    || !wizard.extractClips"
-                >
-                <span class="step-four-text">{{ 'WIZARD.clipSnippets' | translate }}</span>
-              </label>
-
-              <label class="wizard-inline-option">
-                <span class="step-four-text">{{ 'WIZARD.eachSnippet' | translate }}</span>
-                <input
-                  #lengthOfClipsInput
-                  (change)="selectLengthOfClipSnippets(lengthOfClipsInput.value)"
-                  type="number"
-                  class="size-dropdown language-drop-down num-select"
-                  value="1"
-                  min="1"
-                  max="5"
-                  (keydown)="preventNumberInputKeyboard($event)"
-                  [disabled]="wizard.selectedOutputFolder === ''
-                    || wizard.selectedSourceFolder[0].path === ''
-                    || wizard.futureHubName === ''
-                    || !wizard.extractClips"
-                >
-                <span class="step-four-text">{{ 'WIZARD.secondsLong' | translate }}</span>
-              </label>
-
-              <label class="wizard-inline-option">
-                <select
-                  #selectClipSizeElement
-                  (change)="selectClipSize(selectClipSizeElement.value)"
-                  class="size-dropdown language-drop-down"
-                  [disabled]="!wizard.extractClips"
-                >
-                  <option value="144" selected="selected">144px</option>
-                  <option value="216">216px</option>
-                  <option value="288">288px</option>
-                  <option value="360">360px</option>
-                  <option value="432">432px</option>
-                  <option value="504">504px</option>
-                </select>
-                <span
-                  class="step-four-text"
-                  [ngClass]="{
-                    'dim-row': !(wizard.selectedOutputFolder !== '' && wizard.selectedSourceFolder[0].path !== '')
-                  }"
-                >
-                  {{ 'WIZARD.sizeOfClips' | translate }}
-                </span>
-              </label>
-            </div>
-          </div>
-        </article>
+        </details>
 
         <article class="wizard-step-card wizard-step-card--final">
           <div
@@ -378,10 +407,12 @@
             class="steps"
             aria-hidden="true"
           >
-            6
+            ✓
           </div>
           <div class="wizard-step-card__content wizard-step-card__content--final">
+            <p>{{ 'WORKBENCH.catalogueCreateHelp' | translate }}</p>
             <button
+              type="button"
               class="wizard-button start-import"
               [disabled]="wizard.selectedOutputFolder === ''
                 || wizard.selectedSourceFolder[0].path === ''

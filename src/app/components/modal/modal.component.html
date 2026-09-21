@@ -111,4 +111,11 @@
       </button>
     </div>
   }
+  @if (data.kind === 'message') {
+    <div class="dialog-actions">
+      <button (click)="close(undefined)" class="dialog-button dialog-button-confirm" type="button">
+        {{ 'WORKBENCH.closeDialog' | translate }}
+      </button>
+    </div>
+  }
 </section>

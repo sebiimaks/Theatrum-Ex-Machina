@@ -6,10 +6,10 @@
     class="filter-container"
     @filterItemAppear
   >
-    <app-icon
-      class="input-icon"
-      [icon]="settingsButtons()[filter.uniqueKey].iconName"
-      title="{{ settingsButtons()[filter.uniqueKey].moreInfo | translate }}" />
+    <label class="workbench-filter-label" [for]="filter.uniqueKey" [title]="settingsButtons()[filter.uniqueKey].moreInfo | translate">
+      <app-icon [icon]="settingsButtons()[filter.uniqueKey].iconName" [size]="13" />
+      {{ filter.placeholder | translate }}
+    </label>
     <input
       id="{{ filter.uniqueKey }}"
       (keyup.enter)="onEnterKey.emit({ word: filter.string, index: j })"
@@ -20,14 +20,14 @@
       (ngModelChange)="handleInputChange($event, isManualTagSearch(filter.uniqueKey))"
       (focus)="handleInputChange(filter.string, isManualTagSearch(filter.uniqueKey))"
       class="filter-general input-filter"
-      placeholder="{{ filter.placeholder | translate }}"
+      placeholder="{{ 'WORKBENCH.enterSearchTerm' | translate }}"
       type="text"
     >
 
-    @if (isManualTagSearch(filter.uniqueKey) && filter.string !== '') {
+    @if (isManualTagSearch(filter.uniqueKey) && filter.string !== '' && tagTypeAhead()) {
       <span
         class="tag-type-ahead-on-home"
-      >{{ tagTypeAhead() }}</span>
+      ><span>{{ tagTypeAhead() }}</span><kbd>{{ 'WORKBENCH.tabToUse' | translate }}</kbd></span>
     }
 
     <div class="filtered-words">
@@ -44,7 +44,8 @@
           </span>
         }
 
-          <span
+          <button type="button"
+            [attr.aria-label]="('WORKBENCH.removeFilter' | translate) + ': ' + string"
             (click)="removeThisFilter.emit({ item: i, origin: j })"
             [ngStyle]="{
               background: filter.color,
@@ -52,8 +53,8 @@
             }"
             class="search-or-tag-general search-word"
           >
-            {{ string }}
-          </span>
+            {{ string }} <span aria-hidden="true">×</span>
+          </button>
       }
 
     }

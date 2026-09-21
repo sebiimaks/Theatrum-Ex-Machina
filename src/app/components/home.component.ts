@@ -28,6 +28,12 @@ import { ThumbnailRegenerationIpcService } from '../services/thumbnail-regenerat
 import { WordFrequencyService, WordFreqAndHeight } from '../pipes/word-frequency.service';
 
 // Components
+import { SettingsWorkspaceCategories } from '../common/settings-workspace';
+import type { SettingsCategoryId } from '../common/settings-workspace';
+import { activeWorkspaceCollection, workspaceCollectionPlan } from '../common/workbench-navigation';
+import type { WorkspaceCollection } from '../common/workbench-navigation';
+import { CatalogueEditorComponent } from './catalogue-editor/catalogue-editor.component';
+import { RenameModalComponent } from './rename-modal/rename-modal.component';
 import { SortOrderComponent } from './sort-order/sort-order.component';
 
 // Interfaces
@@ -152,8 +158,7 @@ import {
   rightClickContentAnimation,
   similarResultsText,
   slowFadeIn,
-  slowFadeOut,
-  topAnimation
+  slowFadeOut
 } from '../common/animations';
 
 interface Vha2ExportResult {
@@ -186,7 +191,9 @@ const GALLERY_RESIZE_SETTLE_MS = 60;
     './gallery.scss',
     './wizard-button.scss',
     './resolution.scss',
-    './rightclick.scss'
+    './rightclick.scss',
+    './workbench.scss',
+    './workbench-compact.scss'
   ],
   animations: [
     bottomTrayAnimation,
@@ -202,8 +209,7 @@ const GALLERY_RESIZE_SETTLE_MS = 60;
     similarResultsText,
     sliderAppear,
     slowFadeIn,
-    slowFadeOut,
-    topAnimation
+    slowFadeOut
   ]
 })
 export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
@@ -214,7 +220,11 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly searchRef = viewChild<ElementRef>('searchRef');
   readonly settingsModal = viewChild<ElementRef>('settingsModal');
 
+  readonly workspaceViewSelect = viewChild<ElementRef<HTMLSelectElement>>('workspaceViewSelect');
+  readonly workspaceTrayButtons = viewChild<ElementRef<HTMLDivElement>>('workspaceTrayButtons');
   readonly sortOrderRef = viewChild(SortOrderComponent);
+  readonly catalogueEditor = viewChild(CatalogueEditorComponent);
+  readonly renameModal = viewChild(RenameModalComponent);
 
   readonly virtualScroller = viewChild(VirtualScrollerComponent);
   readonly getVirtualScrollBufferAmount = getVirtualScrollBufferAmount;
@@ -222,7 +232,93 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   defaultSettingsButtons = JSON.parse(JSON.stringify(SettingsButtons));
   settingsButtons: SettingsButtonsType = SettingsButtons;
   settingsButtonsGroups = SettingsButtonsGroups;
-  settingTabToShow = 0;
+  settingCategory: SettingsCategoryId = 'appearance';
+  settingsSearchQuery = '';
+  readonly settingsCategories = SettingsWorkspaceCategories;
+  readonly workbenchViews = AllSupportedViews;
+  showRecentlyPlayedOnly = false;
+  playbackRevision = 0;
+  readonly workspaceCollections: { id: WorkspaceCollection; label: string; icon: string }[] = [
+    { id: 'all', label: 'WORKBENCH.allVideos', icon: 'icon-show-thumbnails' },
+    { id: 'folders', label: 'WORKBENCH.folders', icon: 'icon-folder-blank' },
+    { id: 'favourites', label: 'WORKBENCH.favourites', icon: 'icon-heart' },
+    { id: 'playlist', label: 'WORKBENCH.playlist', icon: 'icon-playlist' },
+    { id: 'recent', label: 'WORKBENCH.recentlyPlayed', icon: 'icon-recent-history' },
+  ];
+
+  get workspaceCollection(): WorkspaceCollection {
+    return activeWorkspaceCollection({
+      favourites: this.settingsButtons.showOnlyFavorites.toggled,
+      folders: this.settingsButtons.showFolders.toggled
+        && ['showThumbnails', 'showFiles', 'showClips'].includes(this.appState.currentView),
+      playlist: this.settingsButtons.showOnlyPlaylist.toggled,
+      recent: this.showRecentlyPlayedOnly,
+    });
+  }
+
+  get workspaceCollectionLabel(): string {
+    return this.workspaceCollections.find((item) => item.id === this.workspaceCollection)?.label
+      || 'WORKBENCH.allVideos';
+  }
+
+  get workspaceGalleryInset(): number {
+    const hasBreadcrumbs = this.settingsButtons.showFolders.toggled
+      && ['showThumbnails', 'showFiles', 'showClips'].includes(this.appState.currentView);
+    return 42 + (hasBreadcrumbs ? 30 : 0) + (this.appState.currentView === 'showFiles' && this.settingsButtons.showMoreInfo.toggled ? 30 : 0);
+  }
+
+  selectWorkspaceCollection(collection: WorkspaceCollection): void {
+    const plan = workspaceCollectionPlan(collection, this.appState.currentView);
+    this.settingsButtons.showOnlyFavorites.toggled = plan.favourites;
+    this.settingsButtons.showOnlyPlaylist.toggled = plan.playlist;
+    if (this.appState.currentView !== plan.view) { this.toggleButton(plan.view); }
+    if (this.settingsButtons.showFolders.toggled !== plan.folders) { this.toggleButton('showFolders'); }
+    this.showRecentlyPlayedOnly = plan.recent;
+    this.folderViewNavigationPath = '';
+    if (collection === 'recent') {
+      this.settingsButtons.sortOptionLastPlayed.toggled = true;
+      this.selectFilterOrder('lastPlayedDesc');
+      setTimeout(() => {
+        const element = this.sortOrderRef()?.sortFilterElement();
+        if (element) { element.nativeElement.value = this.sortType; }
+      });
+    }
+    this.scheduleGalleryLayoutRefresh(0, true);
+  }
+
+  clearWorkspaceFilters(): void {
+    this.clearAllFilters();
+    (this.magicSearch() || this.workspaceViewSelect())?.nativeElement.focus();
+  }
+
+  showWorkspaceThumbnails(): void {
+    this.toggleButton('showThumbnails');
+    this.workspaceViewSelect()?.nativeElement.focus();
+  }
+
+  openWorkspaceSettings(category: SettingsCategoryId = 'appearance'): void {
+    this.settingCategory = category;
+    this.settingsSearchQuery = '';
+    this.settingsModalOpen = true;
+  }
+
+  get settingsDestinationMatches() {
+    const query = this.settingsSearchQuery.trim().toLocaleLowerCase();
+    if (!query) { return []; }
+    return this.settingsCategories.filter((category) => {
+      if (category.id !== 'library' && category.id !== 'shortcuts') { return false; }
+      const keywords = this.translate.instant(category.id === 'library'
+        ? 'WORKBENCH.librarySearchTerms' : 'WORKBENCH.shortcutsSearchTerms');
+      const haystack = [this.translate.instant(category.label), this.translate.instant(category.description), keywords].join(' ').toLocaleLowerCase();
+      return query.split(/\s+/).every((word) => haystack.includes(word));
+    });
+  }
+
+  selectSettingsCategory(category: SettingsCategoryId): void {
+    this.settingCategory = category;
+    this.settingsSearchQuery = '';
+    this.scrollSettingsToTop();
+  }
 
   filters = Filters;
 
@@ -354,6 +450,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   renamingNow = false;
   rightClickPosition: ContextMenuCoordinate = { x: 0, y: 0 };
   rightClickShowing = false;
+  private contextMenuOrigin: HTMLElement | null = null;
 
   // ========================================================================
   // Thumbnail Sheet Overlay Display
@@ -406,6 +503,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
   currentClickedItem: ImageElement;
   currentClickedItemName = '';
+  // Single-video selection is separate from the catalogue's batch-tagging flags.
+  selectedVideo: ImageElement | undefined;
+  private currentClickedItemRefreshTimeout: ReturnType<typeof setTimeout> | undefined;
+  private pendingClickedItem: ImageElement | undefined;
   currentPlayingFolder = '';
   fullPathToCurrentFile = '';
   currentMediaOperationItem: ImageElement | null = null;
@@ -470,39 +571,56 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   @HostListener('document:keydown', ['$event'])
   handleKeyboardEvent(event: KeyboardEvent) {
 
+    // Material owns its nested confirmations, including Escape and restoration.
+    if (event.defaultPrevented || event.isComposing || this.modalService.dialog.openDialogs.length) {
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      if (this.showTagColorPicker) {
+        this.onTagColorPickerClose();
+      } else if (this.catalogueEditorOpen) {
+        this.catalogueEditor()?.close();
+      } else if (this.renamingNow) {
+        this.renameModal()?.requestClose();
+      } else if (this.wizard.showWizard) {
+        if (this.canCloseWizard) { this.hideWizard(); }
+      } else if (this.settingsModalOpen) {
+        this.toggleSettings();
+      } else if (this.sheetOverlayShowing) {
+        this.sheetOverlayShowing = false;
+      } else if (this.rightClickShowing) {
+        this.dismissContextMenu();
+      } else if (this.settingsButtons['showTags'].toggled) {
+        this.toggleButton('showTags');
+      }
+      return;
+    }
+
+    const editingText = event.target instanceof Element
+      && event.target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]');
+    if (editingText || this.catalogueEditorOpen || this.renamingNow || this.sheetOverlayShowing
+      || this.wizard.showWizard || this.settingsModalOpen || this.rightClickShowing || this.showTagColorPicker
+      || this.settingsButtons['showTags'].toggled) {
+      return;
+    }
+
     if (event.ctrlKey && event.key === ' ' && this.settingsButtons['spacePlaysRandom'].toggled) {
-      const randomIndex: number = Math.floor(Math.random() * this.pipeSideEffectService.galleryShowing.length);
-      const video: ImageElement = this.pipeSideEffectService.galleryShowing[randomIndex];
-      const randomPlayStart: number = Math.floor(Math.random() * video.screens);
-      this.openVideo(video, randomPlayStart);
-
-    // .metaKey is for Mac `command` button
-    } else if (event.ctrlKey === true || event.metaKey) {
-
-      const key: string = event.key;
-
-      if (this.shortcutService.keyToActionMap.has(key)) {
-        const shortcutAction: SettingsButtonKey | CustomShortcutAction = this.shortcutService.keyToActionMap.get(key);
-
+      const gallery = this.pipeSideEffectService.galleryShowing;
+      if (!gallery.length) { return; }
+      event.preventDefault();
+      const video = gallery[Math.floor(Math.random() * gallery.length)];
+      this.openVideo(video, Math.floor(Math.random() * video.screens));
+    } else if (event.ctrlKey || event.metaKey) {
+      const shortcutAction = this.shortcutService.keyToActionMap.get(event.key);
+      if (shortcutAction) {
+        event.preventDefault();
         if (this.shortcutService.regularShortcuts.includes(shortcutAction as SettingsButtonKey)) {
           this.toggleButton(shortcutAction as SettingsButtonKey);
         } else {
           this.handleCustomShortcutAction(event, shortcutAction as CustomShortcutAction);
         }
       }
-
-    } else if (event.key === 'Escape' && this.wizard.showWizard === true && this.canCloseWizard === true) {
-      this.wizard.showWizard = false;
-    } else if (event.key === 'Escape' && this.settingsModalOpen) {
-      this.settingsModalOpen = false;
-    } else if (event.key === 'Escape' && (this.rightClickShowing || this.renamingNow || this.sheetOverlayShowing)) {
-      this.rightClickShowing = false;
-      this.renamingNow = false;
-      this.sheetOverlayShowing = false;
-    } else if (event.key === 'Escape' && this.settingsButtons['showTags'].toggled) {
-      this.toggleButton('showTags');
-    } else if (event.key === 'Escape' && this.showTagColorPicker) {
-      this.showTagColorPicker = false;
     }
   }
 
@@ -512,30 +630,23 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   onSettingsTabKeydown(event: KeyboardEvent): void {
-    const lastTabIndex = 4;
-    let nextTabIndex: number | undefined;
-
-    if (event.key === 'ArrowRight') {
-      nextTabIndex = (this.settingTabToShow + 1) % (lastTabIndex + 1);
-    } else if (event.key === 'ArrowLeft') {
-      nextTabIndex = (this.settingTabToShow + lastTabIndex) % (lastTabIndex + 1);
+    const currentIndex = this.settingsCategories.findIndex((category) => category.id === this.settingCategory);
+    const lastIndex = this.settingsCategories.length - 1;
+    let nextIndex: number;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+      nextIndex = (currentIndex + 1) % this.settingsCategories.length;
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+      nextIndex = (currentIndex + lastIndex) % this.settingsCategories.length;
     } else if (event.key === 'Home') {
-      nextTabIndex = 0;
+      nextIndex = 0;
     } else if (event.key === 'End') {
-      nextTabIndex = lastTabIndex;
-    }
-
-    if (nextTabIndex === undefined) {
+      nextIndex = lastIndex;
+    } else {
       return;
     }
-
     event.preventDefault();
-    this.settingTabToShow = nextTabIndex;
-
-    const tabList = (event.currentTarget as HTMLElement | null)?.parentElement;
-    setTimeout(() => {
-      (tabList?.querySelector(`#settings-tab-${nextTabIndex}`) as HTMLElement | null)?.focus();
-    });
+    this.selectSettingsCategory(this.settingsCategories[nextIndex].id);
+    setTimeout(() => document.getElementById('settings-tab-' + this.settingCategory)?.focus());
   }
 
   constructor(
@@ -1126,6 +1237,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
       this.importStage = stage;
 
+      if (stage === 'done') {
+        this.filePathService.refreshGeneratedPreviews();
+      }
+
       if (this.isFirstRunEver) {
         this.showFirstRunMessage();
       }
@@ -1169,7 +1284,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
       // console.log('input dirs', finalObject.inputDirs);
       // reset to initial
-      this.currentClickedItem = undefined;
+      this.clearVideoSelection();
       this.lastRenamedFileHack = undefined;
       this.imageElementService.finalArrayNeedsSaving = false;
       this.catalogueAccessMode = catalogueAccessMode === 'read-only' ? 'read-only' : 'read-write';
@@ -1317,8 +1432,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.electronService.ipcRenderer.on('file-deleted', (event, element: ImageElement) => {
       // spot check it's the same element
       // just in case the message comes back after user has switched to view another hub
-      if (element.fileName === this.imageElementService.imageElements[element.index].fileName) {
-        this.imageElementService.imageElements[element.index].deleted = true;
+      const currentElement = this.imageElementService.imageElements[element.index];
+      if (currentElement && element.fileName === currentElement.fileName) {
+        currentElement.deleted = true;
+        this.reconcileVideoSelection();
         this.deletePipeTrigger = !this.deletePipeTrigger;
         this.imageElementService.finalArrayNeedsSaving = true;
         this.cd.detectChanges();
@@ -1380,6 +1497,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
         element.index = existingFailureIndex;
         this.imageElementService.imageElements[existingFailureIndex] = element;
+        this.replaceSelectedVideo(existingFailure, element);
         this.imageElementService.finalArrayNeedsSaving = true;
         this.resetFinalArrayRef();
         return;
@@ -1519,6 +1637,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       delete incomingElement.metadataImportFailed;
       incomingElement.index = target.index;
       this.imageElementService.imageElements[targetIndex] = incomingElement;
+      this.replaceSelectedVideo(target, incomingElement);
       this.imageElementService.finalArrayNeedsSaving = true;
       this.deletePipeTrigger = !this.deletePipeTrigger;
       this.debounceImport();
@@ -1601,6 +1720,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.clearVideoSelection();
     this.catalogueOpenCoordinator.disconnect();
     this.cataloguePersistenceIpc.disconnect();
     this.thumbnailRegenerationIpc.disconnect();
@@ -1685,6 +1805,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       }
     });
     this.deletePipeTrigger = !this.deletePipeTrigger;
+    this.reconcileVideoSelection();
   }
 
   /**
@@ -1983,24 +2104,12 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private refreshAfterIgnoredSubdirectoryRemoval(): void {
-    const previouslySelected = this.currentClickedItem;
     this.deletePipeTrigger = !this.deletePipeTrigger;
     this.manualTagsService.rebuildFromImages(this.imageElementService.imageElements);
     this.wordFrequencyService.computeFrequencyArray(this.imageElementService.imageElements.length, 165);
     this.ifShowDetailsViewRefreshTags();
 
-    if (previouslySelected) {
-      const replacement = this.imageElementService.imageElements.find((element: ImageElement) => (
-        element.uuid === previouslySelected.uuid
-      ));
-      if (replacement) {
-        this.currentClickedItemName = replacement.cleanName;
-        this.updateCurrentClickedItem(replacement);
-      } else {
-        this.currentClickedItem = undefined;
-        this.currentClickedItemName = '';
-      }
-    }
+    this.reconcileVideoSelection();
 
     this.cd.detectChanges();
     setTimeout(() => this.virtualScroller()?.refresh(), 0);
@@ -2231,10 +2340,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.blockActionDuringFolderThumbnailRegeneration()) {
       return;
     }
-    this.sourceFolderService.resetTransientState();
-    this.sourceFolderService.selectedSourceFolder = this.wizard.selectedSourceFolder;
-    this.appState.selectedOutputFolder = this.wizard.selectedOutputFolder;
-    this.electronService.ipcRenderer.send('start-the-import', this.wizard);
+    // The old catalogue remains active until main confirms the new document.
+    // In particular, capture its source paths before any wizard state is applied.
+    const finalObjectToSave = this.getFinalObjectForSaving();
+    this.electronService.ipcRenderer.send('start-the-import', this.wizard, finalObjectToSave);
   }
 
   public cancelCurrentImport(): void {
@@ -2348,8 +2457,14 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * @param eventObject - VideoClickEmit
    * @param item        - ImageElement
    * @param doubleClick - boolean -- happens only on `app-file-item` -- added as a quick hack
+   * @param origin      - Details preview clicks preserve the thumbnail until playback
    */
-  public handleClick(eventObject: VideoClickEmit, item: ImageElement, doubleClick?: boolean) {
+  public handleClick(
+    eventObject: VideoClickEmit,
+    item: ImageElement,
+    doubleClick?: boolean,
+    origin: 'gallery' | 'details-preview' = 'gallery',
+  ) {
 
     console.log(item);
 
@@ -2361,8 +2476,24 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     }
 
     if (this.settingsButtons.doubleClickMode.toggled && !(eventObject.doubleClick || doubleClick)) {
-      // when double-clicking, this runs twice anyway
-      this.assignSelectedFile(item);
+      if (origin === 'details-preview') {
+        // Recreating or clearing this preview on click prevents its dblclick event.
+        this.selectedVideo = item;
+        return;
+      }
+      const repeatedClick = eventObject.mouseEvent.detail > 1;
+      const modifiedClick = eventObject.mouseEvent.ctrlKey || eventObject.mouseEvent.metaKey
+        || eventObject.mouseEvent.shiftKey;
+      if (this.selectedVideo === item && !repeatedClick && !modifiedClick) {
+        this.clearVideoSelection();
+        if (this.settingsButtons.autoOpenDetails.toggled
+            && this.settingsButtons.showDetailsTray.toggled) {
+          this.toggleButton('showDetailsTray');
+        }
+      } else {
+        // The second click of a double-click preserves selection before playback.
+        this.assignSelectedFile(item);
+      }
 
       return;
     }
@@ -2384,7 +2515,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       // If Shift key is pressed, open the file in the explorer
       this.currentRightClickedItem = item; // to make `openContainingFolderNow()` work correctly
       this.openContainingFolderNow();
-    }else {
+    } else {
+      this.assignSelectedFile(item);
       this.openVideo(item, eventObject.thumbIndex);
       //  `openVideo` method handles the `not connected` case
     }
@@ -2408,6 +2540,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     }
 
     this.imageElementService.updateNumberOfTimesPlayed(item.index);
+    this.playbackRevision++;
 
     this.updateCurrentClickedItem(item);
 
@@ -2423,7 +2556,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.currentMediaOperationItem = projectedItem;
 
     if (this.appState.preferredVideoPlayer) {
-      const time: number = clickedThumbnailIndex
+      const time: number = clickedThumbnailIndex !== undefined
         ? item.duration / (item.screens + 1) * ((clickedThumbnailIndex) + 1)
         : 0;
 
@@ -2763,7 +2896,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * Show or hide settings
    */
   toggleSettings(): void {
-    this.settingTabToShow = 2;
+    this.settingsSearchQuery = '';
     this.settingsModalOpen = !this.settingsModalOpen;
   }
 
@@ -2798,6 +2931,13 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * Toggles all TRAY views buttons off
    * A helper function for `toggleBotton`
    */
+  closeWorkspaceTray(): void {
+    const trigger = this.workspaceTrayButtons()?.nativeElement
+      .querySelector<HTMLButtonElement>('[data-workspace-tray][aria-pressed="true"]');
+    trigger?.focus();
+    this.toggleAllTrayViewsButtonsOff();
+  }
+
   toggleAllTrayViewsButtonsOff(): void {
     this.settingsButtons['showDetailsTray'].toggled = false;
     this.settingsButtons['showFreq'].toggled = false;
@@ -2876,7 +3016,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         break;
 
       case ('toggleMinimalMode'):
-        this.toggleButton('hideTop');
         this.toggleButton('hideSidebar');
         this.toggleButtonOff('showTagTray');
         this.toggleRibbon();
@@ -2925,6 +3064,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * @param   fromIpc     boolean value indicate, call from IPC
    */
   toggleButton(uniqueKey: SettingsButtonKey | SupportedView | SupportedTrayView, fromIpc = false): void {
+    if (['showOnlyFavorites', 'showOnlyPlaylist', 'showFolders'].includes(uniqueKey)
+        && !this.settingsButtons[uniqueKey].toggled) {
+      this.showRecentlyPlayedOnly = false;
+    }
     // ======== View buttons ================
     if (AllSupportedViews.includes(<SupportedView>uniqueKey)) {
       this.savePreviousViewSize();
@@ -3059,9 +3202,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       if (uniqueKey === 'hideSidebar') {
         this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
       }
-      if (uniqueKey === 'hideTop') {
-        this.scheduleGalleryLayoutRefresh(GALLERY_LAYOUT_TRANSITION_MS);
-      }
     }
     if (uniqueKey === 'darkMode') {
       this.syncAppIconTheme();
@@ -3107,7 +3247,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       ssConstant: this.wizard.ssConstant ?? 10,
       ssVariable: this.wizard.ssVariable ?? 5,
     };
-    this.toggleSettings();
+    this.settingsModalOpen = false;
   }
 
 
@@ -3335,6 +3475,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.imageElementService.imageElements = this.imageElementService.imageElements.slice();
     this.ifShowDetailsViewRefreshTags();
 
+    this.reconcileVideoSelection();
+
     // Recreate the bottom Details tray when its selected item was edited.
     if (this.currentClickedItem) {
       this.currentClickedItemName = this.currentClickedItem.cleanName;
@@ -3351,6 +3493,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.catalogueReadOnly) {
       return;
     }
+    this.reconcileVideoSelection();
     const activeImages = this.imageElementService.imageElements.filter((element: ImageElement) => (
       !element.deleted && !element.missing
     ));
@@ -3473,6 +3616,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * Restore settings to their default values
    */
   resetSettingsToDefault(): void {
+    this.showRecentlyPlayedOnly = false;
     this.settingsButtons = JSON.parse(JSON.stringify(this.defaultSettingsButtons)); // JSON hack to allow resetting more than once
     this.toggleButton('showThumbnails');
     this.syncAppIconTheme();
@@ -3617,42 +3761,118 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   rightMouseClicked(event: PointerEvent, item: ImageElement): void {
+    event.preventDefault();
     this.currentRightClickedItem = item;
+    const target = event.target instanceof Element ? event.target : null;
+    this.contextMenuOrigin = target?.closest<HTMLElement>('button, [tabindex]')
+      || target?.closest('.video-box')?.querySelector<HTMLElement>('button')
+      || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    this.contextMenuOrigin?.focus({ preventScroll: true });
 
-    const winWidth: number = window.innerWidth;
-    const clientX: number = event.clientX;
-    const howFarFromRight: number = winWidth - clientX;
-
-    // handle top-offset if clicking close to the bottom
-    const winHeight: number = window.innerHeight;
-    const clientY: number = event.clientY;
-    const howFarFromBottom: number = winHeight - clientY;
-
-    this.rightClickPosition.x = (howFarFromRight < 180) ? clientX - 180 + (howFarFromRight) : clientX;
-    this.rightClickPosition.y = (howFarFromBottom < 240) ? clientY - 240 + (howFarFromBottom) : clientY;
+    // Keep the usual edge offset, but let the menu scroll from the viewport
+    // origin when application zoom leaves less room than its preferred size.
+    this.rightClickPosition.x = Math.max(0, Math.min(event.clientX, window.innerWidth - 180));
+    this.rightClickPosition.y = Math.max(0, Math.min(event.clientY, window.innerHeight - 240));
 
     this.rightClickShowing = true;
   }
 
-  /**
-   * When in double-click mode and a video is clicked - `currentClickedItemName` updated
-   * @param item
-   */
-  assignSelectedFile(item: ImageElement): void {
-    this.currentClickedItemName = item.cleanName;
-    this.updateCurrentClickedItem(item);
+  dismissContextMenu(): void {
+    this.rightClickShowing = false;
+    if (this.contextMenuOrigin?.isConnected) {
+      this.contextMenuOrigin.focus({ preventScroll: true });
+    }
   }
 
-  /**
-   * If the `showDetailsTray` is open, update the `currentClickedItem`
-   * @param item
-   */
+  onContextMenuKeydown(event: KeyboardEvent): void {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { return; }
+    const menu = event.currentTarget as HTMLElement;
+    const actions = Array.from(menu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+    if (!actions.length) { return; }
+    event.preventDefault();
+    const current = actions.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? actions.length - 1
+      : (current + (event.key === 'ArrowDown' ? 1 : -1) + actions.length) % actions.length;
+    actions[next].focus();
+  }
+
+  /** Select a video without changing the batch-tagging selection. */
+  assignSelectedFile(item: ImageElement): void {
+    this.selectedVideo = item;
+    this.currentClickedItemName = item.cleanName;
+    this.updateCurrentClickedItem(item);
+    if (this.settingsButtons.autoOpenDetails.toggled
+        && !this.settingsButtons.showDetailsTray.toggled) {
+      this.toggleButton('showDetailsTray');
+    }
+  }
+
+  /** Refresh the tray's preview without treating metadata updates as a selection. */
   updateCurrentClickedItem(item: ImageElement): void {
-    // to update the view, we must first destroy the component with `null` since component sets thumbnail at `ngOnInit`
+    clearTimeout(this.currentClickedItemRefreshTimeout);
+    const catalogueSession = this.catalogueSessionGeneration;
+    // Recreate the preview because its initial thumbnail is set in ngOnInit.
+    this.pendingClickedItem = item;
     this.currentClickedItem = null;
-    setTimeout(() => {
+    this.currentClickedItemRefreshTimeout = setTimeout(() => {
+      this.currentClickedItemRefreshTimeout = undefined;
+      if (catalogueSession !== this.catalogueSessionGeneration || this.pendingClickedItem !== item) {
+        return;
+      }
+      if (item.deleted) {
+        this.reconcileVideoSelection();
+        return;
+      }
+      this.pendingClickedItem = undefined;
       this.currentClickedItem = item;
     });
+  }
+
+  private clearVideoSelection(): void {
+    clearTimeout(this.currentClickedItemRefreshTimeout);
+    this.currentClickedItemRefreshTimeout = undefined;
+    this.pendingClickedItem = undefined;
+    this.selectedVideo = undefined;
+    this.currentClickedItem = undefined;
+    this.currentClickedItemName = '';
+  }
+
+  /** Preserve selection when a rescan replaces a failed or changed video's metadata. */
+  private replaceSelectedVideo(previous: ImageElement, replacement: ImageElement): void {
+    if (this.selectedVideo === previous) {
+      this.selectedVideo = replacement;
+    }
+    if ((this.pendingClickedItem || this.currentClickedItem) === previous) {
+      this.currentClickedItemName = replacement.cleanName;
+      this.updateCurrentClickedItem(replacement);
+    }
+  }
+
+  /** Keep cloned surviving entries selected and drop entries removed from the catalogue. */
+  private reconcileVideoSelection(): void {
+    const findSurvivingEntry = (item: ImageElement): ImageElement | undefined => (
+      this.imageElementService.imageElements.find((candidate: ImageElement) => (
+        !candidate.deleted && (candidate === item || (Boolean(item.uuid) && candidate.uuid === item.uuid))
+      ))
+    );
+    if (this.selectedVideo) {
+      this.selectedVideo = findSurvivingEntry(this.selectedVideo);
+    }
+    const trayItem = this.pendingClickedItem || this.currentClickedItem;
+    if (!trayItem) {
+      return;
+    }
+    const replacement = findSurvivingEntry(trayItem);
+    if (!replacement) {
+      clearTimeout(this.currentClickedItemRefreshTimeout);
+      this.currentClickedItemRefreshTimeout = undefined;
+      this.pendingClickedItem = undefined;
+      this.currentClickedItem = undefined;
+      this.currentClickedItemName = '';
+    } else if (replacement !== trayItem) {
+      this.currentClickedItemName = replacement.cleanName;
+      this.updateCurrentClickedItem(replacement);
+    }
   }
 
   /**
@@ -4239,20 +4459,10 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /**
-   * Sort by most-recent
+   * Open the played-only collection, with the latest playback first.
    */
   sortByRecentlyPlayed(): void {
-    this.settingsButtons['sortOptionLastPlayed'].toggled = true;
-
-    this.selectFilterOrder('lastPlayedDesc');
-
-    setTimeout(() => {
-      const sortOrderRef = this.sortOrderRef();
-      const sortFilterElement = sortOrderRef.sortFilterElement();
-      if (sortFilterElement) { // just in case, perform check
-        sortFilterElement.nativeElement.value = 'lastPlayedDesc';
-      }
-    });
+    this.selectWorkspaceCollection('recent');
   }
 
   /**
@@ -4470,8 +4680,9 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * Scroll the settings modal to the top
    */
   scrollSettingsToTop(): void {
-    if (this.settingsModal) {
-      this.settingsModal().nativeElement.scrollTop = 0;
+    const modal = this.settingsModal();
+    if (modal) {
+      modal.nativeElement.scrollTop = 0;
     }
   }
 
@@ -4481,6 +4692,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * It resets all filter arrays, bounds, and toggles all filter buttons off
    */
   clearAllFilters(): void {
+    this.showRecentlyPlayedOnly = false;
     // Clear all filter arrays and bools
     this.filters.forEach((filter) => {
       filter.array = [];

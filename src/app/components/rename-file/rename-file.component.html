@@ -1,47 +1,44 @@
-<div
-  [ngClass]="{ 'rename-dark': darkMode() }"
-  >
-
-  <div class="input">
+<div class="rename-form" [class.rename-dark]="darkMode()" [attr.aria-busy]="nodeRenamingFile">
+  <label for="rename-file-name">{{ 'WORKBENCH.newFilename' | translate }}</label>
+  <div class="rename-input-group">
     <input
+      id="rename-file-name"
       #renameFileInput
-      (keyup.enter)="attemptToRename()"
+      cdkFocusInitial
+      (keyup.enter)="!nodeRenamingFile && renamingWIP.length > 0 && (renamingWIP + '.' + renamingExtension) !== currentRightClickedItem().fileName && attemptToRename()"
       [(ngModel)]="renamingWIP"
-      [ngClass]="{ 'dark-mode-on': darkMode() }"
       [disabled]="nodeRenamingFile"
+      [attr.aria-invalid]="renameErrMsg !== ''"
+      [attr.aria-describedby]="renameErrMsg !== '' ? 'rename-file-error' : null"
       class="rename-file"
       type="text"
+      autocomplete="off"
+      spellcheck="false"
     >
-    <!-- in the mac the font sizes are not aligned properly and the extension shows up overlapping -->
-  @if (!macVersion()) {
-    <span
-      class="extension-hack"
-      [ngClass]="{ 'dark-mode-on': darkMode() }"
-    >
-      <span class="hidden">{{ renamingWIP }}</span>
-    @if (renamingWIP.length > 0) {
-      <span class="extension">.{{ renamingExtension }}</span>
-    }
-    </span>
-  }
+    <span class="rename-extension">.{{ renamingExtension }}</span>
   </div>
 
-@if (renameErrMsg !== '') {
-  <span class="rename-err-msg">
-    {{ renameErrMsg | translate }}
-  </span>
-}
+  @if (renameErrMsg !== '') {
+    <p id="rename-file-error" class="rename-err-msg" role="alert">
+      {{ renameErrMsg | translate }}
+    </p>
+  }
 
-  <button
-    [disabled]="
-          (renamingWIP + '.' + renamingExtension) === currentRightClickedItem().fileName
+  <div class="rename-actions">
+    <span class="rename-status" role="status">
+      @if (nodeRenamingFile) {
+        {{ 'WORKBENCH.renamingFile' | translate }}
+      }
+    </span>
+    <button
+      type="button"
+      [disabled]="(renamingWIP + '.' + renamingExtension) === currentRightClickedItem().fileName
         || nodeRenamingFile
-        || renamingWIP.length === 0
-      "
-    class="wizard-button button-rename"
-    (click)="attemptToRename()"
-  >
-    {{ 'RIGHTCLICK.renameButton' | translate }}
-  </button>
-
+        || renamingWIP.length === 0"
+      class="wizard-button button-rename"
+      (click)="attemptToRename()"
+    >
+      {{ 'RIGHTCLICK.renameButton' | translate }}
+    </button>
+  </div>
 </div>

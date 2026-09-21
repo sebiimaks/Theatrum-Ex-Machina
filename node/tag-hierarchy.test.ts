@@ -35,6 +35,7 @@ import {
   validateAndNormalizeNewTagPath,
 } from '../interfaces/tag-hierarchy.ts';
 import type { TagHierarchyNode, TagHierarchySource } from '../interfaces/tag-hierarchy.ts';
+import { TagTreeExpansionState } from '../src/app/common/tag-tree-expansion';
 
 function findNode(nodes: readonly TagHierarchyNode[], fullPath: string): TagHierarchyNode {
   for (const node of nodes) {
@@ -655,11 +656,8 @@ test('renders the hierarchy as an independent vertical right-side panel', () => 
 
   const panelStart = homeTemplate.indexOf('class="right-tag-panel"');
   const bottomTrayStart = homeTemplate.indexOf('class="bottom-tray"');
-  const bottomTabsStart = homeTemplate.indexOf('class="all-settings-tabs bottom-tray-tabs"');
-  const floatingButtonStart = homeTemplate.indexOf('class="catalogueEditorButton tag-panel-button"');
   const panelGuardStart = homeTemplate.lastIndexOf('@if (', panelStart);
-  const floatingButtonGuardStart = homeTemplate.lastIndexOf('@if (', floatingButtonStart);
-  const windowContentEnd = homeTemplate.indexOf('end of window-content');
+  const toolbarStart = homeTemplate.indexOf('class="workbench-gallery-actions"');
   assert.ok(panelStart > -1);
   assert.ok(panelStart < bottomTrayStart);
   assert.match(
@@ -667,31 +665,22 @@ test('renders the hierarchy as an independent vertical right-side panel', () => 
     /<app-tag-tray[\s\S]*\[verticalLayout\]="true"/,
   );
   assert.doesNotMatch(homeTemplate.slice(bottomTrayStart), /<app-tag-tray/);
-  assert.ok(floatingButtonStart > panelStart);
-  assert.ok(floatingButtonStart > windowContentEnd);
+  assert.ok(toolbarStart > -1 && toolbarStart < panelStart);
   assert.match(
     homeTemplate.slice(panelGuardStart, panelStart),
     /!wizard\.showWizard/,
   );
   assert.match(
-    homeTemplate.slice(floatingButtonGuardStart, floatingButtonStart),
-    /!wizard\.showWizard/,
-  );
-  assert.doesNotMatch(
-    homeTemplate.slice(bottomTabsStart),
+    homeTemplate.slice(toolbarStart, homeTemplate.indexOf('</section>', toolbarStart)),
     /toggleButton\('showTagTray'\)/,
   );
-  assert.match(
-    homeTemplate.slice(panelStart, bottomTabsStart),
-    /!settingsButtons\['showTagTray'\]\.toggled[\s\S]*toggleButton\('showTagTray'\)/,
+  assert.doesNotMatch(
+    homeTemplate.slice(bottomTrayStart),
+    /toggleButton\('showTagTray'\)/,
   );
+  assert.doesNotMatch(homeTemplate, /class="catalogueEditorButton tag-panel-button"/);
   assert.match(homeComponent, /uniqueKey === 'showTagTray'[\s\S]*scheduleGalleryLayoutRefresh/);
   assert.match(layoutStyles, /--app-tag-panel-width: #\{variables\.\$sidebar-width\};/);
-  assert.match(
-    homeTemplate.slice(floatingButtonStart),
-    /<app-icon[^>]*\[icon\]="'icon-tag'"[\s\S]*SETTINGS\.trayTags/,
-  );
-  assert.match(layoutStyles, /\.catalogueEditorButton\.tag-panel-button\s*\{[\s\S]*bottom: 12px;[\s\S]*color: var\(--app-accent-text\);[\s\S]*font-weight: 700;[\s\S]*right: 12px;[\s\S]*width: 72px;/);
   assert.match(layoutStyles, /\.gallery-container-tag-panel-open\s*\{/);
   assert.match(layoutStyles, /\.right-tag-panel\s*\{[\s\S]*position: absolute;/);
   assert.match(tagStyles, /\.manual-tag-tray-vertical\s*\{[\s\S]*flex-direction: column;/);
@@ -806,4 +795,87 @@ test('requires tag-removal confirmation only when video assignments are affected
   assert.equal(tagRemovalRequiresConfirmation(0), false);
   assert.equal(tagRemovalRequiresConfirmation(1), true);
   assert.equal(tagRemovalRequiresConfirmation(25), true);
+});
+
+
+test('search reveals matching ancestors while allowing individual branches to collapse and reopen', () => {
+  const state = new TagTreeExpansionState();
+  state.rememberExpanded('Topics');
+  assert.equal(state.isExpanded('Topics > Art'), false);
+
+  state.setFilter('painting');
+  assert.equal(state.isExpanded('Topics'), true);
+  assert.equal(state.isExpanded('Topics > Art'), true);
+  state.toggle('Topics > Art');
+  assert.equal(state.isExpanded('Topics > Art'), false);
+  assert.equal(state.isExpanded('Topics'), true);
+  state.toggle('Topics > Art');
+  assert.equal(state.isExpanded('Topics > Art'), true);
+});
+
+test('collapse all and expand all operate during search without changing ordinary expansion', () => {
+  const state = new TagTreeExpansionState();
+  const paths = ['Topics', 'Topics > Art', 'Locations'];
+  state.rememberExpanded('Topics');
+  state.setFilter('painting');
+  state.collapseAll(paths);
+  paths.forEach((path) => assert.equal(state.isExpanded(path), false));
+  state.toggle('Topics');
+  assert.equal(state.isExpanded('Topics'), true);
+  assert.equal(state.isExpanded('Topics > Art'), false);
+  state.expandAll(paths);
+  paths.forEach((path) => assert.equal(state.isExpanded(path), true));
+
+  state.setFilter('');
+  assert.equal(state.isExpanded('Topics'), true);
+  assert.equal(state.isExpanded('Topics > Art'), false);
+  assert.equal(state.isExpanded('Locations'), false);
+});
+
+test('a different search reveals its matches while repeated or equivalent queries preserve collapse choices', () => {
+  const state = new TagTreeExpansionState();
+  state.setFilter('painting');
+  state.toggle('Topics');
+  state.setFilter('painting');
+  assert.equal(state.isExpanded('Topics'), false);
+  state.setFilter('  PAINTING  ');
+  assert.equal(state.isExpanded('Topics'), false);
+  state.setFilter('sculpture');
+  assert.equal(state.isExpanded('Topics'), true);
+  state.toggle('Topics');
+  state.setFilter('');
+  state.setFilter('sculpture');
+  assert.equal(state.isExpanded('Topics'), true);
+});
+
+test('ordinary collapse all can be followed by search and clearing search without reopening branches', () => {
+  const state = new TagTreeExpansionState();
+  const paths = ['Topics', 'Topics > Art'];
+  state.expandAll(paths);
+  state.collapseAll(paths);
+  state.setFilter('painting');
+  assert.equal(state.isExpanded('Topics > Art'), true);
+  state.setFilter('   ');
+  paths.forEach((path) => assert.equal(state.isExpanded(path), false));
+});
+
+test('moving a tag branch remaps ordinary and search expansion choices on segment boundaries', () => {
+  const state = new TagTreeExpansionState();
+  state.rememberExpanded('Art');
+  state.rememberExpanded('Art > Painting');
+  state.rememberExpanded('Artist');
+  state.setFilter('art');
+  state.toggle('Art');
+  state.toggle('Art > Painting');
+  state.toggle('Artist');
+  state.remapBranch('Art', 'Topics > Art');
+
+  assert.equal(state.isExpanded('Topics > Art'), true, 'the moved root should be revealed');
+  assert.equal(state.isExpanded('Topics > Art > Painting'), false);
+  assert.equal(state.isExpanded('Artist'), false);
+  state.setFilter('');
+  assert.equal(state.isExpanded('Topics > Art'), true);
+  assert.equal(state.isExpanded('Topics > Art > Painting'), true);
+  assert.equal(state.isExpanded('Art'), false);
+  assert.equal(state.isExpanded('Artist'), true);
 });

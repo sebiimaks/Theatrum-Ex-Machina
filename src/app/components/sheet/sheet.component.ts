@@ -1,5 +1,5 @@
 import type { OnInit } from '@angular/core';
-import { Component, input, output } from '@angular/core';
+import { Component, computed, input, output } from '@angular/core';
 
 import * as path from 'path';
 import type { BehaviorSubject } from 'rxjs';
@@ -36,6 +36,7 @@ export interface DefaultScreenEmission {
 })
 export class SheetComponent implements OnInit {
 
+  readonly closeSheet = output<void>();
   readonly filterTag = output<TagEmit>();
   readonly openVideoAtTime = output<object>();
 
@@ -60,8 +61,16 @@ export class SheetComponent implements OnInit {
 
   readonly renameResponse = input<BehaviorSubject<RenameFileResponse>>();
 
-  pathToFilmstripJpg: string;
-  pathToVideoFile: string;
+  readonly pathToFilmstripJpg = computed(() => this.filePathService.createFilePath(
+    this.folderPath(), this.hubName(), 'filmstrips', this.video().hash,
+  ));
+
+  // Renames update the existing video object while the inspector stays open.
+  // Derive the display/copy path from its current location on each read.
+  get pathToVideoFile(): string {
+    const video = this.video();
+    return path.join(this.selectedSourceFolder(), video.partialPath, video.fileName);
+  }
   percentOffset = 0;
   starRatingHack: StarRating;
   thumbnailsToDisplay = 4;
@@ -81,14 +90,12 @@ export class SheetComponent implements OnInit {
     // useful so that @for has something to `track`
     this.arrayHack = Array.from({ length: this.video().screens }, (_, index) => index);
 
-    this.pathToFilmstripJpg = this.filePathService.createFilePath(this.folderPath(), this.hubName(), 'filmstrips', this.video().hash);
-    this.pathToVideoFile = path.join(this.selectedSourceFolder(), this.video().partialPath, this.video().fileName);
     this.percentOffset = (100 / this.video().screens);
     this.starRatingHack = this.star();
   }
 
   decreaseZoomLevel() {
-    if (this.thumbnailsToDisplay > 1) {
+    if (this.thumbnailsToDisplay < 10) {
       this.thumbnailsToDisplay++;
     }
   }
@@ -98,7 +105,7 @@ export class SheetComponent implements OnInit {
   }
 
   increaseZoomLevel() {
-    if (this.thumbnailsToDisplay < 10) {
+    if (this.thumbnailsToDisplay > 1) {
       this.thumbnailsToDisplay--;
     }
   }

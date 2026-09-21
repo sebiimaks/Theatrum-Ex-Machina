@@ -30,6 +30,7 @@ export class SimilarTrayComponent {
 
   readonly appState = input();
   readonly currentClickedItemName = input();
+  readonly playbackRevision = input(0);
   readonly previewHeightRelated = input();
   readonly previewWidthRelated = input();
   readonly settingsButtons = input<SettingsButtonsType>();

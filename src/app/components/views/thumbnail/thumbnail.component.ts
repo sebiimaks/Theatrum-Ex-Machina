@@ -1,5 +1,5 @@
 import type { OnInit, ElementRef, OnDestroy } from '@angular/core';
-import { Component, Input, input, output, viewChild } from '@angular/core';
+import { Component, Input, computed, input, output, viewChild } from '@angular/core';
 
 import { FilePathService } from '../file-path.service';
 
@@ -52,9 +52,17 @@ export class ThumbnailComponent implements OnInit, OnDestroy {
   readonly thumbAutoAdvance = input<boolean>();
 
   containerWidth = 100; // arbitrary rather than undefined
-  firstFilePath = '';
-  folderThumbPaths: string[] = [];
-  fullFilePath = '';
+  readonly firstFilePath = computed(() => this.filePathService.createFilePath(
+    this.folderPath(), this.hubName(), 'thumbnails', this.video.hash, false, this.video.uuid,
+  ));
+  readonly folderThumbPaths = computed(() => this.video.hash.split(':').slice(0, 4).map(
+    (hash) => this.filePathService.createFilePath(
+      this.folderPath(), this.hubName(), 'thumbnails', hash, false, this.video.uuid,
+    ),
+  ));
+  readonly fullFilePath = computed(() => this.filePathService.createFilePath(
+    this.folderPath(), this.hubName(), 'filmstrips', this.video.hash,
+  ));
   hover = false;
   indexToShow = 1;
   percentOffset = 0;
@@ -66,22 +74,6 @@ export class ThumbnailComponent implements OnInit, OnDestroy {
   ) { }
 
   ngOnInit() {
-    // multiple hashes == folder view
-    if (this.video.hash.indexOf(':') !== -1) {
-      const hashes = this.video.hash.split(':');
-      hashes.slice(0, 4).forEach((hash) => {
-        this.folderThumbPaths.push(
-          this.filePathService.createFilePath(this.folderPath(), this.hubName(), 'thumbnails', hash, false, this.video.uuid),
-        );
-      });
-    } else {
-      this.firstFilePath = this.filePathService.createFilePath(
-        this.folderPath(), this.hubName(), 'thumbnails', this.video.hash, false, this.video.uuid,
-      );
-      this.fullFilePath = this.filePathService.createFilePath(this.folderPath(), this.hubName(), 'filmstrips', this.video.hash);
-      this.folderThumbPaths.push(this.firstFilePath);
-    }
-
     if (this.video.defaultScreen) {
       this.hover = true;
       this.percentOffset = this.defaultScreenOffset(this.video);

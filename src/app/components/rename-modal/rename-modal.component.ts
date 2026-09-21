@@ -1,4 +1,6 @@
-import { Component, input, output } from '@angular/core';
+import { Component, input, output, viewChild } from '@angular/core';
+
+import { RenameFileComponent } from '../rename-file/rename-file.component';
 
 import type { BehaviorSubject } from 'rxjs';
 
@@ -20,6 +22,7 @@ import type { SettingsButtonsType } from '../../common/settings-buttons';
 export class RenameModalComponent {
 
   readonly closeRename = output<void>();
+  readonly renameFile = viewChild(RenameFileComponent);
 
   readonly appState = input<AppStateInterface>();
   readonly basePath = input<string>();
@@ -28,6 +31,12 @@ export class RenameModalComponent {
   readonly settingsButtons = input<SettingsButtonsType>();
 
   readonly renameResponse = input<BehaviorSubject<RenameFileResponse>>();
+
+  requestClose(): void {
+    if (!this.renameFile()?.nodeRenamingFile) {
+      this.closeRename.emit();
+    }
+  }
 
   constructor() { }
 

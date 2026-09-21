@@ -106,8 +106,8 @@ $minimize-botton: #fec02f;
 // =============================================================
 // Layout variables
 // -------------------------------------------------------------
-$settings-height: 40px;
-$sidebar-width: 190px;
+$settings-height: var(--app-workspace-toolbar-height, 96px);
+$sidebar-width: 220px;
 $top-region: 45px;
 
 
