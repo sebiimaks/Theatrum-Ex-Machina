@@ -2344,6 +2344,11 @@ export function updateSourceFolderIgnoredSubdirectories(
   };
 }
 
+/** Whether a source already has an active filesystem watcher. */
+export function hasSourceWatcher(inputSource: number): boolean {
+  return watcherMap.has(inputSource);
+}
+
 /**
  * Close the old watcher
  * happens when opening a new hub (or user toggles the `watch` near folder)

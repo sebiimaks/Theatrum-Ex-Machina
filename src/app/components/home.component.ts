@@ -962,16 +962,18 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       }
     });
 
-    // TODO -- update 'source connected' thingy
-    this.electronService.ipcRenderer.on('directory-now-connected', (event, sourceIndex: number, sourcePath: string) => {
+    // Source availability can change while a catalogue remains open.
+    this.electronService.ipcRenderer.on('directory-now-connected', (event, sourceIndex: number, sourcePath: string, watching?: boolean) => this.zone.run(() => {
 
-      // TODO -- if this error never happens, all is well; remove the `sourcePath` from this method :)
       if (this.sourceFolderService.selectedSourceFolder[sourceIndex]?.path !== sourcePath) {
-        console.log('WARNING HUGE ERROR HERE !!!!!! MUST NEVER HAPPEN !!!');
         return;
       }
 
+      const connectionChanged = this.sourceFolderService.sourceFolderConnected[sourceIndex] !== true;
       this.sourceFolderService.sourceFolderConnected[sourceIndex] = true;
+      if (typeof watching === 'boolean') {
+        this.sourceFolderService.selectedSourceFolder[sourceIndex].watch = watching;
+      }
 
       let preferredLocationChanged = false;
       this.imageElementService.imageElements.forEach((element: ImageElement) => {
@@ -991,9 +993,24 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       });
       if (preferredLocationChanged) {
         this.imageElementService.finalArrayNeedsSaving = true;
+      }
+      if (connectionChanged || preferredLocationChanged) {
         this.resetFinalArrayRef();
       }
-    });
+    }));
+
+    this.electronService.ipcRenderer.on('directory-now-disconnected', (event, sourceIndex: number, sourcePath: string) => this.zone.run(() => {
+      if (this.sourceFolderService.selectedSourceFolder[sourceIndex]?.path !== sourcePath) {
+        return;
+      }
+      const connectionChanged = this.sourceFolderService.sourceFolderConnected[sourceIndex] !== false;
+      this.sourceFolderService.sourceFolderConnected[sourceIndex] = false;
+      this.sourceFolderService.clearSourceState(sourceIndex);
+      this.allFinishedScanning = this.sourceFolderService.areAllFinishedScanning();
+      if (connectionChanged) {
+        this.resetFinalArrayRef();
+      }
+    }));
 
     this.electronService.ipcRenderer.on('started-watching-this-dir', (
       event,

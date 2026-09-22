@@ -65,6 +65,7 @@ export const MAIN_TO_RENDERER_CHANNELS = [
   'current-vha-file-saved',
   'custom-thumbnail-replaced',
   'directory-now-connected',
+  'directory-now-disconnected',
   'file-deleted',
   'file-not-found',
   'final-object-returning',

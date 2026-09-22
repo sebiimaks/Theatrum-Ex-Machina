@@ -22,6 +22,7 @@ import {
   writeVhaJsonExclusively,
 } from './node/vha-file-persistence';
 import { CatalogueOpenQueue } from './node/catalogue-open-queue';
+import { SourceFolderConnections, type SourceConnectionSession, type SourceConnectionSource } from './node/source-folder-connections';
 import { prepareAuthorizedCatalogueWrite } from './node/catalogue-write-authority';
 import {
   buildCatalogueMediaLocationAuthority,
@@ -41,6 +42,8 @@ import {
   closeAllWatchers,
   closeWatcher,
   isThumbnailRegenerationActive,
+  hasSourceWatcher,
+  startFileSystemWatching,
   resetAllQueues,
   setThumbnailRegenerationBlocked,
 } from './node/main-extract-async';
@@ -218,11 +221,14 @@ function pathForNativeDialog(value: string): string {
 }
 
 async function authorizePersistedSourceAccess(
-  finalObject: FinalObject,
+  finalObject: Pick<FinalObject, 'inputDirs'>,
   cataloguePath: string,
-  operationGeneration: number,
+  operationGeneration: number | (() => void),
 ): Promise<SourceAccessAuthorization> {
-  assertCurrentCatalogueOpenOperation(operationGeneration);
+  const assertCurrent = typeof operationGeneration === 'function'
+    ? operationGeneration
+    : () => assertCurrentCatalogueOpenOperation(operationGeneration);
+  assertCurrent();
   const catalogueAuthorityPath = fs.realpathSync.native(cataloguePath);
   const review = reviewPersistedSourceAccessRequests(finalObject.inputDirs);
   const unknownPaths: string[] = [];
@@ -231,7 +237,7 @@ async function authorizePersistedSourceAccess(
   const authorizedRealPaths = new Map<string, string>();
 
   review.requestedPaths.forEach((sourcePath: string) => {
-    assertCurrentCatalogueOpenOperation(operationGeneration);
+    assertCurrent();
     let canonicalSourcePath: string;
     try {
       resolveAuthorizedSourceDirectory(sourcePath);
@@ -270,7 +276,7 @@ async function authorizePersistedSourceAccess(
   const batchSize = 10;
   const batchCount = Math.ceil(unknownPaths.length / batchSize);
   for (let start = 0; start < unknownPaths.length; start += batchSize) {
-    assertCurrentCatalogueOpenOperation(operationGeneration);
+    assertCurrent();
     const batch = unknownPaths.slice(start, start + batchSize);
     const batchNumber = Math.floor(start / batchSize) + 1;
     const choice = await dialog.showMessageBox(win, {
@@ -293,13 +299,13 @@ async function authorizePersistedSourceAccess(
       title: 'Allow Catalogue Folder Access?',
       type: 'warning',
     });
-    assertCurrentCatalogueOpenOperation(operationGeneration);
+    assertCurrent();
     const allow = choice.response === 0;
     // An affirmative choice grants only the paths displayed in this dialog.
     // A denial can safely cover all remaining paths because it confers no capability.
     const pathsToRecord = allow ? batch : unknownPaths.slice(start);
     pathsToRecord.forEach((sourcePath: string) => {
-      assertCurrentCatalogueOpenOperation(operationGeneration);
+      assertCurrent();
       const reviewedRealPath = reviewedRealPaths.get(sourcePath);
       let canonicalSourcePath: string;
       try {
@@ -330,7 +336,7 @@ async function authorizePersistedSourceAccess(
       break;
     }
   }
-  assertCurrentCatalogueOpenOperation(operationGeneration);
+  assertCurrent();
   return {
     changed: review.changed,
     paths: authorizedPaths,
@@ -440,6 +446,130 @@ async function authorizePersistedSourceWatches(
   assertCurrentCatalogueOpenOperation(operationGeneration);
   return authorizedWatchPaths;
 }
+
+/** Recheck availability without remapping roots or changing catalogue media authority. */
+function sourceConnectionSessionIsCurrent(
+  session: SourceConnectionSession,
+  source: SourceConnectionSource,
+): boolean {
+  return Boolean(win && !win.isDestroyed() && !GLOBALS.readyToQuit)
+    && !GLOBALS.catalogueTransitionActive
+    && !GLOBALS.cataloguePersistenceActive
+    && GLOBALS.catalogueSessionGeneration === session.generation
+    && GLOBALS.currentlyOpenVhaFile === session.cataloguePath
+    && GLOBALS.selectedSourceFolders[source.index]?.path === source.path;
+}
+
+const sourceFolderConnections = new SourceFolderConnections({
+  captureSession: () => {
+    if (
+      !win || win.isDestroyed() || !win.isVisible() || GLOBALS.readyToQuit
+      || GLOBALS.catalogueTransitionActive || GLOBALS.cataloguePersistenceActive
+      || !GLOBALS.currentlyOpenVhaFile || !GLOBALS.angularApp?.sender
+      || GLOBALS.angularApp.sender.isDestroyed()
+    ) {
+      return undefined;
+    }
+    return {
+      cataloguePath: GLOBALS.currentlyOpenVhaFile,
+      generation: GLOBALS.catalogueSessionGeneration,
+      sources: Object.entries(GLOBALS.selectedSourceFolders).flatMap(([key, source]) => {
+        const index = Number(key);
+        if (!Number.isSafeInteger(index) || index < 0) {
+          return [];
+        }
+        try {
+          const sourcePath = normalizeAbsolutePath(source.path, 'Source folder');
+          return sourcePath === path.parse(sourcePath).root ? [] : [{ index, path: source.path }];
+        } catch {
+          return [];
+        }
+      }),
+    };
+  },
+  isCurrent: sourceConnectionSessionIsCurrent,
+  probe: async (source) => {
+    try {
+      // Check only the configured root, never crawl an unapproved directory.
+      const canonicalPath: string = await fs.promises.realpath(source.path);
+      if (canonicalPath === path.parse(canonicalPath).root) {
+        return undefined;
+      }
+      const stats = await fs.promises.stat(source.path);
+      if (!stats.isDirectory()) {
+        return undefined;
+      }
+      await fs.promises.access(source.path, fs.constants.R_OK);
+      return canonicalPath;
+    } catch {
+      // Offline or OS-denied sources remain unavailable and are checked again.
+      return undefined;
+    }
+  },
+  authorize: async (session, source, canonicalPath) => {
+    const sourcePath = path.normalize(source.path);
+    if (
+      GLOBALS.authorizedSourceFolderPaths.has(sourcePath)
+      && GLOBALS.authorizedSourceFolderRealPaths.get(sourcePath) === canonicalPath
+    ) {
+      return true;
+    }
+    const assertCurrent = (): void => {
+      if (!sourceConnectionSessionIsCurrent(session, source)) {
+        throw new CatalogueOpenSupersededError();
+      }
+    };
+    const access = await authorizePersistedSourceAccess(
+      { inputDirs: { [source.index]: { ...GLOBALS.selectedSourceFolders[source.index] } } },
+      session.cataloguePath,
+      assertCurrent,
+    );
+    assertCurrent();
+    if (!access.paths.has(sourcePath) || access.realPaths.get(sourcePath) !== canonicalPath) {
+      return false;
+    }
+    GLOBALS.authorizedSourceFolderPaths.add(sourcePath);
+    GLOBALS.authorizedSourceFolderRealPaths.set(sourcePath, canonicalPath);
+    return true;
+  },
+  connectionChanged: (session, source, connected, canonicalPath) => {
+    const sender = GLOBALS.angularApp?.sender;
+    if (!sourceConnectionSessionIsCurrent(session, source) || !sender || sender.isDestroyed()) {
+      return;
+    }
+    if (!connected) {
+      closeWatcher(source.index);
+      sender.send('directory-now-disconnected', source.index, source.path);
+      return;
+    }
+    const sourcePath = path.normalize(source.path);
+    const shouldWatch = GLOBALS.catalogueAccessMode === 'read-write'
+      && GLOBALS.selectedSourceFolders[source.index]?.watch === true
+      && sourceWatchDecision(
+        GLOBALS.settingsPath,
+        fs.realpathSync.native(session.cataloguePath),
+        canonicalPath,
+      ) === true;
+    // A reconnect restores a separately saved watching grant, never creates one.
+    if (shouldWatch) {
+      requireAuthorizedSourceRoot(
+        sourcePath,
+        Array.from(GLOBALS.authorizedSourceFolderPaths),
+        GLOBALS.authorizedSourceFolderRealPaths,
+      );
+      GLOBALS.authorizedSourceWatchPaths.add(sourcePath);
+      if (!hasSourceWatcher(source.index)) {
+        startFileSystemWatching(sourcePath, source.index, true);
+      }
+    }
+    sender.send('directory-now-connected', source.index, source.path, shouldWatch);
+  },
+  reportError: (error) => {
+    if (!(error instanceof CatalogueOpenSupersededError)) {
+      console.warn('Unable to refresh source-folder connection:', error);
+    }
+  },
+});
 
 function reconcileSourceFoldersBeforeCatalogueSwitch(nextSources: FinalObject['inputDirs']): void {
   const retainedPaths = new Set<string>();
@@ -988,8 +1118,17 @@ function createWindow() {
     }
   });
 
+  // Availability is independent of continuous media scanning/watching.
+  const sourceConnectionTimer = setInterval(() => {
+    void sourceFolderConnections.refresh();
+  }, 5000);
+  sourceConnectionTimer.unref();
+  win.on('focus', () => { void sourceFolderConnections.refresh(); });
+
   // Emitted when the window is closed.
   win.on('closed', () => {
+    clearInterval(sourceConnectionTimer);
+    sourceFolderConnections.reset();
     rendererCanReceiveCatalogueOpenRequests = false;
     invalidateActiveCatalogueOpenOperation();
     catalogueOpenQueue.requeueInFlight();

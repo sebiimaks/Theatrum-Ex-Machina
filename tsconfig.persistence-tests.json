@@ -39,6 +39,7 @@
     "node/thumbnail-regeneration-ipc.test.ts",
     "node/gallery-layout.test.ts",
     "node/settings-startup.test.ts",
+    "node/source-folder-connections.test.ts",
     "node/tag-hierarchy.test.ts",
     "node/main-extract.ts",
     "node/local-operation-safety.ts",

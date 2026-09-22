@@ -65,6 +65,7 @@ const eventChannels = new Set<string>([
   'current-vha-file-saved',
   'custom-thumbnail-replaced',
   'directory-now-connected',
+  'directory-now-disconnected',
   'file-deleted',
   'file-not-found',
   'final-object-returning',
