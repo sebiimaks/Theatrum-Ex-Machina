@@ -26,8 +26,10 @@ import {
   removeImageLocationsForSource,
 } from '../interfaces/media-locations';
 import { shouldStartSourceOnCatalogueSetup } from '../interfaces/folder-scan-startup';
+import { configuredSourceRootsEqual } from '../interfaces/source-folder-path';
 import { startFileSystemWatching, resetWatchers } from './main-extract-async';
-import { writeVhaJsonAtomically } from './vha-file-persistence';
+import { beginNormalMediaTask, captureNormalMediaGeneration, normalMediaWorkIsCurrent, registerNormalMediaProcess, trackNormalMediaWork } from './main-extract';
+import { captureCatalogueStorageTarget, writeCatalogueStorage } from './catalogue-storage';
 import {
   buildFfprobeArguments,
   isUsablePersistedSourcePath,
@@ -249,8 +251,13 @@ export function retainConfiguredImageLocations(
  * @param pathToFile    -- the path with name of `vha` file to write to disk
  * @param done          -- function to execute when done writing the file
  */
-export function writeVhaFileToDisk(finalObject: FinalObject, pathToTheFile: string, done): void {
+export function writeVhaFileToDisk(
+  finalObject: FinalObject,
+  pathToTheFile: string,
+  done: (error?: Error) => void | Promise<void>,
+): Promise<void> {
   try {
+    const storageTarget = captureCatalogueStorageTarget(GLOBALS.catalogueStorage, pathToTheFile);
     finalObject.images = finalObject.images.filter(element => !element.deleted);
 
     const catalogueEntryLabels = new Map<ImageElement, string>();
@@ -287,13 +294,12 @@ export function writeVhaFileToDisk(finalObject: FinalObject, pathToTheFile: stri
 
     finalObject.numOfFolders = countFoldersInFinalArray(finalObject.images);
 
-    const json = JSON.stringify(finalObject);
-    writeVhaJsonAtomically(pathToTheFile, json).then(
+    return writeCatalogueStorage(storageTarget, finalObject).then(
       () => done(),
       (error: Error) => done(error),
     );
   } catch (error) {
-    done(error);
+    return Promise.resolve(done(error));
   }
 }
 
@@ -497,7 +503,12 @@ export function extractMetadataAsync(
   filePath: string,
   screenshotSettings: ScreenshotSettings,
 ): Promise<ImageElement> {
-  return new Promise((resolve, reject) => {
+  const generation = captureNormalMediaGeneration();
+  if (!normalMediaWorkIsCurrent(generation)) { return Promise.reject(new Error('Media work is unavailable.')); }
+  const current = (): void => {
+    if (!normalMediaWorkIsCurrent(generation)) { throw new Error('Media work is unavailable.'); }
+  };
+  return trackNormalMediaWork(new Promise<ImageElement>((resolve, reject) => {
     let ffprobeArguments: string[];
     try {
       ffprobeArguments = buildFfprobeArguments(path.normalize(filePath));
@@ -506,13 +517,19 @@ export function extractMetadataAsync(
       return;
     }
 
-    execFile(ffprobePath, ffprobeArguments, {
+    // A timeout callback is not proof of native process termination. Hold a
+    // separate lease until the child emits close, in addition to the stat/hash
+    // promise below. A failed kill cannot let a private transition pass early.
+    const childClosed = beginNormalMediaTask();
+    let child;
+    try { child = execFile(ffprobePath, ffprobeArguments, {
       maxBuffer: 16 * 1024 * 1024,
       // Large or remote files can legitimately take longer than one minute to
       // inspect. A finite upper bound still prevents an orphaned probe process.
       timeout: getFfprobeTimeoutMs(filePath),
       windowsHide: true,
     }, (err, data, stderr) => {
+      try { current(); } catch (error) { reject(error); return; }
       if (err) {
         reject(err);
       } else {
@@ -532,6 +549,7 @@ export function extractMetadataAsync(
         const origHeight = stream.height || 0;
 
         fs.stat(filePath, (err2, fileStat) => {
+          try { current(); } catch (error) { reject(error); return; }
           if (err2) {
             reject(err2);
             return;
@@ -548,15 +566,24 @@ export function extractMetadataAsync(
           imageElement.fps       = realFps;
 
           hashFileAsync(filePath, fileStat).then((hash) => {
+            current();
             imageElement.hash = hash;
             resolve(imageElement);
-          }, reject);
+          }).catch(reject);
 
         });
 
       }
-    });
-  });
+    }); } catch (error) { childClosed(); reject(error); return; }
+    child.once('close', childClosed);
+    try {
+      const unregister = registerNormalMediaProcess(child);
+      child.once('close', unregister);
+    } catch (error) {
+      try { child.kill('SIGKILL'); } catch { /* Keep the close lease until native termination is proven. */ }
+      reject(error);
+    }
+  }));
 }
 
 /**
@@ -682,6 +709,19 @@ export function setUpDirectoryWatchers(
   scanNonWatchingSources: boolean,
   allowWatchingAndScanning = true,
 ): void {
+  const mediaGeneration = captureNormalMediaGeneration();
+  const catalogueGeneration = GLOBALS.catalogueSessionGeneration;
+  const storage = GLOBALS.catalogueStorage;
+  const cataloguePath = GLOBALS.currentlyOpenVhaFile;
+  const sender = GLOBALS.angularApp?.sender;
+  const setupIsCurrent = (): boolean => normalMediaWorkIsCurrent(mediaGeneration)
+    && storage?.kind === 'normal'
+    && GLOBALS.catalogueStorage === storage
+    && GLOBALS.catalogueSessionGeneration === catalogueGeneration
+    && GLOBALS.currentlyOpenVhaFile === cataloguePath
+    && GLOBALS.angularApp?.sender === sender
+    && sender && !sender.isDestroyed();
+  if (!setupIsCurrent()) { return; }
 
   console.log('---------------------------------');
   console.log(' SETTING UP FILE SYSTEM WATCHERS' );
@@ -693,6 +733,10 @@ export function setUpDirectoryWatchers(
 
     const pathToDir: string =    inputDirs[key].path;
     const shouldWatch: boolean = inputDirs[key].watch;
+    const sourceIndex = Number(key);
+    const configuredSource = GLOBALS.selectedSourceFolders[sourceIndex];
+    if (!Number.isSafeInteger(sourceIndex) || sourceIndex < 0 || !configuredSource
+      || !configuredSourceRootsEqual(configuredSource.path, pathToDir)) { return; }
 
     console.log(key, 'watch =', shouldWatch, ':', pathToDir);
 
@@ -711,33 +755,40 @@ export function setUpDirectoryWatchers(
       return;
     }
 
-    // check if directory connected
-    // Reading is sufficient for catalogue scans and playback. A read-only
-    // external or network volume should still be treated as connected.
-    fs.access(pathToDir, fs.constants.R_OK, (err: any) => {
-
-      if (!err) {
-        GLOBALS.angularApp.sender.send('directory-now-connected', parseInt(key, 10), pathToDir);
-
-        if (
-          allowWatchingAndScanning
-          && shouldStartSourceOnCatalogueSetup(shouldWatch, scanNonWatchingSources)
-          && (!shouldWatch || GLOBALS.authorizedSourceWatchPaths.has(pathToDir))
-        ) {
-
-          // Temp logging
-          if (!shouldWatch) {
-            console.log('FIRST SCAN');
-          } else {
-            console.log('PERSISTENT WATCHING !!!');
+    const authorizedRoots = GLOBALS.authorizedSourceFolderPaths;
+    const authorizedRealPaths = GLOBALS.authorizedSourceFolderRealPaths;
+    const authorizedRealPath = authorizedRealPaths.get(pathToDir);
+    // The native access callback can arrive after this setup call (and its IPC
+    // lease) returns. Own its full lifetime and keep the original capability;
+    // a reconnect or queue reset must not give old callbacks fresh authority.
+    const sourceIsCurrent = (): boolean => {
+      if (!setupIsCurrent() || GLOBALS.selectedSourceFolders[sourceIndex] !== configuredSource
+        || GLOBALS.authorizedSourceFolderPaths !== authorizedRoots
+        || GLOBALS.authorizedSourceFolderRealPaths !== authorizedRealPaths
+        || authorizedRealPaths.get(pathToDir) !== authorizedRealPath
+        || !configuredSourceRootsEqual(configuredSource.path, pathToDir)) { return false; }
+      try {
+        requireAuthorizedSourceRoot(pathToDir, Array.from(GLOBALS.authorizedSourceFolderPaths),
+          GLOBALS.authorizedSourceFolderRealPaths);
+        return true;
+      } catch { return false; }
+    };
+    const accessCompleted = beginNormalMediaTask();
+    try {
+      fs.access(pathToDir, fs.constants.R_OK, (error: NodeJS.ErrnoException | null) => {
+        try {
+          if (error || !sourceIsCurrent()) { return; }
+          sender.send('directory-now-connected', sourceIndex, pathToDir);
+          if (sourceIsCurrent() && allowWatchingAndScanning
+            && shouldStartSourceOnCatalogueSetup(shouldWatch, scanNonWatchingSources)
+            && (!shouldWatch || GLOBALS.authorizedSourceWatchPaths.has(pathToDir))) {
+            startFileSystemWatching(pathToDir, sourceIndex, shouldWatch);
           }
-
-          startFileSystemWatching(pathToDir, parseInt(key, 10), shouldWatch);
-        }
-
-      }
-
-    });
+        } catch {
+          // A revoked/replaced source must not escape as an asynchronous error.
+        } finally { accessCompleted(); }
+      });
+    } catch { accessCompleted(); }
 
   });
 }

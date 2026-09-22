@@ -12,6 +12,7 @@ import {
 } from '../interfaces/catalogue-file';
 import { catalogueMediaAuthorityHashes } from './catalogue-media-authority';
 import { prepareAuthorizedCatalogueWrite } from './catalogue-write-authority';
+import { NormalOperationScope } from './normal-operation-scope';
 import { sanitizeScreenshotSettings } from './thumbnail-count';
 
 const repositoryRoot = path.join(__dirname, '..');
@@ -36,7 +37,13 @@ const registration = mainSyntax.statements.find((statement) => {
     && call.arguments[0].text === 'start-the-import';
 });
 assert.ok(registration, 'The production catalogue-creation listener must exist.');
-const listenerSource = ts.transpileModule(registration.getText(mainSyntax), {
+const dialogHelper = mainSyntax.statements.find(statement => ts.isFunctionDeclaration(statement)
+  && statement.name?.text === 'showNormalMessageBox');
+assert.ok(dialogHelper, 'The normal native-dialog lifetime helper must exist.');
+const listenerSource = ts.transpileModule([
+  dialogHelper.getText(mainSyntax),
+  registration.getText(mainSyntax),
+].join('\n'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
@@ -62,9 +69,11 @@ function currentDocument(): FinalObject {
 
 function createHarness(options: {
   accessMode?: 'read-only' | 'read-write';
+  creationCompletion?: Promise<void>;
   rejectMedia?: boolean;
 } = {}) {
   const selectedSourceFolders = { 0: { path: oldSource, watch: false } };
+  const operations = new NormalOperationScope();
   const oldMediaAuthority = new Set(['old-video\0' + '0\0\0old.mp4']);
   const oldImageHashes = new Set(['old-video']);
   const globals = {
@@ -107,14 +116,15 @@ function createHarness(options: {
   const finished: number[] = [];
   let activeGeneration: number | undefined;
   let reconcileCalls = 0;
-  let listener: (event: unknown, wizard: unknown, document?: FinalObject | null) => void;
-  const isCurrent = (generation: number): boolean => globals.catalogueTransitionActive
+  let listener: (event: unknown, wizard: unknown, document?: FinalObject | null) => void | Promise<void>;
+  const isCurrent = (generation: number): boolean => operations.isCurrent() && globals.catalogueTransitionActive
     && generation === activeGeneration
     && generation === globals.catalogueSessionGeneration;
 
   runInNewContext(listenerSource, {
     Error,
     GLOBALS: globals,
+    privateApplicationWorkspace: { status: { quitRequested: false } },
     Set,
     assertCurrentCatalogueOpenOperation: (generation: number): void => {
       assert.ok(isCurrent(generation), 'The creation must belong to the active transition.');
@@ -149,6 +159,7 @@ function createHarness(options: {
     isCurrentCatalogueOpenOperation: isCurrent,
     isSafeCatalogueHubName,
     isThumbnailRegenerationActive: (): boolean => false,
+    normalOperationScope: operations,
     path,
     prepareAuthorizedCatalogueWrite,
     reconcileRendererCatalogueMediaAuthority: (): Set<string> => {
@@ -173,12 +184,17 @@ function createHarness(options: {
     writeVhaFileAndStartExtraction: (
       generation: number,
       creation: { finalObject: FinalObject },
-    ): void => { creations.push({ generation, creation }); },
+    ): Promise<void> => {
+      creations.push({ generation, creation });
+      return options.creationCompletion ?? Promise.resolve();
+    },
     writeVhaFileToDisk: (
       document: FinalObject,
       destination: string,
-      complete: (error?: Error) => void,
-    ): void => { writes.push({ document, destination, complete }); },
+      complete: (error?: Error) => void | Promise<void>,
+    ): Promise<void> => new Promise<Error | undefined>((resolve) => {
+      writes.push({ document, destination, complete: resolve });
+    }).then(error => complete(error)),
   });
 
   return {
@@ -199,16 +215,21 @@ function createHarness(options: {
     folders,
     globals,
     messages,
-    start(document: FinalObject | null = currentDocument()): void {
-      listener({ sender: { send: (...args: unknown[]): void => { messages.push(args); } } }, wizard, document);
+    operations,
+    start(document: FinalObject | null = currentDocument()): Promise<void> {
+      return operations.run(() => listener(
+        { sender: { send: (...args: unknown[]): void => { messages.push(args); } } },
+        wizard,
+        document,
+      ));
     },
     writes,
   };
 }
 
-test('creation waits for the old catalogue save and validates with the old main-owned sources', () => {
+test('creation waits for the old catalogue save and validates with the old main-owned sources', async () => {
   const harness = createHarness();
-  harness.start();
+  const running = harness.start();
 
   assert.equal(harness.writes.length, 1);
   assert.equal(harness.writes[0].destination, oldCataloguePath);
@@ -220,6 +241,7 @@ test('creation waits for the old catalogue save and validates with the old main-
   harness.assertOriginalSession();
 
   harness.writes[0].complete();
+  await running;
 
   assert.equal(harness.creations.length, 1);
   assert.equal(harness.folders.length, 4);
@@ -227,10 +249,12 @@ test('creation waits for the old catalogue save and validates with the old main-
   assert.equal(harness.creations[0].creation.finalObject.inputDirs[0].path, newSource);
 });
 
-test('a failed old-catalogue save preserves the session and creates no new files or folders', () => {
+test('a failed old-catalogue save preserves the session and creates no new files or folders', async () => {
   const harness = createHarness();
-  harness.start();
+  const running = harness.start();
   harness.writes[0].complete(new Error('Disk full'));
+  await running;
+  await harness.operations.seal();
 
   harness.assertOriginalSession();
   assert.equal(harness.folders.length, 0);
@@ -241,11 +265,12 @@ test('a failed old-catalogue save preserves the session and creates no new files
   assert.deepEqual(harness.messages, [['current-vha-file-save-failed', 'Disk full']]);
 });
 
-test('a snapshot cannot replace the old source with the newly selected import folder', () => {
+test('a snapshot cannot replace the old source with the newly selected import folder', async () => {
   const harness = createHarness();
   const document = currentDocument();
   document.inputDirs[0].path = newSource;
-  harness.start(document);
+  await harness.start(document);
+  await harness.operations.seal();
 
   harness.assertOriginalSession();
   assert.equal(harness.writes.length, 0);
@@ -255,9 +280,10 @@ test('a snapshot cannot replace the old source with the newly selected import fo
   assert.equal(harness.messages[0][0], 'current-vha-file-save-failed');
 });
 
-test('media-authority validation fails before either catalogue is written', () => {
+test('media-authority validation fails before either catalogue is written', async () => {
   const harness = createHarness({ rejectMedia: true });
-  harness.start();
+  await harness.start();
+  await harness.operations.seal();
 
   harness.assertOriginalSession();
   assert.equal(harness.writes.length, 0);
@@ -269,11 +295,12 @@ test('media-authority validation fails before either catalogue is written', () =
   ]);
 });
 
-test('a superseded save callback cannot start creation or replace catalogue authority', () => {
+test('a superseded save callback cannot start creation or replace catalogue authority', async () => {
   const harness = createHarness();
-  harness.start();
+  const running = harness.start();
   harness.globals.catalogueSessionGeneration += 1;
   harness.writes[0].complete();
+  await running;
 
   harness.assertOriginalSession();
   assert.equal(harness.creations.length, 0);
@@ -281,16 +308,50 @@ test('a superseded save callback cannot start creation or replace catalogue auth
   assert.equal(harness.finished.length, 0);
 });
 
-test('clean and read-only catalogues create without writing the previous catalogue', () => {
+test('clean and read-only catalogues create without writing the previous catalogue', async () => {
   for (const accessMode of ['read-only', 'read-write'] as const) {
     const harness = createHarness({ accessMode });
-    harness.start(accessMode === 'read-only' ? currentDocument() : null);
+    await harness.start(accessMode === 'read-only' ? currentDocument() : null);
 
     harness.assertOriginalSession();
     assert.equal(harness.writes.length, 0);
     assert.equal(harness.creations.length, 1);
     assert.equal(harness.folders.length, 4);
   }
+});
+
+test('the creation operation remains pending through the save and subsequent creation', async () => {
+  let finishCreation: () => void;
+  const creationCompletion = new Promise<void>(resolve => { finishCreation = resolve; });
+  const harness = createHarness({ creationCompletion });
+  const running = harness.start();
+  let completed = false;
+  void running.then(() => { completed = true; });
+  assert.equal(harness.operations.pendingCount, 1);
+  harness.writes[0].complete();
+  await Promise.resolve();
+  assert.equal(harness.creations.length, 1);
+  assert.equal(completed, false);
+  assert.equal(harness.operations.pendingCount, 1);
+  finishCreation!();
+  await running;
+  assert.equal(harness.operations.pendingCount, 0);
+});
+
+test('sealing while a save is pending waits for it and prevents subsequent creation', async () => {
+  const harness = createHarness();
+  const running = harness.start();
+  const drain = harness.operations.seal();
+  let drained = false;
+  void drain.then(() => { drained = true; });
+  await Promise.resolve();
+  assert.equal(drained, false);
+  harness.writes[0].complete();
+  await running;
+  harness.operations.assertDrained(await drain);
+  harness.assertOriginalSession();
+  assert.equal(harness.creations.length, 0);
+  assert.equal(harness.folders.length, 0);
 });
 
 function rendererCreationHarness(blocked = false) {

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; connect-src 'none'">
+    <title>Unlock private hub</title>
+    <link rel="stylesheet" href="unlock.css">
+    <script src="unlock.js" defer></script>
+  </head>
+  <body>
+    <main class="unlock-sheet" aria-labelledby="unlock-heading">
+      <div class="brand" aria-label="Theatrum Ex Machina">
+        <span class="brand-mark" aria-hidden="true">T</span>
+        <span>Theatrum Ex Machina</span>
+      </div>
+
+      <div class="heading-row">
+        <span class="lock-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <rect x="5" y="10" width="14" height="11" rx="3"></rect>
+            <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"></path>
+          </svg>
+        </span>
+        <h1 id="unlock-heading">Unlock private hub</h1>
+      </div>
+      <p class="description" id="privacy-description">Your catalogue and previews stay encrypted on disk. Copying and dragging are disabled. You can paste into password fields.</p>
+
+      <form id="unlock-form" autocomplete="off" novalidate>
+        <label for="password">Password</label>
+        <div class="password-control">
+          <input id="password" type="password" placeholder="Enter your password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="1024" aria-describedby="privacy-description unlock-status" autofocus>
+          <button class="visibility-toggle" id="show-password" type="button" aria-controls="password" aria-label="Show password" aria-pressed="false">Show</button>
+        </div>
+        <p id="unlock-status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <button class="button button-secondary touch-id-button" id="use-touch-id" type="button" hidden>Unlock with Touch ID</button>
+        <p class="touch-id-help" id="touch-id-help" hidden>You can also unlock with your hub password.</p>
+        <div class="actions">
+          <button class="button button-secondary" id="cancel" type="button">Cancel</button>
+          <button class="button button-primary" id="unlock" type="submit">Unlock</button>
+        </div>
+      </form>
+    </main>
+  </body>
+</html>

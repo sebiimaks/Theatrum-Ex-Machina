@@ -1,5 +1,6 @@
 <div
   class="manual-tag-tray"
+  [attr.inert]="rendererMutations.accepting ? null : ''"
   [ngClass]="{
     'manual-tag-tray-dark': darkMode(),
     'manual-tag-tray-vertical': verticalLayout()

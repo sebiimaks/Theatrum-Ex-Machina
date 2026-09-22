@@ -1,10 +1,12 @@
 import { ChangeDetectorRef, computed, input, output } from '@angular/core';
-import type { OnInit } from '@angular/core';
+import type { OnDestroy, OnInit } from '@angular/core';
 import { Component, HostListener, Input } from '@angular/core';
 import { DomSanitizer } from '@angular/platform-browser';
 
 import { FilePathService } from '../file-path.service';
 import { ImageElementService } from './../../../services/image-element.service';
+import { RendererMutationService } from '../../../services/renderer-mutation.service';
+import type { RendererMutationToken } from '../../../common/renderer-mutation-lifetime';
 
 import type { ImageElement } from '../../../../../interfaces/final-object.interface';
 import { isMetadataImportFailure } from '../../../../../interfaces/final-object.interface';
@@ -25,7 +27,7 @@ import { metaAppear, textAppear } from '../../../common/animations';
     ],
   animations: [ textAppear, metaAppear ]
 })
-export class ClipComponent implements OnInit {
+export class ClipComponent implements OnInit, OnDestroy {
 
   readonly rightClick = output<RightClickEmit>();
   readonly sheetClick = output<any>(); // does not emit data of any kind
@@ -59,6 +61,8 @@ export class ClipComponent implements OnInit {
   ));
   hover: boolean;
   noError = true;
+  private destroyed = false;
+  private readonly autoplayTimers = new Map<HTMLVideoElement, ReturnType<typeof setTimeout>>();
   readonly pathToVideo = computed(() => this.filePathService.createFilePath(
     this.folderPath(), this.hubName(), 'clips', this.video.hash, true,
   ));
@@ -71,7 +75,8 @@ export class ClipComponent implements OnInit {
     public cd: ChangeDetectorRef,
     public filePathService: FilePathService,
     public imageElementService: ImageElementService,
-    public sanitizer: DomSanitizer
+    public sanitizer: DomSanitizer,
+    private readonly mutations: RendererMutationService,
   ) { }
 
   @HostListener('mouseenter') onMouseEnter() {
@@ -90,19 +95,24 @@ export class ClipComponent implements OnInit {
   }
 
   stopPreview(event): any {
-    if (this.defaultThumbnailMode() && this.returnToFirstScreenshot()) {
-      event.target.load(); // Reload original thumbnail
+    const preview = event.currentTarget || event.target;
+    if (!preview) { return; }
+    this.cancelAutoplay(preview);
+    if (this.canPlay(preview, this.mutations.capture())
+      && this.defaultThumbnailMode() && this.returnToFirstScreenshot()) {
+      preview.load(); // Reload original thumbnail only in an active editing lifetime.
     } else {
-      event.target.pause();
+      preview.pause();
     }
   }
 
   playPreview(event: Event): void {
     const preview = event.currentTarget as HTMLVideoElement | null;
-    if (!preview) {
+    const callback = this.mutations.capture();
+    if (!preview || !this.canPlay(preview, callback)) {
       return;
     }
-    void preview.play().catch(() => preview.load());
+    this.playUnderAuthority(preview, callback, true);
   }
 
   mutePreview(event: Event): void {
@@ -114,17 +124,55 @@ export class ClipComponent implements OnInit {
 
   unmutePreview(event: Event): void {
     const preview = event.currentTarget as HTMLVideoElement | null;
-    if (preview) {
+    if (preview && this.canPlay(preview, this.mutations.capture())) {
       preview.muted = false;
     }
   }
 
   startAutoplayPreview(event: Event): void {
     const preview = event.currentTarget as HTMLVideoElement | null;
-    if (!preview) {
+    const callback = this.mutations.capture();
+    if (!preview || !this.canPlay(preview, callback)) {
       return;
     }
-    setTimeout(() => void preview.play().catch(() => undefined), Math.floor(Math.random() * 500));
+    this.cancelAutoplay(preview);
+    const timer = setTimeout(() => {
+      this.autoplayTimers.delete(preview);
+      if (this.canPlay(preview, callback)) {
+        this.playUnderAuthority(preview, callback, false);
+      }
+    }, Math.floor(Math.random() * 500));
+    this.autoplayTimers.set(preview, timer);
+  }
+
+  private canPlay(preview: HTMLVideoElement, callback: RendererMutationToken | undefined): boolean {
+    return !this.destroyed && preview.isConnected && this.mutations.isCurrent(callback);
+  }
+
+  private playUnderAuthority(
+    preview: HTMLVideoElement,
+    callback: RendererMutationToken | undefined,
+    reloadOnFailure: boolean,
+  ): void {
+    void preview.play().then(() => {
+      if (!this.canPlay(preview, callback)) { preview.pause(); }
+    }, () => {
+      if (reloadOnFailure && this.canPlay(preview, callback)) { preview.load(); }
+    });
+  }
+
+  private cancelAutoplay(preview: HTMLVideoElement): void {
+    const timer = this.autoplayTimers.get(preview);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.autoplayTimers.delete(preview);
+    }
+  }
+
+  ngOnDestroy(): void {
+    this.destroyed = true;
+    for (const timer of this.autoplayTimers.values()) { clearTimeout(timer); }
+    this.autoplayTimers.clear();
   }
 
   ngOnInit() {

@@ -1,4 +1,5 @@
 import { Injectable } from '@angular/core';
+import { RendererMutationService } from '../../services/renderer-mutation.service';
 
 @Injectable()
 export class AutoTagsSaveService {
@@ -6,7 +7,23 @@ export class AutoTagsSaveService {
   addTags: string[] = [];
   removeTags: string[] = [];
 
-  needToSaveTags = false;
+  private tagsNeedSaving = false;
+
+  constructor(private readonly mutations: RendererMutationService) {}
+
+  get needToSaveTags(): boolean {
+    return this.tagsNeedSaving;
+  }
+
+  set needToSaveTags(value: boolean) {
+    if (value) { this.mutations.changed(); }
+    this.tagsNeedSaving = value;
+  }
+
+  /** A confirmed save changes bookkeeping only; it does not replace tag data. */
+  public markSaved(): void {
+    this.tagsNeedSaving = false;
+  }
 
   /**
    * Return `true` if tags have been updated
@@ -20,6 +37,7 @@ export class AutoTagsSaveService {
    * @param tag
    */
   public addAddTag(tag: string): void {
+    this.mutations.assertAccepting();
     this.needToSaveTags = true;
 
     const index = this.removeTags.indexOf(tag);
@@ -40,6 +58,7 @@ export class AutoTagsSaveService {
    * @param tag
    */
   public addRemoveTag(tag: string): void {
+    this.mutations.assertAccepting();
     this.needToSaveTags = true;
 
     const index = this.addTags.indexOf(tag);
@@ -75,8 +94,10 @@ export class AutoTagsSaveService {
    * @param savedRemoveTags
    */
   public restoreSavedTags(savedAddTags: string[], savedRemoveTags: string[]): void {
-    this.addTags = savedAddTags;
-    this.removeTags = savedRemoveTags;
+    this.mutations.assertAccepting();
+    this.mutations.changed();
+    this.addTags = savedAddTags.slice();
+    this.removeTags = savedRemoveTags.slice();
     this.needToSaveTags = false;
   }
 

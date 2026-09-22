@@ -134,6 +134,12 @@ export class SourceFolderService {
     this.currentlyScanning.clear();
   }
 
+  /** A drained private transition stops scans, but retains discovered folders. */
+  finishInterruptedScans(): void {
+    this.activeRelativeScanScopes.clear();
+    this.currentlyScanning.clear();
+  }
+
   /**
    * Set all source folders to `NOT connected'
    */

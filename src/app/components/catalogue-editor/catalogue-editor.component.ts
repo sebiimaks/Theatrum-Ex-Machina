@@ -23,6 +23,7 @@ import type {
 } from '../../../../interfaces/catalogue-metadata-transfer';
 import { ElectronService } from '../../providers/electron.service';
 import { ImageElementService } from '../../services/image-element.service';
+import { RendererMutationService } from '../../services/renderer-mutation.service';
 import { ModalService } from '../modal/modal.service';
 import { ManualTagsService } from '../tags-manual/manual-tags.service';
 import {
@@ -155,6 +156,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     Partial<Record<CatalogueLocationField, string>>
   >();
   private destroyed = false;
+  private readonly unregisterDraftFlusher: () => void;
   private busyFocusOrigin: HTMLElement | null = null;
   private metadataImportJson = '';
   private metadataImportPreviews = new WeakMap<ImageElement, MetadataChangePreview[]>();
@@ -169,7 +171,14 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     public imageElementService: ImageElementService,
     public manualTagsService: ManualTagsService,
     private modalService: ModalService,
-  ) { }
+    public rendererMutations: RendererMutationService,
+  ) {
+    this.unregisterDraftFlusher = this.rendererMutations.registerDraftFlusher(() => {
+      if (!this.commitAllTagDrafts()) {
+        throw new Error('Correct invalid tag paths in the catalogue editor before opening a private hub.');
+      }
+    });
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes.images) {
@@ -200,6 +209,11 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
 
   ngOnDestroy(): void {
     this.destroyed = true;
+    this.unregisterDraftFlusher();
+  }
+
+  private get canMutate(): boolean {
+    return !this.destroyed && this.rendererMutations.accepting;
   }
 
   get activeCount(): number {
@@ -286,6 +300,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   close(): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (this.isSaving || this.metadataTransferBusy) {
       return;
     }
@@ -301,6 +318,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   async exportMetadata(): Promise<void> {
+    if (!this.canMutate) {
+      return;
+    }
     if (this.metadataTransferBusy || this.isSaving) {
       return;
     }
@@ -373,6 +393,13 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   async chooseMetadataImport(): Promise<void> {
+    if (!this.canMutate) {
+      return;
+    }
+    const mutation = this.rendererMutations.capture();
+    if (!mutation) {
+      return;
+    }
     if (this.metadataTransferBusy || this.isSaving) {
       return;
     }
@@ -399,7 +426,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     try {
       const result = await this.electronService.ipcRenderer.invoke('import-catalogue-metadata') as MetadataFileResult;
 
-      if (this.destroyed) {
+      if (this.destroyed || !this.rendererMutations.isCurrent(mutation)) {
         return;
       }
 
@@ -437,11 +464,17 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   cancelMetadataImport(): void {
+    if (!this.canMutate) {
+      return;
+    }
     this.clearPendingMetadataImport();
     this.setMetadataTransferStatus('Metadata import cancelled.');
   }
 
   clearMetadataCategories(): void {
+    if (!this.canMutate) {
+      return;
+    }
     catalogueMetadataCategories.forEach((category: CatalogueMetadataCategory) => {
       this.metadataImportSelection[category] = false;
     });
@@ -449,6 +482,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   selectAllMetadataCategories(): void {
+    if (!this.canMutate) {
+      return;
+    }
     catalogueMetadataCategories.forEach((category: CatalogueMetadataCategory) => {
       this.metadataImportSelection[category] = true;
     });
@@ -456,11 +492,17 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   toggleMetadataCategory(category: CatalogueMetadataCategory, checked: boolean): void {
+    if (!this.canMutate) {
+      return;
+    }
     this.metadataImportSelection[category] = checked;
     this.invalidateMetadataImportPlan();
   }
 
   previewMetadataImport(): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (this.metadataTransferBusy || !this.metadataImportJson) {
       return;
     }
@@ -473,6 +515,13 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   requestMetadataImport(): void {
+    if (!this.canMutate) {
+      return;
+    }
+    const mutation = this.rendererMutations.capture();
+    if (!mutation) {
+      return;
+    }
     if (this.metadataTransferBusy || !this.metadataImportJson) {
       return;
     }
@@ -541,6 +590,11 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
       tone: 'warning',
     }).subscribe((confirmed: boolean) => {
       if (this.destroyed) {
+        return;
+      }
+      if (!this.rendererMutations.isCurrent(mutation)) {
+        this.metadataTransferBusy = false;
+        this.setMetadataTransferStatus('Metadata import cancelled because the catalogue was paused. Review and apply it again.');
         return;
       }
       if (this.currentVhaFile !== cataloguePath) {
@@ -616,6 +670,13 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   async copyHash(item: ImageElement): Promise<void> {
+    if (!this.canMutate) {
+      return;
+    }
+    const mutation = this.rendererMutations.capture();
+    if (!mutation) {
+      return;
+    }
     const hash = item.hash || '';
 
     if (!hash) {
@@ -625,16 +686,22 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     this.hashCopiedIndex = undefined;
     this.hashCopyFailedIndex = undefined;
 
+    const releasePending = this.rendererMutations.holdPending();
     try {
       await navigator.clipboard.writeText(hash);
       this.hashCopiedIndex = item.index;
     } catch {
+      if (this.destroyed || !this.rendererMutations.isCurrent(mutation)) {
+        return;
+      }
       try {
         this.electronService.copyText(hash);
         this.hashCopiedIndex = item.index;
       } catch {
         this.hashCopyFailedIndex = item.index;
       }
+    } finally {
+      releasePending();
     }
   }
 
@@ -651,6 +718,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   acceptBatchTagTypeahead(event: KeyboardEvent): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (!this.batchTagTypeahead) {
       return;
     }
@@ -661,6 +731,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   acceptTagTypeahead(item: ImageElement, event: KeyboardEvent): void {
+    if (!this.canMutate) {
+      return;
+    }
     const typeahead = this.tagTypeaheads[item.index];
 
     if (!typeahead) {
@@ -673,6 +746,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   applyBatchTags(): void {
+    if (!this.canMutate) {
+      return;
+    }
     const targetEntries = this.filteredEntries.slice();
 
     if (!targetEntries.length || !this.batchTagDraft.trim()) {
@@ -736,6 +812,13 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   requestBatchOverwrite(): void {
+    if (!this.canMutate) {
+      return;
+    }
+    const mutation = this.rendererMutations.capture();
+    if (!mutation) {
+      return;
+    }
     const field = this.batchOverwriteField;
     const overwriteDraft = this.batchOverwriteDraft;
     const targetEntries = this.filteredEntries.slice();
@@ -787,7 +870,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
         toLabel: clearingField ? 'Action' : 'New value',
       },
     }).subscribe((confirmed: boolean) => {
-      if (!confirmed) {
+      if (!confirmed || this.destroyed || !this.rendererMutations.isCurrent(mutation)) {
         return;
       }
 
@@ -838,6 +921,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   deleteEntry(item: ImageElement): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (!this.commitTags(item)) {
       return;
     }
@@ -847,6 +933,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   restoreEntry(item: ImageElement): void {
+    if (!this.canMutate) {
+      return;
+    }
     item.deleted = false;
     this.markDirty(true);
     this.refreshFilteredEntries();
@@ -894,6 +983,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   requestSave(): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (this.isSaving || this.metadataTransferBusy) {
       return;
     }
@@ -955,17 +1047,26 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   updateBatchOverwriteDraft(value: string): void {
+    if (!this.canMutate) {
+      return;
+    }
     this.batchOverwriteDraft = value;
     this.batchOverwriteStatus = '';
   }
 
   updateBatchOverwriteField(field: CatalogueOverwriteField | ''): void {
+    if (!this.canMutate) {
+      return;
+    }
     this.batchOverwriteField = field;
     this.batchOverwriteDraft = field === 'stars' ? '0.5' : '';
     this.batchOverwriteStatus = '';
   }
 
   updateDefaultScreen(item: ImageElement, value: string | number): void {
+    if (!this.canMutate) {
+      return;
+    }
     const parsed = this.toOptionalInteger(value);
 
     if (parsed === undefined) {
@@ -991,6 +1092,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   updateDateAdded(item: ImageElement, value: string, input?: HTMLInputElement): void {
+    if (!this.canMutate) {
+      return;
+    }
     const parsed = parseDateAddedInput(value);
 
     if (parsed === null) {
@@ -1018,6 +1122,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   updateNotes(item: ImageElement, value: string): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (value) {
       if (item.notes !== value) {
         item.notes = value;
@@ -1030,6 +1137,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   updateNumberField(item: ImageElement, field: 'timesPlayed', value: string | number): void {
+    if (!this.canMutate) {
+      return;
+    }
     const parsed = Math.max(0, this.toOptionalInteger(value) || 0);
 
     if (item[field] !== parsed) {
@@ -1039,6 +1149,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   updateStar(item: ImageElement, value: StarRating): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (item.stars !== value) {
       item.stars = value;
       this.imageElementService.forceStarFilterUpdate = !this.imageElementService.forceStarFilterUpdate;
@@ -1051,6 +1164,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   updateStringField(item: ImageElement, field: 'cleanName' | CatalogueLocationField, value: string): void {
+    if (!this.canMutate) {
+      return;
+    }
     const nextValue = value || '';
 
     if (field === 'cleanName') {
@@ -1124,18 +1240,27 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   updateTagDraft(item: ImageElement, value: string): void {
+    if (!this.canMutate) {
+      return;
+    }
     this.tagDrafts[item.index] = value;
     delete this.tagValidationErrors[item.index];
     this.tagTypeaheads[item.index] = this.getTagTypeahead(value);
   }
 
   updateBatchTagDraft(value: string): void {
+    if (!this.canMutate) {
+      return;
+    }
     this.batchTagDraft = value;
     this.batchTagTypeahead = this.getTagTypeahead(value);
     this.batchTagStatus = '';
   }
 
   updateYear(item: ImageElement, value: string | number): void {
+    if (!this.canMutate) {
+      return;
+    }
     const parsed = this.toOptionalInteger(value);
 
     if (parsed === undefined) {
@@ -1166,6 +1291,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   commitTags(item: ImageElement): boolean {
+    if (!this.canMutate) {
+      return false;
+    }
     const currentTags = item.tags || [];
     const parsed = this.parseTagDraft(this.tagDrafts[item.index] || '');
     if (parsed.error) {
@@ -1228,21 +1356,22 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   private focusCloseButton(): void {
-    if (!this.destroyed && !this.modalService.dialog.openDialogs.length) {
+    if (this.canMutate && !this.modalService.dialog.openDialogs.length) {
       this.editorCloseButton?.nativeElement.focus({ preventScroll: true });
     }
   }
 
   private restoreBusyFocus(): void {
+    const mutation = this.rendererMutations.capture();
     const origin = this.busyFocusOrigin;
     this.busyFocusOrigin = null;
-    if (!origin) {
+    if (!origin || !mutation) {
       return;
     }
 
     // Wait for Angular to remove inert/disabled before restoring the control.
     setTimeout(() => {
-      if (this.destroyed || this.isSaving || this.metadataTransferBusy
+      if (this.destroyed || !this.rendererMutations.isCurrent(mutation) || this.isSaving || this.metadataTransferBusy
         || this.modalService.dialog.openDialogs.length) {
         return;
       }

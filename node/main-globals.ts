@@ -1,5 +1,6 @@
 import type { ScreenshotSettings, InputSources } from '../interfaces/final-object.interface';
 import type { CatalogueAccessMode } from '../interfaces/catalogue-session';
+import { NORMAL_CATALOGUE_STORAGE, type CatalogueStorage } from './catalogue-storage';
 
 export type { CatalogueAccessMode } from '../interfaces/catalogue-session';
 
@@ -8,6 +9,7 @@ export type { CatalogueAccessMode } from '../interfaces/catalogue-session';
 export const GLOBALS: VhaGlobals = {
   angularApp: null,            // reference used to send messages back to Angular App
   catalogueAccessMode: 'read-write',
+  catalogueStorage: NORMAL_CATALOGUE_STORAGE,
   cataloguePersistenceActive: false,
   catalogueSessionGeneration: 0,
   catalogueTransitionActive: false,
@@ -55,6 +57,7 @@ export interface VhaGlobals {
   authorizedSourceFolderRealPaths: Map<string, string>;
   authorizedSourceWatchPaths: Set<string>;
   catalogueAccessMode: CatalogueAccessMode;
+  catalogueStorage: CatalogueStorage;
   cataloguePersistenceActive: boolean;
   catalogueSessionGeneration: number;
   catalogueTransitionActive: boolean;

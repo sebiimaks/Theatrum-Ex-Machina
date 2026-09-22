@@ -17,10 +17,9 @@ import { setUpIpcMessages } from './node/main-ipc';
 import { insertTemporaryFields, sendFinalObjectToAngular, setUpDirectoryWatchers, upgradeToVersion3, writeVhaFileToDisk, parseAdditionalExtensions } from './node/main-support';
 import {
   parseVhaJson,
-  readVhaFileWithBackup,
-  recoverVhaFileFromBackup,
   writeVhaJsonExclusively,
 } from './node/vha-file-persistence';
+import { captureCatalogueStorageTarget, readCatalogueStorage, recoverCatalogueStorage, requireNormalCatalogueStorage } from './node/catalogue-storage';
 import { CatalogueOpenQueue } from './node/catalogue-open-queue';
 import { SourceFolderConnections, type SourceConnectionSession, type SourceConnectionSource } from './node/source-folder-connections';
 import { prepareAuthorizedCatalogueWrite } from './node/catalogue-write-authority';
@@ -33,6 +32,10 @@ import {
 import { registerTheatrumProtocols } from './node/theatrum-protocol';
 import { resolveTheatrumAssetDirectory } from './node/theatrum-protocol-paths';
 import { THEATRUM_APP_HOST, THEATRUM_APP_PROTOCOL } from './interfaces/theatrum-protocol';
+import { normalOperationScope } from './node/normal-operation-scope';
+import { NormalApplicationPause } from './node/normal-application-pause';
+import { createPrivateApplicationWorkspace } from './node/private-application-workspace';
+import type { PrivateHubOpenOutcome } from './node/private-hub-open';
 
 // Interfaces
 import { FinalObject, type ImageLocation } from './interfaces/final-object.interface';
@@ -40,6 +43,7 @@ import { SettingsObject } from './interfaces/settings-object.interface';
 import { WizardOptions } from './interfaces/wizard-options.interface';
 import {
   closeAllWatchers,
+  beginNormalMediaDrain,
   closeWatcher,
   isThumbnailRegenerationActive,
   hasSourceWatcher,
@@ -118,6 +122,13 @@ let rendererCanReceiveCatalogueOpenRequests = false;
 let catalogueOpenOperationActive = false;
 let activeCatalogueOpenGeneration: number | undefined;
 const catalogueOpenQueue = new CatalogueOpenQueue();
+// Native normal-catalogue requests received during private use stay in memory.
+// They acquire filesystem authority only after returning to the normal hub.
+const deferredNormalCatalogueOpens: string[] = [];
+const MAX_DEFERRED_NORMAL_OPENS = 128;
+// Enable only after private gallery, platform policy and native acceptance work.
+const PRIVATE_HUB_UI_READY = false;
+let normalPrivateResumePending = false;
 
 type CatalogueOpenIntent = CatalogueAccessMode | 'duplicate-scaena';
 
@@ -161,7 +172,10 @@ class CatalogueOpenSupersededError extends Error {
  */
 function beginCatalogueOpenOperation(): number | undefined {
   if (
-    catalogueOpenOperationActive
+    !normalOperationScope.isCurrent()
+    || GLOBALS.catalogueStorage.kind !== 'normal'
+    || privateApplicationWorkspace.status.quitRequested
+    || catalogueOpenOperationActive
     || GLOBALS.catalogueTransitionActive
     || GLOBALS.cataloguePersistenceActive
   ) {
@@ -176,7 +190,8 @@ function beginCatalogueOpenOperation(): number | undefined {
 }
 
 function isCurrentCatalogueOpenOperation(generation: number): boolean {
-  return catalogueOpenOperationActive
+  return normalOperationScope.isCurrent() && GLOBALS.catalogueStorage.kind === 'normal'
+    && catalogueOpenOperationActive
     && GLOBALS.catalogueTransitionActive
     && GLOBALS.catalogueSessionGeneration === generation
     && activeCatalogueOpenGeneration === generation;
@@ -279,7 +294,7 @@ async function authorizePersistedSourceAccess(
     assertCurrent();
     const batch = unknownPaths.slice(start, start + batchSize);
     const batchNumber = Math.floor(start / batchSize) + 1;
-    const choice = await dialog.showMessageBox(win, {
+    const choice = await showNormalMessageBox(win, {
       buttons: ['Allow These Folders', 'Open Without These Folders'],
       cancelId: 1,
       defaultId: 1,
@@ -391,7 +406,7 @@ async function authorizePersistedSourceWatches(
     assertCurrentCatalogueOpenOperation(operationGeneration);
     const batch = unknownWatchPaths.slice(start, start + batchSize);
     const batchNumber = Math.floor(start / batchSize) + 1;
-    const choice = await dialog.showMessageBox(win, {
+    const choice = await showNormalMessageBox(win, {
       buttons: ['Allow Watching These Folders', 'Open Without Watching'],
       cancelId: 1,
       defaultId: 1,
@@ -453,6 +468,9 @@ function sourceConnectionSessionIsCurrent(
   source: SourceConnectionSource,
 ): boolean {
   return Boolean(win && !win.isDestroyed() && !GLOBALS.readyToQuit)
+    && normalOperationScope.isCurrent()
+    && !privateApplicationWorkspace.status.quitRequested
+    && GLOBALS.catalogueStorage.kind === 'normal'
     && !GLOBALS.catalogueTransitionActive
     && !GLOBALS.cataloguePersistenceActive
     && GLOBALS.catalogueSessionGeneration === session.generation
@@ -463,7 +481,9 @@ function sourceConnectionSessionIsCurrent(
 const sourceFolderConnections = new SourceFolderConnections({
   captureSession: () => {
     if (
-      !win || win.isDestroyed() || !win.isVisible() || GLOBALS.readyToQuit
+      !normalOperationScope.accepting || GLOBALS.catalogueStorage.kind !== 'normal'
+      || privateApplicationWorkspace.status.quitRequested
+      || !win || win.isDestroyed() || !win.isVisible() || GLOBALS.readyToQuit
       || GLOBALS.catalogueTransitionActive || GLOBALS.cataloguePersistenceActive
       || !GLOBALS.currentlyOpenVhaFile || !GLOBALS.angularApp?.sender
       || GLOBALS.angularApp.sender.isDestroyed()
@@ -570,6 +590,82 @@ const sourceFolderConnections = new SourceFolderConnections({
     }
   },
 });
+
+/** Main-only transition boundary; no renderer channel can request or resume it yet. */
+export const normalApplicationPause = new NormalApplicationPause({
+  operations: normalOperationScope,
+  canPause: () => rendererStartupComplete && !!win && !win.isDestroyed() && !GLOBALS.readyToQuit
+    && GLOBALS.catalogueStorage.kind === 'normal' && !catalogueOpenOperationActive
+    && !GLOBALS.catalogueTransitionActive && !GLOBALS.cataloguePersistenceActive
+    && !catalogueOpenQueue.hasInFlightRequest && catalogueOpenQueue.waitingCount === 0,
+  onPause: () => {
+    GLOBALS.catalogueTransitionActive = true;
+    GLOBALS.pendingInputDirectorySelections.clear();
+    GLOBALS.pendingOutputDirectorySelections.clear();
+    GLOBALS.pendingUserFileSelections.clear();
+  },
+  pauseSources: () => sourceFolderConnections.pauseAndDrain(),
+  drainMedia: () => beginNormalMediaDrain(),
+  resumeMedia: () => resetAllQueues(),
+  resumeSources: () => sourceFolderConnections.resume(),
+  onResume: () => { GLOBALS.catalogueTransitionActive = false; },
+});
+
+/** One main-owned instance; construction opens no files, sessions or windows. */
+const privateApplicationWorkspace = createPrivateApplicationWorkspace({
+  appDirectory: path.join(__dirname, 'private-gallery'),
+  normal: normalApplicationPause,
+  getNormalWindow: () => win,
+  isAllowedRendererUrl,
+  canStart: () => PRIVATE_HUB_UI_READY && rendererStartupComplete && !GLOBALS.readyToQuit
+    && !catalogueOpenQueue.hasInFlightRequest && catalogueOpenQueue.waitingCount === 0,
+  afterResume: () => { normalPrivateResumePending = true; },
+});
+
+/** Reserved for a future native menu action. Never register this on ordinary IPC. */
+function openPrivateHubFromNative(): Promise<PrivateHubOpenOutcome> {
+  if (normalOperationScope.inOperation || !normalOperationScope.isCurrent()) {
+    return Promise.resolve('unavailable');
+  }
+  if (privateApplicationWorkspace.isActive) {
+    return Promise.resolve(privateApplicationWorkspace.status.cleanupFailed ? 'unavailable' : 'busy');
+  }
+  const opening = privateApplicationWorkspace.open();
+  void privateApplicationWorkspace.settled.then(() => {
+    // Factory observers retire before this callback, including picker cancellation.
+    if (privateApplicationWorkspace.status.cleanupFailed) { return; }
+    return normalOperationScope.run(resumeNormalAfterPrivateHub);
+  }).catch(() => { /* Remain subject to the ordinary admission/identity checks. */ });
+  return opening;
+}
+
+/** Runs in a fresh ordinary scope only after clean private settlement. */
+async function resumeNormalAfterPrivateHub(): Promise<void> {
+  if (!normalOperationScope.isCurrent() || privateApplicationWorkspace.isActive
+    || privateApplicationWorkspace.status.quitRequested || GLOBALS.readyToQuit
+    || GLOBALS.catalogueStorage.kind !== 'normal') { return; }
+  const sender = GLOBALS.angularApp?.sender;
+  if (!win || win.isDestroyed() || !sender || sender.isDestroyed() || sender !== win.webContents) { return; }
+  // The renderer release was sent first to this same main frame. Reset only
+  // transient progress; delivered catalogue data and source grants are retained.
+  const restoreSources = normalPrivateResumePending;
+  if (normalPrivateResumePending) {
+    sender.send('normal-workspace-resumed');
+    normalPrivateResumePending = false;
+  }
+  for (const filePath of deferredNormalCatalogueOpens.splice(0)) { requestCatalogueOpenFromSystem(filePath); }
+  dispatchNextCatalogueOpenRequest();
+  if (restoreSources && !catalogueOpenQueue.hasInFlightRequest && catalogueOpenQueue.waitingCount === 0) {
+    await sourceFolderConnections.refresh();
+  }
+}
+
+/** A main-proven failed save/Keep Working decision can release the quit latch. */
+function acknowledgePrivateQuitCancelled(): void {
+  if (privateApplicationWorkspace.acknowledgeQuitCancelled()) {
+    void normalOperationScope.run(resumeNormalAfterPrivateHub).catch(() => undefined);
+  }
+}
 
 function reconcileSourceFoldersBeforeCatalogueSwitch(nextSources: FinalObject['inputDirs']): void {
   const retainedPaths = new Set<string>();
@@ -702,7 +798,8 @@ function prepareLegacyCatalogueDuplicate(finalObject: FinalObject): string {
 }
 
 async function duplicateLegacyCatalogue(sourcePath: string): Promise<DuplicateLegacyCatalogueResult> {
-  const readResult = await readVhaFileWithBackup(sourcePath);
+  requireNormalCatalogueStorage(GLOBALS.catalogueStorage);
+  const readResult = await readCatalogueStorage(captureCatalogueStorageTarget(GLOBALS.catalogueStorage, sourcePath));
   if (!readResult.finalObject) {
     const primaryError = readResult.primaryError?.message || 'The catalogue could not be read.';
     const backupError = readResult.backupError?.message || 'No valid backup was found.';
@@ -712,6 +809,7 @@ async function duplicateLegacyCatalogue(sourcePath: string): Promise<DuplicateLe
   const duplicateJson = prepareLegacyCatalogueDuplicate(readResult.finalObject);
 
   for (let attempt = 0; attempt < 10_000; attempt++) {
+    requireNormalCatalogueStorage(GLOBALS.catalogueStorage);
     const destination = nextDuplicateCataloguePath(sourcePath, attempt);
     try {
       await writeVhaJsonExclusively(destination, duplicateJson);
@@ -733,7 +831,10 @@ async function duplicateLegacyCatalogue(sourcePath: string): Promise<DuplicateLe
 
 function dispatchNextCatalogueOpenRequest(): void {
   if (
-    !rendererCanReceiveCatalogueOpenRequests
+    !normalOperationScope.accepting || GLOBALS.catalogueStorage.kind !== 'normal'
+    || privateApplicationWorkspace.isActive
+    || privateApplicationWorkspace.status.quitRequested
+    || !rendererCanReceiveCatalogueOpenRequests
     || catalogueOpenOperationActive
     || GLOBALS.cataloguePersistenceActive
     || GLOBALS.readyToQuit
@@ -754,7 +855,14 @@ function dispatchNextCatalogueOpenRequest(): void {
 GLOBALS.requestCatalogueOpenDispatch = dispatchNextCatalogueOpenRequest;
 
 function requestCatalogueOpenFromSystem(filePath: string): void {
-  if (!filePath) {
+  if (typeof filePath !== 'string' || !filePath) { return; }
+  if (privateApplicationWorkspace.isActive || privateApplicationWorkspace.status.quitRequested
+    || !normalOperationScope.accepting || GLOBALS.catalogueStorage.kind !== 'normal') {
+    if (filePath.length <= 4096 && !filePath.includes('\0') && path.isAbsolute(filePath)
+      && isCataloguePickerFilePath(filePath) && deferredNormalCatalogueOpens.length < MAX_DEFERRED_NORMAL_OPENS
+      && !deferredNormalCatalogueOpens.includes(filePath)) {
+      deferredNormalCatalogueOpens.push(filePath);
+    }
     return;
   }
   try {
@@ -850,7 +958,7 @@ if (!gotTheLock) {
 
   app.on('second-instance', (event, argv: string[], workingDirectory: string) => {
 
-    // dialog.showMessageBox(win, {
+    // showNormalMessageBox(win, {
     //   message: 'second-instance: \n' + argv[0] + ' \n' + argv[1],
     //   buttons: ['OK']
     // });
@@ -860,7 +968,7 @@ if (!gotTheLock) {
     }
 
     // Someone tried to run a second instance, we should focus our window.
-    if (myWindow) {
+    if (normalOperationScope.accepting && myWindow && !myWindow.isDestroyed()) {
       if (myWindow.isMinimized()) {
         myWindow.restore();
       }
@@ -900,14 +1008,38 @@ function isTrustedRenderer(event: {
   );
 }
 
-function trustedIpcOn(channel: string, listener: (event: Electron.IpcMainEvent, ...args: any[]) => void): void {
+function trustedIpcOn(channel: string, listener: (event: Electron.IpcMainEvent, ...args: any[]) => unknown): void {
   ipcMain.on(channel, (event, ...args: any[]): void => {
     if (!isTrustedRenderer(event)) {
       console.warn('Ignored IPC message from an untrusted renderer:', channel);
       return;
     }
-    listener(event, ...args);
+    // Private sessions use a separate coordinator. Legacy handlers can write
+    // settings, export paths, or start plaintext extraction and must stay closed.
+    if (!normalOperationScope.accepting || GLOBALS.catalogueStorage.kind !== 'normal') {
+      return;
+    }
+    void normalOperationScope.run(() => listener(event, ...args)).catch(() => {
+      if (normalOperationScope.accepting) { console.warn('A normal application operation could not finish.'); }
+    });
   });
+}
+
+/** Native dialogs belong to the normal lifetime even when their caller ignores the result. */
+function showNormalMessageBox(owner: BrowserWindow, options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
+  return normalOperationScope.run(async context => {
+    const result = await dialog.showMessageBox(owner, options);
+    context.assertCurrent();
+    return result;
+  }).catch(() => ({ response: -1, checkboxChecked: false }));
+}
+
+function showNormalOpenDialog(owner: BrowserWindow, options: Electron.OpenDialogOptions): Promise<Electron.OpenDialogReturnValue> {
+  return normalOperationScope.run(async context => {
+    const result = await dialog.showOpenDialog(owner, options);
+    context.assertCurrent();
+    return result;
+  }).catch(() => ({ canceled: true, filePaths: [] }));
 }
 
 /**
@@ -929,6 +1061,8 @@ function requirePendingDirectorySelection(
 
 /** Record a native/OS-selected catalogue path before it is sent to the renderer. */
 function rememberCataloguePath(value: unknown, label: string): string {
+  normalOperationScope.assertCurrent();
+  requireNormalCatalogueStorage(GLOBALS.catalogueStorage);
   const selectedCataloguePath = normalizeAbsolutePath(value, label);
   if (!isCataloguePickerFilePath(selectedCataloguePath)) {
     throw new Error('The selected file is not a supported catalogue.');
@@ -983,6 +1117,8 @@ function rememberUserSelectedFilePath(value: unknown): void {
 }
 
 function createWindow() {
+  if (privateApplicationWorkspace.isActive) { return; }
+  if (!normalOperationScope.accepting || GLOBALS.catalogueStorage.kind !== 'normal') { return; }
   const desktopSize = screen.getPrimaryDisplay().workAreaSize;
 
   screenWidth = desktopSize.width;
@@ -1090,9 +1226,23 @@ function createWindow() {
       electron: require(`${__dirname}/node_modules/electron`)
     });
     win.loadURL('http://localhost:4200');
-    setTimeout(() => {
-      win.webContents.openDevTools();
-    }, 1000);
+    const developmentWindow = win;
+    void normalOperationScope.run(context => new Promise<void>(resolve => {
+      const finish = (): void => {
+        clearTimeout(timer);
+        context.signal.removeEventListener('abort', finish);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        try {
+          if (context.isCurrent() && !developmentWindow.isDestroyed()) {
+            developmentWindow.webContents.openDevTools();
+          }
+        } catch { /* The development window may be closing. */ }
+        finally { finish(); }
+      }, 1000);
+      context.signal.addEventListener('abort', finish, { once: true });
+    })).catch(() => undefined);
   } else {
     win.loadURL(`${THEATRUM_APP_PROTOCOL}://${THEATRUM_APP_HOST}/index.html`);
   }
@@ -1106,14 +1256,16 @@ function createWindow() {
 
   // Watch for computer powerMonitor
   // https://electronjs.org/docs/api/power-monitor
-  electron.powerMonitor.on('shutdown', () => {
-    if (!getAngularToShutDown()) {
+  electron.powerMonitor.on('shutdown', (event?: Electron.Event) => {
+    if (getAngularToShutDown()) {
+      event?.preventDefault();
+    } else {
       app.quit();
     }
   });
 
   win.on('close', (event) => {
-    if (!GLOBALS.readyToQuit && getAngularToShutDown()) {
+    if ((privateApplicationWorkspace.isActive || !GLOBALS.readyToQuit) && getAngularToShutDown()) {
       event.preventDefault();
     }
   });
@@ -1165,6 +1317,11 @@ try {
 
   // Quit when all windows are closed.
   app.on('window-all-closed', () => {
+    if (privateApplicationWorkspace.isActive) {
+      void privateApplicationWorkspace.requestQuit().catch(() => undefined);
+      return;
+    }
+    if (!normalOperationScope.accepting || GLOBALS.catalogueStorage?.kind !== 'normal') { return; }
     // On OS X it is common for applications and their menu bar
     // to stay active until the user quits explicitly with Cmd + Q
     // if (process.platform !== 'darwin') {
@@ -1202,7 +1359,9 @@ if (GLOBALS.macVersion) {
  * @param mode
  */
 function tellElectronDarkModeChange(mode: string) {
-  GLOBALS.angularApp.sender.send('os-dark-mode-change', mode);
+  if (normalOperationScope.accepting && GLOBALS.angularApp?.sender && !GLOBALS.angularApp.sender.isDestroyed()) {
+    GLOBALS.angularApp.sender.send('os-dark-mode-change', mode);
+  }
 }
 
 // =================================================================================================
@@ -1213,6 +1372,13 @@ function tellElectronDarkModeChange(mode: string) {
  * Get angular to shut down immediately - saving settings and hub if needed.
  */
 function getAngularToShutDown(): boolean {
+  // This guard precedes ordinary settings/catalogue saving, even during the
+  // picker stage when normal IPC may still be admitted.
+  if (privateApplicationWorkspace.isActive) {
+    void privateApplicationWorkspace.requestQuit().catch(() => undefined);
+    return true;
+  }
+  if (!normalOperationScope.accepting || GLOBALS.catalogueStorage.kind !== 'normal') { return true; }
   const sender = GLOBALS.angularApp?.sender;
   const currentWindow = win;
   if (
@@ -1245,7 +1411,7 @@ async function openThisDamnFile(
   let publishedDuplicatePath: string | undefined;
 
   if (isThumbnailRegenerationActive()) {
-    await dialog.showMessageBox(win, {
+    await showNormalMessageBox(win, {
       buttons: ['OK'],
       detail: 'Wait for the current folder thumbnail regeneration to finish before opening another catalogue.',
       message: 'Thumbnail regeneration is still in progress.',
@@ -1322,7 +1488,7 @@ async function openThisDamnFile(
       return;
     }
     const message = error instanceof Error ? error.message : String(error);
-    await dialog.showMessageBox(win, {
+    await showNormalMessageBox(win, {
       buttons: ['OK'],
       detail: `${message}\n\n${catalogueOpenFailureSuffix(publishedDuplicatePath)}`,
       message: 'The catalogue could not be opened safely.',
@@ -1352,7 +1518,9 @@ async function openCatalogueFile(
   let recoveredCatalogue = false;
 
   try {
-    const readResult = await readVhaFileWithBackup(pathToVhaFile);
+    requireNormalCatalogueStorage(GLOBALS.catalogueStorage);
+    const storageTarget = captureCatalogueStorageTarget(GLOBALS.catalogueStorage, pathToVhaFile);
+    const readResult = await readCatalogueStorage(storageTarget);
     assertCurrentCatalogueOpenOperation(operationGeneration);
     let finalObject: FinalObject;
 
@@ -1360,7 +1528,7 @@ async function openCatalogueFile(
       finalObject = readResult.finalObject;
     } else if (readResult.source === 'unreadable') {
       const readError = readResult.primaryError ? readResult.primaryError.message : 'Unknown read error';
-      await dialog.showMessageBox(win, {
+      await showNormalMessageBox(win, {
         buttons: ['OK'],
         detail: `${readError}\n\nCheck that the drive is connected and that the catalogue can be read. No recovery was attempted.\n\n${catalogueOpenFailureSuffix(publishedDuplicatePath)}`,
         message: 'This catalogue could not be read.',
@@ -1377,7 +1545,7 @@ async function openCatalogueFile(
       loadedFromBackup = true;
       primaryError = readResult.primaryError?.message;
     } else if (readResult.source === 'backup') {
-      const recoveryChoice = await dialog.showMessageBox(win, {
+      const recoveryChoice = await showNormalMessageBox(win, {
       buttons: ['Recover Backup', 'Cancel'],
       cancelId: 1,
       defaultId: 0,
@@ -1400,7 +1568,7 @@ async function openCatalogueFile(
 
       try {
         assertCurrentCatalogueOpenOperation(operationGeneration);
-        const recoveryResult = await recoverVhaFileFromBackup(pathToVhaFile);
+        const recoveryResult = await recoverCatalogueStorage(storageTarget);
         assertCurrentCatalogueOpenOperation(operationGeneration);
         finalObject = recoveryResult.finalObject;
         loadedFromBackup = true;
@@ -1410,7 +1578,7 @@ async function openCatalogueFile(
         const preservationDetail = recoveryResult.corruptPath
           ? 'The damaged catalogue was preserved at:\n' + recoveryResult.corruptPath
           : 'The backup was restored. The damaged catalogue was empty or missing, so no additional copy was created.';
-        await dialog.showMessageBox(win, {
+        await showNormalMessageBox(win, {
           buttons: ['OK'],
           detail: preservationDetail,
           message: 'The catalogue was recovered successfully.',
@@ -1423,7 +1591,7 @@ async function openCatalogueFile(
           throw error;
         }
         const recoveryError = error instanceof Error ? error.message : String(error);
-        await dialog.showMessageBox(win, {
+        await showNormalMessageBox(win, {
           buttons: ['OK'],
           detail: recoveryError,
           message: 'The catalogue backup could not be recovered. Neither file was changed.',
@@ -1441,7 +1609,7 @@ async function openCatalogueFile(
     } else {
       const primaryError = readResult.primaryError ? readResult.primaryError.message : 'Unknown error';
       const backupError = readResult.backupError ? readResult.backupError.message : 'No valid backup was found';
-      await dialog.showMessageBox(win, {
+      await showNormalMessageBox(win, {
         buttons: ['OK'],
         detail: `Catalogue: ${primaryError}\nBackup: ${backupError}\n\nNo files were changed.`,
         message: 'This catalogue and its backup could not be opened.',
@@ -1509,7 +1677,7 @@ async function openCatalogueFile(
         }
         const recoveryError = error instanceof Error ? error.message : String(error);
         console.error('Unable to recover an interrupted thumbnail transaction:', error);
-        await dialog.showMessageBox(win, {
+        await showNormalMessageBox(win, {
           buttons: ['OK'],
           detail: recoveryError,
           message: 'Some interrupted thumbnail files could not be recovered automatically.',
@@ -1594,7 +1762,7 @@ async function openCatalogueFile(
       return { loadedFromBackup, opened: false, primaryError };
     }
     const unexpectedError = error instanceof Error ? error.message : String(error);
-    await dialog.showMessageBox(win, {
+    await showNormalMessageBox(win, {
       buttons: ['OK'],
       detail: `${unexpectedError}\n\n${catalogueOpenFailureSuffix(publishedDuplicatePath, recoveredCatalogue)}`,
       message: 'The catalogue could not be initialized safely.',
@@ -1613,7 +1781,9 @@ async function openCatalogueFile(
 // Listeners for events from Angular
 // -------------------------------------------------------------------------------------------------
 
-setUpIpcMessages(ipcMain, win, pathToAppData, systemMessages, isTrustedRenderer);
+setUpIpcMessages(ipcMain, win, pathToAppData, systemMessages, isTrustedRenderer, {
+  onCloseAbandoned: acknowledgePrivateQuitCancelled,
+});
 
 trustedIpcOn('register-user-file-path', (_event, filePath: unknown): void => {
   rememberUserSelectedFilePath(filePath);
@@ -1628,7 +1798,7 @@ trustedIpcOn('app-to-touchBar', (_event, changesFromApp: unknown): void => {
  * Once Angular loads it sends over the `ready` status
  * Load up the settings.json and send settings over to Angular
  */
-trustedIpcOn('just-started', (event) => {
+trustedIpcOn('just-started', async (event) => {
   GLOBALS.angularApp = event;
   GLOBALS.winRef = win;
 
@@ -1639,83 +1809,84 @@ trustedIpcOn('just-started', (event) => {
   // Reference: https://github.com/electron/electron/blob/master/docs/api/locales.md
   const locale: string = app.getLocale();
 
-  fs.readFile(path.join(GLOBALS.settingsPath, 'settings.json'), (err, data) => {
-    if (err) {
-      win.setBounds({ x: 0, y: 0, width: screenWidth, height: screenHeight });
+  let data: Buffer | undefined;
+  try { data = await fs.promises.readFile(path.join(GLOBALS.settingsPath, 'settings.json')); } catch { /* First run or unavailable settings. */ }
+  if (!normalOperationScope.isCurrent() || !isTrustedRenderer(event)) { return; }
+  if (!data) {
+    win.setBounds({ x: 0, y: 0, width: screenWidth, height: screenHeight });
+    event.sender.send('set-language-based-off-system-locale', locale);
+    if (catalogueOpenQueue.waitingCount === 0) {
+      event.sender.send('please-open-wizard', true); // firstRun = true!
+    }
+  } else {
+
+    try {
+      const previouslySavedSettings: SettingsObject = JSON.parse(data.toString('utf8'));
+      const savedCurrentCatalogue = previouslySavedSettings.appState?.currentVhaFile;
+      if (savedCurrentCatalogue) {
+        try {
+          previouslySavedSettings.appState.currentVhaFile = requireAuthorizedCataloguePath(
+            savedCurrentCatalogue,
+          );
+        } catch {
+          previouslySavedSettings.appState.currentVhaFile = '';
+        }
+      }
+      previouslySavedSettings.vhaFileHistory = Array.isArray(previouslySavedSettings.vhaFileHistory)
+        ? previouslySavedSettings.vhaFileHistory.filter((historyItem: any): boolean => {
+          try {
+            historyItem.vhaFilePath = requireAuthorizedCataloguePath(historyItem.vhaFilePath);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        : [];
+      if (previouslySavedSettings.appState.addtionalExtensions) {
+        GLOBALS.additionalExtensions = parseAdditionalExtensions(previouslySavedSettings.appState.addtionalExtensions);
+      }
+      try {
+        const savedPlayer = previouslySavedSettings.appState.preferredVideoPlayer
+          ? normalizeAbsolutePath(previouslySavedSettings.appState.preferredVideoPlayer, 'Video player')
+          : '';
+        const canonicalSavedPlayer = savedPlayer ? fs.realpathSync.native(savedPlayer) : '';
+        GLOBALS.preferredVideoPlayer = canonicalSavedPlayer
+          && loadAuthorizedPlayerPaths(GLOBALS.settingsPath).includes(canonicalSavedPlayer)
+          ? canonicalSavedPlayer
+          : '';
+        // Free-form player arguments can activate player-specific script or
+        // output features. They remain disabled until a main-owned consent
+        // workflow is available.
+        GLOBALS.preferredVideoPlayerArguments = '';
+        previouslySavedSettings.appState.preferredVideoPlayer = GLOBALS.preferredVideoPlayer;
+        previouslySavedSettings.appState.videoPlayerArgs = '';
+      } catch {
+        // A stale settings entry must never grant the renderer authority to
+        // choose an executable. The user can select a replacement natively.
+        GLOBALS.preferredVideoPlayer = '';
+        GLOBALS.preferredVideoPlayerArguments = '';
+        previouslySavedSettings.appState.preferredVideoPlayer = '';
+        previouslySavedSettings.appState.videoPlayerArgs = '';
+      }
+      event.sender.send(
+        'settings-returning',
+        previouslySavedSettings,
+        locale,
+        null,
+      );
+
+    } catch (err) {
       event.sender.send('set-language-based-off-system-locale', locale);
       if (catalogueOpenQueue.waitingCount === 0) {
-        event.sender.send('please-open-wizard', true); // firstRun = true!
-      }
-    } else {
-
-      try {
-        const previouslySavedSettings: SettingsObject = JSON.parse(data);
-        const savedCurrentCatalogue = previouslySavedSettings.appState?.currentVhaFile;
-        if (savedCurrentCatalogue) {
-          try {
-            previouslySavedSettings.appState.currentVhaFile = requireAuthorizedCataloguePath(
-              savedCurrentCatalogue,
-            );
-          } catch {
-            previouslySavedSettings.appState.currentVhaFile = '';
-          }
-        }
-        previouslySavedSettings.vhaFileHistory = Array.isArray(previouslySavedSettings.vhaFileHistory)
-          ? previouslySavedSettings.vhaFileHistory.filter((historyItem: any): boolean => {
-            try {
-              historyItem.vhaFilePath = requireAuthorizedCataloguePath(historyItem.vhaFilePath);
-              return true;
-            } catch {
-              return false;
-            }
-          })
-          : [];
-        if (previouslySavedSettings.appState.addtionalExtensions) {
-          GLOBALS.additionalExtensions = parseAdditionalExtensions(previouslySavedSettings.appState.addtionalExtensions);
-        }
-        try {
-          const savedPlayer = previouslySavedSettings.appState.preferredVideoPlayer
-            ? normalizeAbsolutePath(previouslySavedSettings.appState.preferredVideoPlayer, 'Video player')
-            : '';
-          const canonicalSavedPlayer = savedPlayer ? fs.realpathSync.native(savedPlayer) : '';
-          GLOBALS.preferredVideoPlayer = canonicalSavedPlayer
-            && loadAuthorizedPlayerPaths(GLOBALS.settingsPath).includes(canonicalSavedPlayer)
-            ? canonicalSavedPlayer
-            : '';
-          // Free-form player arguments can activate player-specific script or
-          // output features. They remain disabled until a main-owned consent
-          // workflow is available.
-          GLOBALS.preferredVideoPlayerArguments = '';
-          previouslySavedSettings.appState.preferredVideoPlayer = GLOBALS.preferredVideoPlayer;
-          previouslySavedSettings.appState.videoPlayerArgs = '';
-        } catch {
-          // A stale settings entry must never grant the renderer authority to
-          // choose an executable. The user can select a replacement natively.
-          GLOBALS.preferredVideoPlayer = '';
-          GLOBALS.preferredVideoPlayerArguments = '';
-          previouslySavedSettings.appState.preferredVideoPlayer = '';
-          previouslySavedSettings.appState.videoPlayerArgs = '';
-        }
-        event.sender.send(
-          'settings-returning',
-          previouslySavedSettings,
-          locale,
-          null,
-        );
-
-      } catch (err) {
-        event.sender.send('set-language-based-off-system-locale', locale);
-        if (catalogueOpenQueue.waitingCount === 0) {
-          event.sender.send('please-open-wizard', false);
-        }
+        event.sender.send('please-open-wizard', false);
       }
     }
-    // `just-started` is emitted only after the renderer has installed its IPC
-    // listeners. Dispatch directly here even when settings are absent or
-    // corrupt; waiting for settings-driven startup completion would deadlock.
-    rendererCanReceiveCatalogueOpenRequests = true;
-    dispatchNextCatalogueOpenRequest();
-  });
+  }
+  // `just-started` is emitted only after the renderer has installed its IPC
+  // listeners. Dispatch directly here even when settings are absent or
+  // corrupt; waiting for settings-driven startup completion would deadlock.
+  rendererCanReceiveCatalogueOpenRequests = true;
+  dispatchNextCatalogueOpenRequest();
 });
 
 trustedIpcOn('catalogue-open-request-consumed', (event) => {
@@ -1753,7 +1924,8 @@ trustedIpcOn('start-the-import', (
 ) => {
 
   if (
-    catalogueOpenOperationActive
+    privateApplicationWorkspace.status.quitRequested
+    || catalogueOpenOperationActive
     || GLOBALS.catalogueTransitionActive
     || GLOBALS.cataloguePersistenceActive
   ) {
@@ -1762,7 +1934,7 @@ trustedIpcOn('start-the-import', (
   }
 
   if (isThumbnailRegenerationActive()) {
-    dialog.showMessageBox(win, {
+    showNormalMessageBox(win, {
       buttons: ['OK'],
       detail: 'Wait for the current folder thumbnail regeneration to finish before creating another catalogue.',
       message: 'Thumbnail regeneration is still in progress.',
@@ -1797,7 +1969,7 @@ trustedIpcOn('start-the-import', (
     );
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    void dialog.showMessageBox(win, {
+    void showNormalMessageBox(win, {
       buttons: ['OK'],
       detail,
       message: 'The new catalogue locations need to be chosen again.',
@@ -1817,7 +1989,7 @@ trustedIpcOn('start-the-import', (
     );
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    void dialog.showMessageBox(win, {
+    void showNormalMessageBox(win, {
       buttons: ['OK'],
       detail,
       message: 'The selected output folder could not be checked.',
@@ -1833,7 +2005,7 @@ trustedIpcOn('start-the-import', (
     event.sender.send('please-fix-hub-name');
     finishCatalogueOpenOperation(operationGeneration);
   } else {
-    const createCatalogue = (): void => {
+    const createCatalogue = (): Promise<void> | void => {
       assertCurrentCatalogueOpenOperation(operationGeneration);
       try {
         console.log('Catalogue asset folder did not exist, creating');
@@ -1844,7 +2016,7 @@ trustedIpcOn('start-the-import', (
       } catch (error) {
         removeEmptyCatalogueAssetFolders(hubAssetsDirectory);
         const directoryError = error instanceof Error ? error.message : String(error);
-        void dialog.showMessageBox(win, {
+        void showNormalMessageBox(win, {
           buttons: ['OK'],
           detail: directoryError,
           message: 'The catalogue asset folders could not be created.',
@@ -1861,7 +2033,7 @@ trustedIpcOn('start-the-import', (
       } catch (error) {
         removeEmptyCatalogueAssetFolders(hubAssetsDirectory);
         const sourceError = error instanceof Error ? error.message : String(error);
-        void dialog.showMessageBox(win, {
+        void showNormalMessageBox(win, {
           buttons: ['OK'],
           detail: sourceError,
           message: 'The selected source folder is no longer available.',
@@ -1890,7 +2062,7 @@ trustedIpcOn('start-the-import', (
         version: GLOBALS.vhaFileVersion,
       };
 
-      writeVhaFileAndStartExtraction(operationGeneration, {
+      return writeVhaFileAndStartExtraction(operationGeneration, {
         assetDirectory: hubAssetsDirectory,
         finalObject,
         outputDirectory: outDir,
@@ -1905,7 +2077,7 @@ trustedIpcOn('start-the-import', (
     if (finalObjectToSave !== null && GLOBALS.catalogueAccessMode === 'read-write') {
       const saveFailed = (error: unknown): void => {
         const detail = error instanceof Error ? error.message : String(error);
-        void dialog.showMessageBox(win, {
+        void showNormalMessageBox(win, {
           buttons: ['OK'],
           detail,
           message: 'The current catalogue could not be saved, so the new catalogue was not created.',
@@ -1932,7 +2104,7 @@ trustedIpcOn('start-the-import', (
         return;
       }
 
-      writeVhaFileToDisk(authorizedFinalObject, GLOBALS.currentlyOpenVhaFile, (error: Error) => {
+      return writeVhaFileToDisk(authorizedFinalObject, GLOBALS.currentlyOpenVhaFile, (error: Error) => {
         if (!isCurrentCatalogueOpenOperation(operationGeneration)) {
           return;
         }
@@ -1943,10 +2115,10 @@ trustedIpcOn('start-the-import', (
         reconcileSourceFoldersBeforeCatalogueSwitch(authorizedFinalObject.inputDirs);
         GLOBALS.authorizedCatalogueImageHashes = catalogueMediaAuthorityHashes(nextMediaAuthority);
         GLOBALS.authorizedCatalogueMediaLocations = nextMediaAuthority;
-        createCatalogue();
+        return createCatalogue();
       });
     } else {
-      createCatalogue();
+      return createCatalogue();
     }
   }
 
@@ -1959,7 +2131,7 @@ trustedIpcOn('start-the-import', (
 function writeVhaFileAndStartExtraction(
   operationGeneration: number,
   creation: NewCatalogueCreation,
-): void {
+): Promise<void> {
   assertCurrentCatalogueOpenOperation(operationGeneration);
   const { finalObject } = creation;
   const pathToTheFile = path.join(
@@ -1967,14 +2139,14 @@ function writeVhaFileAndStartExtraction(
     catalogueFileName(finalObject.hubName),
   );
 
-  writeVhaFileToDisk(finalObject, pathToTheFile, (error: Error) => {
+  return writeVhaFileToDisk(finalObject, pathToTheFile, (error: Error) => {
     if (!isCurrentCatalogueOpenOperation(operationGeneration)) {
       return;
     }
 
     if (error) {
       removeEmptyCatalogueAssetFolders(creation.assetDirectory);
-      dialog.showMessageBox(win, {
+      showNormalMessageBox(win, {
         buttons: ['OK'],
         detail: error.message,
         message: 'The new catalogue could not be saved.',
@@ -2022,7 +2194,7 @@ function writeVhaFileAndStartExtraction(
       setUpDirectoryWatchers(finalObject.inputDirs, [], true);
     } catch (creationError) {
       const detail = creationError instanceof Error ? creationError.message : String(creationError);
-      void dialog.showMessageBox(win, {
+      void showNormalMessageBox(win, {
         buttons: ['OK'],
         detail,
         message: 'The new catalogue was created, but could not be initialized safely.',
@@ -2039,8 +2211,8 @@ function writeVhaFileAndStartExtraction(
  * Summon system modal to choose a catalogue JSON file
  * open via `openThisDamnFile` method
  */
-trustedIpcOn('system-open-file-through-modal', (event, somethingElse) => {  // TODO -- check -- do I need to save vha to disk?
-  dialog.showOpenDialog(win, {
+trustedIpcOn('system-open-file-through-modal', (event, somethingElse) => {
+  return showNormalOpenDialog(win, {
     title: systemMessages.selectPreviousHub,
     ...(GLOBALS.macVersion ? {} : {
       filters: [{
@@ -2050,6 +2222,7 @@ trustedIpcOn('system-open-file-through-modal', (event, somethingElse) => {  // T
     }),
     properties: ['openFile']
   }).then(result => {
+    if (!normalOperationScope.isCurrent() || !isTrustedRenderer(event)) { return; }
     const chosenFile: string = result.filePaths[0];
 
     if (chosenFile && isCataloguePickerFilePath(chosenFile)) {
@@ -2060,7 +2233,7 @@ trustedIpcOn('system-open-file-through-modal', (event, somethingElse) => {  // T
         console.warn('Unable to authorize the selected catalogue:', error);
       }
     } else if (chosenFile) {
-      void dialog.showMessageBox(win, {
+      void showNormalMessageBox(win, {
         buttons: ['OK'],
         detail: 'Choose a .scaena, .vha2, or .json catalogue file.',
         message: 'The selected file is not a supported catalogue.',
@@ -2085,7 +2258,8 @@ trustedIpcOn('load-this-vha-file', (
   // boundary. Do not let a compromised or stale renderer start a second
   // catalogue transition while the first is awaiting a dialog or disk I/O.
   if (
-    catalogueOpenOperationActive
+    privateApplicationWorkspace.status.quitRequested
+    || catalogueOpenOperationActive
     || GLOBALS.catalogueTransitionActive
     || GLOBALS.cataloguePersistenceActive
   ) {
@@ -2099,7 +2273,7 @@ trustedIpcOn('load-this-vha-file', (
     pathToVhaFile = requireAuthorizedCataloguePath(pathToVhaFile);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    void dialog.showMessageBox(win, {
+    void showNormalMessageBox(win, {
       buttons: ['OK'],
       detail,
       message: 'This catalogue was not selected through a trusted app workflow.',
@@ -2117,15 +2291,14 @@ trustedIpcOn('load-this-vha-file', (
   if (operationGeneration === undefined) {
     return;
   }
-  const openRequestedCatalogue = (): void => {
-    void openThisDamnFile(pathToVhaFile, intent, operationGeneration).finally(() => {
+  const openRequestedCatalogue = (): Promise<void> => {
+    return openThisDamnFile(pathToVhaFile, intent, operationGeneration).finally(() => {
       finishCatalogueOpenOperation(operationGeneration);
     });
   };
 
   if (isThumbnailRegenerationActive()) {
-    openRequestedCatalogue();
-    return;
+    return openRequestedCatalogue();
   }
 
   if (finalObjectToSave !== null && GLOBALS.catalogueAccessMode === 'read-write') {
@@ -2150,7 +2323,7 @@ trustedIpcOn('load-this-vha-file', (
       });
     } catch (error) {
       const catalogueError = error instanceof Error ? error : new Error(String(error));
-      void dialog.showMessageBox(win, {
+      void showNormalMessageBox(win, {
         buttons: ['OK'],
         detail: catalogueError.message,
         message: 'The current catalogue could not be validated, so the other hub was not opened.',
@@ -2162,12 +2335,12 @@ trustedIpcOn('load-this-vha-file', (
       return;
     }
 
-    writeVhaFileToDisk(authorizedFinalObject, GLOBALS.currentlyOpenVhaFile, (error: Error) => {
+    return writeVhaFileToDisk(authorizedFinalObject, GLOBALS.currentlyOpenVhaFile, (error: Error) => {
       if (!isCurrentCatalogueOpenOperation(operationGeneration)) {
         return;
       }
       if (error) {
-        dialog.showMessageBox(win, {
+        showNormalMessageBox(win, {
           buttons: ['OK'],
           detail: error.message,
           message: 'The current catalogue could not be saved, so the other hub was not opened.',
@@ -2183,11 +2356,11 @@ trustedIpcOn('load-this-vha-file', (
       GLOBALS.authorizedCatalogueImageHashes = nextImageHashes;
       GLOBALS.authorizedCatalogueMediaLocations = nextMediaAuthority;
       console.log('Catalogue saved before opening another');
-      openRequestedCatalogue();
+      return openRequestedCatalogue();
     });
 
   } else {
-    openRequestedCatalogue();
+    return openRequestedCatalogue();
   }
 });
 

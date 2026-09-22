@@ -8,6 +8,7 @@ import { ElectronService } from '../../providers/electron.service';
 import { FilePathService } from '../views/file-path.service';
 import { ImageElementService } from './../../services/image-element.service';
 import { ManualTagsService } from '../tags-manual/manual-tags.service';
+import { RendererMutationService } from '../../services/renderer-mutation.service';
 
 import type { StarRating, ImageElement } from '../../../../interfaces/final-object.interface';
 import {
@@ -64,6 +65,7 @@ export class MetaComponent implements OnInit, OnDestroy {
   sortAutoTags = SettingsButtons['sortAutoTags'].toggled;
 
   selectedTagForColor: string = '';
+  private destroyed = false;
 
   constructor(
     private cd: ChangeDetectorRef,
@@ -71,6 +73,7 @@ export class MetaComponent implements OnInit, OnDestroy {
     public filePathService: FilePathService,
     public imageElementService: ImageElementService,
     public manualTagsService: ManualTagsService,
+    private readonly mutations: RendererMutationService,
   ) { }
 
   ngOnInit() {
@@ -105,6 +108,7 @@ export class MetaComponent implements OnInit, OnDestroy {
   }
 
   addThisTag(tag: string) {
+    if (!this.canMutate) { return; }
     if (this.video.tags?.some((existingTag: string) => tagPathsEqual(existingTag, tag))) {
       // console.log('TAG ALREADY ADDED!');
     } else {
@@ -120,10 +124,12 @@ export class MetaComponent implements OnInit, OnDestroy {
   }
 
   filterThisTag(event: TagEmit) {
+    if (!this.canMutate) { return; }
     this.filterTag.emit(event);
   }
 
   removeThisTag(tag: string) {
+    if (!this.canMutate) { return; }
     this.manualTagsService.removeTag(tag);
 
     this.imageElementService.HandleEmission({
@@ -136,6 +142,7 @@ export class MetaComponent implements OnInit, OnDestroy {
 
   /** Remove this video's displayed tag level and all of its descendants. */
   removeDisplayedTag(tag: string): void {
+    if (!this.canMutate) { return; }
     if (!this.individualTagSegments()) {
       this.removeThisTag(tag);
       return;
@@ -163,6 +170,7 @@ export class MetaComponent implements OnInit, OnDestroy {
    * @param event - Object containing tag and mouse event
    */
   onTagRightClick(event: { tag: any, event: PointerEvent }): void {
+    if (!this.canMutate) { return; }
     const colourPath = event.tag.colourPath || event.tag.name;
     this.selectedTagForColor = colourPath;
 
@@ -178,6 +186,7 @@ export class MetaComponent implements OnInit, OnDestroy {
   }
 
   setStarRating(rating: StarRating): void {
+    if (!this.canMutate) { return; }
     if (this.starRatingHack === rating) {
       rating = 0.5; // reset to "N/A" (not rated)
     }
@@ -189,6 +198,7 @@ export class MetaComponent implements OnInit, OnDestroy {
   }
 
   setHeart(): void {
+    if (!this.canMutate) { return; }
     if (this.video.stars == 5.5) { // "un-favorite" the video
       this.imageElementService.HandleEmission({
         index: this.video.index,
@@ -209,6 +219,7 @@ export class MetaComponent implements OnInit, OnDestroy {
    * @param year
    */
   setYear(year: number): void {
+    if (!this.canMutate) { return; }
     this.imageElementService.HandleEmission({
       index: this.video.index,
       year: year,
@@ -234,6 +245,7 @@ export class MetaComponent implements OnInit, OnDestroy {
    * @param event
    */
   validateYear(event: any): void {
+    if (!this.canMutate) { return; }
     const currVal = event.target.valueAsNumber;
 
     if (currVal < 1800 || currVal > 3000) {
@@ -252,11 +264,15 @@ export class MetaComponent implements OnInit, OnDestroy {
    * @param event
    */
   autoFillYear() {
+    if (!this.canMutate) { return; }
     if (!this.yearHack) {
       this.yearHack = 2000;
       this.setYear(2000);
+      const callback = this.mutations.capture();
       setTimeout(() => {
-        this.yearInput().nativeElement.select();
+        if (!this.destroyed && this.mutations.isCurrent(callback)) {
+          this.yearInput()?.nativeElement.select();
+        }
       }, 1);
     }
   }
@@ -266,6 +282,7 @@ export class MetaComponent implements OnInit, OnDestroy {
    * happens on `Enter` / `Return` key press
    */
   tryRenamingFile() {
+    if (!this.canMutate) { return; }
     this.renameError = false;
 
     const originalFile = this.video.fileName;
@@ -294,6 +311,7 @@ export class MetaComponent implements OnInit, OnDestroy {
 
   /** Keep notes in the catalogue model before the selected video's panel closes. */
   saveVideoNotes(notes: string): void {
+    if (!this.canMutate) { return; }
     if ((this.video.notes || '') === notes) {
       return;
     }
@@ -301,8 +319,13 @@ export class MetaComponent implements OnInit, OnDestroy {
     this.imageElementService.finalArrayNeedsSaving = true;
   }
 
+  private get canMutate(): boolean {
+    return !this.destroyed && this.mutations.accepting;
+  }
+
   ngOnDestroy(): void {
-    this.responseSubscription.unsubscribe();
+    this.destroyed = true;
+    this.responseSubscription?.unsubscribe();
     if (this.tagColorSubscription) {
       this.tagColorSubscription.unsubscribe();
     }

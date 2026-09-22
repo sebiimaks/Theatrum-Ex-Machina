@@ -1,10 +1,13 @@
 import { app, dialog, shell, BrowserWindow, nativeImage } from 'electron';
 
 import * as path from 'path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 const fs = require('fs');
 const spawn = require('child_process').spawn;
 
 import { GLOBALS } from './main-globals';
+import { requireNormalCatalogueStorage } from './catalogue-storage';
+import { normalOperationScope, type NormalOperationContext } from './normal-operation-scope';
 import { ImageElement, FinalObject } from '../interfaces/final-object.interface';
 import { SettingsObject } from '../interfaces/settings-object.interface';
 import {
@@ -83,6 +86,11 @@ import {
 let activeCustomThumbnailReplacements = 0;
 let thumbnailCleanupInProgress = false;
 
+/** Main-owned lifecycle notifications; no renderer message can invoke these directly. */
+export interface MainIpcLifecycleHooks {
+  onCloseAbandoned?: () => void;
+}
+
 function pathForNativeDialog(value: string): string {
   return Array.from(value, (character: string): string => {
     const codePoint = character.codePointAt(0) ?? 0;
@@ -108,7 +116,29 @@ export function setUpIpcMessages(
   pathToAppData,
   systemMessages,
   isTrustedRenderer?: (event: any) => boolean,
+  lifecycleHooks: MainIpcLifecycleHooks = {},
 ) {
+
+  const operationOwners = new AsyncLocalStorage<{
+    event: any; storage: typeof GLOBALS.catalogueStorage; generation: number; cataloguePath: string;
+    closeAbandoned?: () => void;
+  }>();
+  const operationIsCurrent = (): boolean => {
+    const owner = operationOwners.getStore();
+    return normalOperationScope.isCurrent() && (!owner || (
+      eventIsTrusted(owner.event) && GLOBALS.catalogueStorage === owner.storage
+      && GLOBALS.catalogueSessionGeneration === owner.generation
+      && GLOBALS.currentlyOpenVhaFile === owner.cataloguePath
+    ));
+  };
+  const assertOperationCurrent = (): void => {
+    if (!operationIsCurrent()) { throw new Error('The normal catalogue operation was cancelled.'); }
+  };
+  const withOperationOwner = <T>(event: any, operation: () => T, closeAbandoned?: () => void): T => operationOwners.run({
+    event, storage: GLOBALS.catalogueStorage, generation: GLOBALS.catalogueSessionGeneration,
+    cataloguePath: GLOBALS.currentlyOpenVhaFile,
+    closeAbandoned,
+  }, operation);
 
   const readOnlyMutationChannels = new Set([
     'add-missing-thumbnails',
@@ -131,7 +161,7 @@ export function setUpIpcMessages(
     if (GLOBALS.catalogueAccessMode !== 'read-only' || !readOnlyMutationChannels.has(channel)) {
       return false;
     }
-    console.warn('Ignored catalogue mutation during a read-only session:', channel);
+    warn('Ignored catalogue mutation during a read-only session:', channel);
     if (event.sender && !event.sender.isDestroyed()) {
       event.sender.send('catalogue-read-only-write-blocked', channel);
     }
@@ -146,14 +176,32 @@ export function setUpIpcMessages(
     return BrowserWindow.getFocusedWindow() || undefined;
   };
 
-  const showOpenDialog = (options: any): Promise<any> => {
+  const showOpenDialog = async (options: any): Promise<any> => {
+    assertOperationCurrent();
     const owner = activeWindow();
-    return owner ? dialog.showOpenDialog(owner, options) : dialog.showOpenDialog(options);
+    const result = await (owner ? dialog.showOpenDialog(owner, options) : dialog.showOpenDialog(options));
+    return operationIsCurrent() ? result : { canceled: true, filePaths: [] };
   };
 
-  const showSaveDialog = (options: any): Promise<any> => {
+  const showSaveDialog = async (options: any): Promise<any> => {
+    assertOperationCurrent();
     const owner = activeWindow();
-    return owner ? dialog.showSaveDialog(owner, options) : dialog.showSaveDialog(options);
+    const result = await (owner ? dialog.showSaveDialog(owner, options) : dialog.showSaveDialog(options));
+    return operationIsCurrent() ? result : { canceled: true };
+  };
+
+  const showMessageBox = async (options: any): Promise<any> => {
+    assertOperationCurrent();
+    const owner = activeWindow();
+    const result = await (owner ? dialog.showMessageBox(owner, options) : dialog.showMessageBox(options));
+    return operationIsCurrent() ? result : { response: options.cancelId ?? 0 };
+  };
+
+  const warn = (message: string, ...details: unknown[]): void => {
+    console.warn(message, ...(operationIsCurrent() ? details : ['The normal operation was cancelled.']));
+  };
+  const reportError = (message: string, ...details: unknown[]): void => {
+    console.error(message, ...(operationIsCurrent() ? details : ['The normal operation was cancelled.']));
   };
 
   const configuredSourcePaths = (): string[] => Object.values(GLOBALS.selectedSourceFolders || {})
@@ -175,7 +223,7 @@ export function setUpIpcMessages(
     });
 
   const beginCatalogueMaintenance = (): boolean => {
-    if (GLOBALS.catalogueTransitionActive || GLOBALS.cataloguePersistenceActive) {
+    if (!operationIsCurrent() || GLOBALS.catalogueTransitionActive || GLOBALS.cataloguePersistenceActive) {
       return false;
     }
     GLOBALS.cataloguePersistenceActive = true;
@@ -184,11 +232,15 @@ export function setUpIpcMessages(
 
   const releaseCataloguePersistence = (): void => {
     GLOBALS.cataloguePersistenceActive = false;
-    setImmediate(() => {
-      if (!GLOBALS.cataloguePersistenceActive) {
-        GLOBALS.requestCatalogueOpenDispatch?.();
-      }
-    });
+    void normalOperationScope.run(() => new Promise<void>(resolve => {
+      setImmediate(() => {
+        try {
+          if (operationIsCurrent() && !GLOBALS.cataloguePersistenceActive) {
+            GLOBALS.requestCatalogueOpenDispatch?.();
+          }
+        } finally { resolve(); }
+      });
+    })).catch(() => undefined);
   };
 
   const finishCatalogueMaintenance = releaseCataloguePersistence;
@@ -206,7 +258,7 @@ export function setUpIpcMessages(
   }
 
   const captureCatalogueSession = (): CatalogueSessionSnapshot => {
-    if (GLOBALS.catalogueTransitionActive || !GLOBALS.currentlyOpenVhaFile) {
+    if (!operationIsCurrent() || GLOBALS.catalogueTransitionActive || !GLOBALS.currentlyOpenVhaFile) {
       throw new Error('A catalogue transition is currently active.');
     }
     return {
@@ -218,7 +270,8 @@ export function setUpIpcMessages(
 
   const catalogueSessionIsCurrent = (snapshot: CatalogueSessionSnapshot): boolean => {
     if (
-      GLOBALS.catalogueTransitionActive
+      !operationIsCurrent()
+      || GLOBALS.catalogueTransitionActive
       || GLOBALS.catalogueSessionGeneration !== snapshot.generation
       || GLOBALS.authorizedCatalogueMediaLocations !== snapshot.mediaAuthority
       || !GLOBALS.currentlyOpenVhaFile
@@ -236,7 +289,7 @@ export function setUpIpcMessages(
   };
 
   const captureCloseSession = (): CloseSessionSnapshot => {
-    if (GLOBALS.catalogueTransitionActive) {
+    if (!operationIsCurrent() || GLOBALS.catalogueTransitionActive) {
       throw new Error('A catalogue transition is currently active.');
     }
     return {
@@ -251,7 +304,8 @@ export function setUpIpcMessages(
       return catalogueSessionIsCurrent(snapshot.catalogue);
     }
     return (
-      !GLOBALS.catalogueTransitionActive
+      operationIsCurrent()
+      && !GLOBALS.catalogueTransitionActive
       && !GLOBALS.currentlyOpenVhaFile
       && GLOBALS.catalogueSessionGeneration === snapshot.generation
       && GLOBALS.authorizedCatalogueMediaLocations === snapshot.mediaAuthority
@@ -304,7 +358,7 @@ export function setUpIpcMessages(
   const resolveAuthorizedCatalogueMediaItem = (
     item: unknown,
   ): { fullPath: string; hash: string; item: ImageElement } => {
-    if (GLOBALS.catalogueTransitionActive) {
+    if (!operationIsCurrent() || GLOBALS.catalogueTransitionActive) {
       throw new Error('The active catalogue is changing.');
     }
     const authorized = requireCatalogueMediaLocationAuthority(
@@ -433,6 +487,7 @@ export function setUpIpcMessages(
     selections: Set<string>,
     label: string,
   ): string => {
+    assertOperationCurrent();
     const normalizedDirectory = normalizeAbsolutePath(value, label);
     resolveExistingSourceSubfolder(normalizedDirectory, '');
     const canonicalDirectory = fs.realpathSync.native(normalizedDirectory);
@@ -457,6 +512,7 @@ export function setUpIpcMessages(
     selections: Set<string>,
     label: string,
   ): string => {
+    assertOperationCurrent();
     const normalizedDirectory = normalizeAbsolutePath(value, label);
     if (!selections.has(normalizedDirectory)) {
       throw new Error(`${label} must be chosen through the native folder picker.`);
@@ -495,7 +551,6 @@ export function setUpIpcMessages(
       return true;
     }
 
-    const owner = activeWindow();
     const options = {
       buttons: ['Allow Automatic Watching', 'Cancel'],
       cancelId: 1,
@@ -506,9 +561,7 @@ export function setUpIpcMessages(
       title: 'Allow Automatic Folder Watching?',
       type: 'warning' as const,
     };
-    const choice = owner
-      ? await dialog.showMessageBox(owner, options)
-      : await dialog.showMessageBox(options);
+    const choice = await showMessageBox(options);
     if (GLOBALS.cataloguePersistenceActive || !catalogueSessionIsCurrent(session)) {
       return false;
     }
@@ -540,42 +593,169 @@ export function setUpIpcMessages(
   };
 
   const eventIsTrusted = (event: any): boolean => {
-    if (isTrustedRenderer) {
-      return isTrustedRenderer(event);
-    }
-    const trustedWindow = GLOBALS.winRef;
-    const trustedWebContents = trustedWindow && !trustedWindow.isDestroyed()
-      ? trustedWindow.webContents
-      : null;
-    return Boolean(trustedWebContents && event.sender.id === trustedWebContents.id);
+    try {
+      if (isTrustedRenderer) { return isTrustedRenderer(event); }
+      const trustedWindow = GLOBALS.winRef;
+      const trustedWebContents = trustedWindow && !trustedWindow.isDestroyed()
+        ? trustedWindow.webContents : null;
+      return Boolean(trustedWebContents && event.sender.id === trustedWebContents.id);
+    } catch { return false; }
   };
 
-  const trustedIpcOn = (channel: string, listener: (event: any, ...args: any[]) => void): void => {
-    ipc.on(channel, (event, ...args): void => {
+  /**
+   * Bind a close acknowledgement to the raw admitted window and document, before
+   * scoped IPC proxies are created. A dialog from an old catalogue or navigated
+   * page must never clear the quit state of its replacement.
+   */
+  const captureCloseAbandonment = (event: any): { notify: () => void; dispose: () => void } | undefined => {
+    if (!lifecycleHooks.onCloseAbandoned) { return undefined; }
+    const window = GLOBALS.winRef;
+    const contents = event.sender;
+    const frame = event.senderFrame;
+    const storage = GLOBALS.catalogueStorage;
+    const generation = GLOBALS.catalogueSessionGeneration;
+    const cataloguePath = GLOBALS.currentlyOpenVhaFile;
+    const mediaAuthority = GLOBALS.authorizedCatalogueMediaLocations;
+    const accessMode = GLOBALS.catalogueAccessMode;
+    let url: string;
+    let invalidated = false;
+    let disposed = false;
+    let notified = false;
+    const invalidate = (): void => { invalidated = true; };
+    const navigationStarted = (details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>): void => {
+      if (details.isMainFrame !== false) { invalidate(); }
+    };
+    const current = (): boolean => {
+      try {
+        return !invalidated && !disposed && !GLOBALS.readyToQuit
+          && normalOperationScope.isCurrent() && eventIsTrusted(event)
+          && storage.kind === 'normal' && GLOBALS.catalogueStorage === storage
+          && GLOBALS.catalogueSessionGeneration === generation
+          && GLOBALS.currentlyOpenVhaFile === cataloguePath
+          && GLOBALS.authorizedCatalogueMediaLocations === mediaAuthority
+          && GLOBALS.catalogueAccessMode === accessMode && !GLOBALS.catalogueTransitionActive
+          && GLOBALS.winRef === window && !window.isDestroyed()
+          && window.webContents === contents && !contents.isDestroyed()
+          && contents.mainFrame === frame && frame.parent === null
+          && !frame.isDestroyed() && !frame.detached
+          && contents.getURL() === url && frame.url === url;
+      } catch { return false; }
+    };
+    try {
+      url = contents.getURL();
+      if (!current()) { return undefined; }
+      contents.on('did-start-navigation', navigationStarted);
+      contents.on('render-process-gone', invalidate);
+    } catch { return undefined; }
+    return {
+      notify: () => {
+        if (notified || !current()) { return; }
+        notified = true;
+        try { lifecycleHooks.onCloseAbandoned?.(); }
+        catch { console.error('The main close cancellation hook could not be completed.'); }
+      },
+      dispose: () => {
+        if (disposed) { return; }
+        disposed = true;
+        contents.removeListener('did-start-navigation', navigationStarted);
+        contents.removeListener('render-process-gone', invalidate);
+      },
+    };
+  };
+
+  // Legacy IPC includes settings, exports, external players, clipboard/drag
+  // handoffs and plaintext extraction. Private support is admitted separately
+  // only after its complete session/renderer lifecycle is integrated.
+  const rejectPrivateOperation = (event: any, channel: string): boolean => {
+    if (GLOBALS.catalogueStorage.kind === 'normal' && normalOperationScope.accepting) { return false; }
+    if (event.sender && !event.sender.isDestroyed()) {
+      const message = 'This operation is not available while the catalogue is closed or changing.';
+      if (channel === 'save-current-vha-file') {
+        event.sender.send('current-vha-file-save-failed', message);
+      } else if (channel === 'close-window') {
+        event.sender.send('close-window-save-failed', message);
+      }
+    }
+    return true;
+  };
+
+  const captureNormalExportGuard = (): (() => void) => {
+    const storage = GLOBALS.catalogueStorage;
+    requireNormalCatalogueStorage(storage);
+    const generation = GLOBALS.catalogueSessionGeneration;
+    const cataloguePath = GLOBALS.currentlyOpenVhaFile;
+    return () => {
+      assertOperationCurrent();
+      requireNormalCatalogueStorage(GLOBALS.catalogueStorage);
+      if (GLOBALS.catalogueStorage !== storage || GLOBALS.catalogueSessionGeneration !== generation
+        || GLOBALS.currentlyOpenVhaFile !== cataloguePath || GLOBALS.catalogueTransitionActive) {
+        throw new Error('The active catalogue changed before the export could be written.');
+      }
+    };
+  };
+
+  // Bind every response to the admitted operation and originating renderer.
+  // Electron methods retain their real receiver; the proxy only gates effects.
+  const scopedEvent = (event: any, context: NormalOperationContext): any => {
+    const current = (): boolean => context.isCurrent() && eventIsTrusted(event);
+    const guardTarget = (target: any, methods: ReadonlySet<string>): any => !target ? target : new Proxy(target, {
+      get(object, key) {
+        const value = Reflect.get(object, key, object);
+        if (key === 'isDestroyed') { return () => !current() || object.isDestroyed(); }
+        if (typeof value !== 'function') { return value; }
+        return methods.has(String(key))
+          ? (...args: any[]) => { if (current()) { return value.apply(object, args); } }
+          : value.bind(object);
+      },
+    });
+    const sender = guardTarget(event.sender, new Set(['send', 'sendToFrame', 'postMessage', 'startDrag']));
+    const frame = guardTarget(event.senderFrame, new Set(['send', 'postMessage']));
+    return new Proxy(event, {
+      get(object, key) {
+        if (key === 'sender') { return sender; }
+        if (key === 'senderFrame') { return frame; }
+        const value = Reflect.get(object, key, object);
+        if (key === 'reply') { return (...args: any[]) => { if (current()) { return value.apply(object, args); } }; }
+        return typeof value === 'function' ? value.bind(object) : value;
+      },
+    });
+  };
+
+  const trustedIpcOn = (channel: string, listener: (event: any, ...args: any[]) => unknown): void => {
+    ipc.on(channel, (event, ...args): void | Promise<unknown> => {
       if (!eventIsTrusted(event)) {
-        console.warn('Ignored IPC message from an untrusted renderer:', channel);
+        warn('Ignored IPC message from an untrusted renderer:', channel);
         return;
       }
+      if (rejectPrivateOperation(event, channel)) { return; }
       if (rejectReadOnlyMutation(event, channel)) {
         return;
       }
+      const closeAbandonment = channel === 'close-window' ? captureCloseAbandonment(event) : undefined;
       if (
         GLOBALS.cataloguePersistenceActive
         && (readOnlyMutationChannels.has(channel) || channel === 'close-window')
       ) {
-        console.warn('Ignored catalogue mutation while persistence is active:', channel);
+        warn('Ignored catalogue mutation while persistence is active:', channel);
         if (channel === 'save-current-vha-file' && !event.sender.isDestroyed()) {
           event.sender.send('current-vha-file-save-failed', 'Another catalogue save is already in progress.');
         } else if (channel === 'close-window' && !event.sender.isDestroyed()) {
           event.sender.send('close-window-save-failed', 'Another catalogue save is already in progress.');
+          closeAbandonment?.notify();
         }
+        closeAbandonment?.dispose();
         return;
       }
       if (GLOBALS.catalogueTransitionActive && readOnlyMutationChannels.has(channel)) {
-        console.warn('Ignored catalogue mutation while a transition is active:', channel);
+        warn('Ignored catalogue mutation while a transition is active:', channel);
         return;
       }
-      listener(event, ...args);
+      return normalOperationScope.run(context => withOperationOwner(
+        event, () => listener(scopedEvent(event, context), ...args), closeAbandonment?.notify,
+      )).catch(() => {
+        closeAbandonment?.notify();
+        reportError('The normal catalogue operation could not be completed.');
+      }).finally(() => { closeAbandonment?.dispose(); });
     });
   };
 
@@ -585,8 +765,12 @@ export function setUpIpcMessages(
   ): void => {
     ipc.handle(channel, (event, ...args): unknown | Promise<unknown> => {
       if (!eventIsTrusted(event)) {
-        console.warn('Ignored IPC request from an untrusted renderer:', channel);
+        warn('Ignored IPC request from an untrusted renderer:', channel);
         throw new Error('The request did not come from the active application window.');
+      }
+
+      if (rejectPrivateOperation(event, channel)) {
+        return { error: 'This operation is not available for private hubs yet.', status: 'private-unavailable' };
       }
 
       if (rejectReadOnlyMutation(event, channel)) {
@@ -609,7 +793,17 @@ export function setUpIpcMessages(
         };
       }
 
-      return listener(event, ...args);
+      return normalOperationScope.run(context => withOperationOwner(event, async () => {
+        try {
+          const result = await listener(scopedEvent(event, context), ...args);
+          return operationIsCurrent()
+            ? result
+            : { error: 'The normal catalogue operation was cancelled.', status: 'cancelled' };
+        } catch (error) {
+          if (!operationIsCurrent()) { return { error: 'The normal catalogue operation was cancelled.', status: 'cancelled' }; }
+          throw error;
+        }
+      }));
     });
   };
 
@@ -630,7 +824,7 @@ export function setUpIpcMessages(
       return;
     }
     if (theme !== 'light' && theme !== 'dark') {
-      console.warn('Ignored invalid app icon theme.');
+      warn('Ignored invalid app icon theme.');
       return;
     }
 
@@ -640,30 +834,35 @@ export function setUpIpcMessages(
       : path.join(__dirname, '../src/assets', iconFileName);
     const icon = nativeImage.createFromPath(iconPath);
     if (icon.isEmpty()) {
-      console.warn('Unable to load app icon theme:', iconPath);
+      warn('Unable to load app icon theme:', iconPath);
       return;
     }
     app.dock.setIcon(icon);
   };
 
-  const launchDetachedProcess = (launch: ProcessLaunch, event): void => {
+  const launchDetachedProcess = (launch: ProcessLaunch, event): Promise<void> => new Promise(resolve => {
     try {
+      assertOperationCurrent();
       const child = spawn(launch.command, launch.args, {
         detached: true,
         shell: false,
         stdio: 'ignore',
         windowsHide: true,
       });
+      // Drain only the native launch. The external player is explicitly handed
+      // to the OS and may outlive this app; it is never killed on private entry.
       child.once('error', (error: Error) => {
-        console.error('Unable to launch external video player:', error);
+        reportError('Unable to launch external video player:', error);
         event.sender.send('file-not-found');
+        resolve();
       });
-      child.unref();
+      child.once('spawn', () => { child.unref(); resolve(); });
     } catch (error) {
-      console.error('Unable to launch external video player:', error);
+      reportError('Unable to launch external video player:', error);
       event.sender.send('file-not-found');
+      resolve();
     }
-  };
+  });
 
   /**
    * Un-Maximize the window
@@ -697,20 +896,20 @@ export function setUpIpcMessages(
     try {
       shell.showItemInFolder(resolveAuthorizedCatalogueMediaItem(item).fullPath);
     } catch (error) {
-      console.warn('Ignored invalid file path:', error);
+      warn('Ignored invalid file path:', error);
     }
   });
 
   /**
    * Open a URL in system's default browser
    */
-  trustedIpcOn('please-open-url', (event, urlToOpen: string): void => {
+  trustedIpcOn('please-open-url', (event, urlToOpen: string) => {
     if (!isAllowedExternalUrl(urlToOpen)) {
-      console.warn('Ignored unsafe external URL.');
+      warn('Ignored unsafe external URL.');
       return;
     }
-    shell.openExternal(urlToOpen, { activate: true }).catch((error: Error) => {
-      console.error('Unable to open external URL:', error);
+    return shell.openExternal(urlToOpen, { activate: true }).catch((error: Error) => {
+      reportError('Unable to open external URL:', error);
     });
   });
 
@@ -734,20 +933,19 @@ export function setUpIpcMessages(
         if (!GLOBALS.preferredVideoPlayer) {
           throw new Error('A custom media type requires a user-selected video player.');
         }
-        launchDetachedProcess(
+        return launchDetachedProcess(
           buildPlayerLaunch(GLOBALS.preferredVideoPlayer, normalizedMediaPath, ''),
           event,
         );
-        return;
       }
     } catch {
       event.sender.send('file-not-found');
       return;
     }
 
-    shell.openPath(normalizedMediaPath).then((errorMessage: string) => {
+    return shell.openPath(normalizedMediaPath).then((errorMessage: string) => {
       if (errorMessage) {
-        console.error(errorMessage);
+        reportError('Unable to open the selected media file:', errorMessage);
         event.sender.send('file-not-found');
       }
     });
@@ -773,12 +971,12 @@ export function setUpIpcMessages(
         .join(' ');
       launch = buildPlayerLaunch(GLOBALS.preferredVideoPlayer, normalizedMediaPath, playerArguments);
     } catch (error) {
-      console.warn('Ignored invalid custom-player request:', error);
+      warn('Ignored invalid custom-player request:', error);
       event.sender.send('file-not-found');
       return;
     }
 
-    launchDetachedProcess(launch, event);
+    return launchDetachedProcess(launch, event);
   });
 
   /**
@@ -796,7 +994,7 @@ export function setUpIpcMessages(
         icon: dragIcon,
       });
     } catch (error) {
-      console.warn('Ignored unsafe file-drag request:', error);
+      warn('Ignored unsafe file-drag request:', error);
     }
   });
 
@@ -805,7 +1003,7 @@ export function setUpIpcMessages(
    */
   trustedIpcOn('select-default-video-player', (event) => {
     console.log('asking for default video player');
-    showOpenDialog({
+    return showOpenDialog({
       title: systemMessages.selectDefaultPlayer, // TODO: check if errors out now that this is in `main-ipc.ts`
       filters: [
         {
@@ -835,7 +1033,7 @@ export function setUpIpcMessages(
           event.sender.send('preferred-video-player-returning', canonicalPlayer);
         }
       } catch (error) {
-        console.warn('Ignored invalid video player selection:', error);
+        warn('Ignored invalid video player selection:', error);
       }
     }).catch(err => {});
   });
@@ -851,7 +1049,7 @@ export function setUpIpcMessages(
     try {
       playlistSession = captureCatalogueSession();
     } catch (error) {
-      console.warn('Ignored playlist request outside an active catalogue session:', error);
+      warn('Ignored playlist request outside an active catalogue session:', error);
       return;
     }
     const mediaAuthority = GLOBALS.authorizedCatalogueMediaLocations;
@@ -893,56 +1091,43 @@ export function setUpIpcMessages(
       : [];
 
     if (cleanPlaylist.length) {
-      fs.promises.mkdtemp(path.join(GLOBALS.settingsPath, 'playlist-')).then((temporaryDirectory: string) => {
+      return (async () => {
+        assertOperationCurrent();
+        const temporaryDirectory = await fs.promises.mkdtemp(path.join(GLOBALS.settingsPath, 'playlist-'));
         const savePath = path.join(temporaryDirectory, 'playlist.pls');
-        const removeTemporaryPlaylist = (): void => {
-          fs.promises.unlink(savePath)
-            .catch(() => undefined)
-            .finally(() => fs.promises.rmdir(temporaryDirectory).catch(() => undefined));
+        const removeTemporaryPlaylist = async (): Promise<void> => {
+          try { await fs.promises.unlink(savePath); }
+          catch (error) { if (error.code !== 'ENOENT') { throw error; } }
+          await fs.promises.rmdir(temporaryDirectory);
         };
-        createDotPlsFile(savePath, cleanPlaylist, (writeError?: Error) => {
-          if (writeError) {
-            console.error('Unable to create playlist:', writeError);
-            removeTemporaryPlaylist();
-            if (!event.sender.isDestroyed()) {
-              event.sender.send('file-not-found');
-            }
-            return;
-          }
-          if (
-            !catalogueSessionIsCurrent(playlistSession)
-            || event.sender.isDestroyed()
-            || GLOBALS.catalogueTransitionActive
+        try {
+          assertOperationCurrent();
+          await new Promise<void>((resolve, reject) => {
+            createDotPlsFile(savePath, cleanPlaylist, (error?: Error) => error ? reject(error) : resolve());
+          });
+          if (!catalogueSessionIsCurrent(playlistSession) || event.sender.isDestroyed()
             || GLOBALS.authorizedCatalogueMediaLocations !== mediaAuthority
-            || GLOBALS.currentlyOpenVhaFile !== cataloguePath
-          ) {
-            removeTemporaryPlaylist();
-            return;
-          }
-
-          const cleanupTimer = setTimeout(() => {
-            removeTemporaryPlaylist();
-          }, 60_000);
-          cleanupTimer.unref();
-
+            || GLOBALS.currentlyOpenVhaFile !== cataloguePath) { return; }
           if (GLOBALS.preferredVideoPlayer) {
-            try {
-              launchDetachedProcess(buildPlayerLaunch(GLOBALS.preferredVideoPlayer, savePath, ''), event);
-            } catch (error) {
-              console.warn('Ignored invalid custom-player request:', error);
-              if (!event.sender.isDestroyed()) {
-                event.sender.send('file-not-found');
-              }
-            }
+            await launchDetachedProcess(buildPlayerLaunch(GLOBALS.preferredVideoPlayer, savePath, ''), event);
           } else {
-            shell.openPath(savePath);
+            await shell.openPath(savePath);
           }
-        });
-      }).catch((error: Error) => {
-        console.error('Unable to create a private temporary playlist:', error);
-        if (!event.sender.isDestroyed()) {
-          event.sender.send('file-not-found');
-        }
+          await normalOperationScope.run(context => new Promise<void>(resolve => {
+            if (!context.isCurrent()) { resolve(); return; }
+            const cleanUp = (): void => {
+              clearTimeout(timer);
+              context.signal.removeEventListener('abort', cleanUp);
+              resolve();
+            };
+            const timer = setTimeout(cleanUp, 60_000);
+            timer.unref();
+            context.signal.addEventListener('abort', cleanUp, { once: true });
+          }));
+        } finally { await removeTemporaryPlaylist(); }
+      })().catch((error: Error) => {
+        reportError('Unable to complete the temporary playlist operation:', error);
+        if (!event.sender.isDestroyed()) { event.sender.send('file-not-found'); }
       });
     }
   });
@@ -967,7 +1152,7 @@ export function setUpIpcMessages(
       fileToDelete = authorized.fullPath;
       reviewedRealPath = authorized.fullPath;
     } catch (error) {
-      console.warn('Ignored unsafe delete path:', error);
+      warn('Ignored unsafe delete path:', error);
       return;
     }
 
@@ -976,7 +1161,6 @@ export function setUpIpcMessages(
     }
 
     try {
-      const owner = activeWindow();
       const permanent = dangerousDelete === true;
       const options = {
         buttons: [permanent ? 'Delete Permanently' : 'Move to Trash', 'Cancel'],
@@ -990,9 +1174,7 @@ export function setUpIpcMessages(
         title: permanent ? 'Delete Media Permanently?' : 'Move Media to Trash?',
         type: 'warning' as const,
       };
-      const choice = owner
-        ? await dialog.showMessageBox(owner, options)
-        : await dialog.showMessageBox(options);
+      const choice = await showMessageBox(options);
       if (choice.response !== 0) {
         return;
       }
@@ -1025,7 +1207,7 @@ export function setUpIpcMessages(
         event.sender.send('file-deleted', item);
       }
     } catch (error) {
-      console.warn('Unable to complete the confirmed media deletion:', error);
+      warn('Unable to complete the confirmed media deletion:', error);
     } finally {
       finishCatalogueMaintenance();
     }
@@ -1047,7 +1229,7 @@ export function setUpIpcMessages(
         item,
       ).hash;
     } catch (error) {
-      console.warn('Ignored an unauthorized thumbnail replacement:', error);
+      warn('Ignored an unauthorized thumbnail replacement:', error);
       return;
     }
     const assetDirectory = resolveTheatrumAssetDirectory(
@@ -1086,7 +1268,7 @@ export function setUpIpcMessages(
       }
       GLOBALS.pendingUserFileSelections.delete(incomingImagePath);
     } catch (error) {
-      console.warn('Ignored unsafe custom-thumbnail replacement:', error);
+      warn('Ignored unsafe custom-thumbnail replacement:', error);
       return;
     }
 
@@ -1112,7 +1294,7 @@ export function setUpIpcMessages(
     }
     activeCustomThumbnailReplacements++;
 
-    replaceThumbnailWithNewImage(fileToReplace, incomingImagePath, height, (imagePath: string) => {
+    return replaceThumbnailWithNewImage(fileToReplace, incomingImagePath, height, (imagePath: string) => {
       const decodedImage = nativeImage.createFromPath(imagePath);
       if (decodedImage.isEmpty()) {
         throw new Error('Electron could not decode the dropped PNG.');
@@ -1125,7 +1307,7 @@ export function setUpIpcMessages(
         }
       })
       .catch((error) => {
-        console.error('Unable to replace custom thumbnail:', error);
+        reportError('Unable to replace custom thumbnail:', error);
       })
       .finally(() => {
         activeCustomThumbnailReplacements = Math.max(0, activeCustomThumbnailReplacements - 1);
@@ -1139,7 +1321,7 @@ export function setUpIpcMessages(
    * where all the videos are located
    */
   trustedIpcOn('choose-input', (event) => {
-    showOpenDialog({
+    return showOpenDialog({
       properties: ['openDirectory']
     }).then(result => {
       const inputDirPath: string = result.filePaths[0];
@@ -1156,7 +1338,7 @@ export function setUpIpcMessages(
         event.sender.send('input-folder-chosen', selectedDirectory);
       }
     }).catch(error => {
-      console.warn('Unable to choose a source folder:', error);
+      warn('Unable to choose a source folder:', error);
     });
   });
 
@@ -1165,7 +1347,7 @@ export function setUpIpcMessages(
    * where all the videos are located
    */
   trustedIpcOn('reconnect-this-folder', (event, inputSource: number) => {
-    showOpenDialog({
+    return showOpenDialog({
       properties: ['openDirectory']
     }).then(result => {
       const inputDirPath: string = result.filePaths[0];
@@ -1178,7 +1360,7 @@ export function setUpIpcMessages(
         event.sender.send('old-folder-reconnected', inputSource, selectedDirectory);
       }
     }).catch(error => {
-      console.warn('Unable to choose a replacement source folder:', error);
+      warn('Unable to choose a replacement source folder:', error);
     });
   });
 
@@ -1247,7 +1429,7 @@ export function setUpIpcMessages(
         return;
       }
       const watchSession = captureCatalogueSession();
-      void authorizePersistentSourceWatch(configuredRoot, sourceIndex)
+      return authorizePersistentSourceWatch(configuredRoot, sourceIndex)
         .then((allowed: boolean) => {
           if (
             allowed
@@ -1449,7 +1631,7 @@ export function setUpIpcMessages(
     }
     const maximumEntries = GLOBALS.authorizedCatalogueImageHashes.size + 10_000;
     if (!Array.isArray(finalArray) || finalArray.length > maximumEntries) {
-      console.warn('Ignored an oversized missing-thumbnail request.');
+      warn('Ignored an oversized missing-thumbnail request.');
       return;
     }
     extractAnyMissingThumbs(finalArray);
@@ -1467,13 +1649,13 @@ export function setUpIpcMessages(
       );
       return;
     }
-    regenerateThumbnails(item)
+    return regenerateThumbnails(item)
       .then((screenshotCount: number) => {
         event.sender.send('thumbnail-replaced');
         event.sender.send('thumbnail-regeneration-complete', item.hash, screenshotCount);
       })
       .catch((error: Error) => {
-        console.error('Unable to regenerate thumbnails:', error);
+        reportError('Unable to regenerate thumbnails:', error);
         const coreStatus = error instanceof ThumbnailRegenerationError
           ? error.coreStatus
           : undefined;
@@ -1546,7 +1728,7 @@ export function setUpIpcMessages(
       sender.once('render-process-gone', ownerUnavailable);
       sender.on('did-start-navigation', navigationStarted);
 
-      regenerateFolderThumbnails(
+      return regenerateFolderThumbnails(
         sourceIndex,
         relativePath,
         items,
@@ -1560,7 +1742,7 @@ export function setUpIpcMessages(
         })
         .catch((error: Error) => {
           cleanUpOwnerListeners();
-          console.error('Unable to regenerate folder thumbnails:', error);
+          reportError('Unable to regenerate folder thumbnails:', error);
           send('folder-thumbnail-regeneration-failed', requestId, sourceIndex);
         });
     },
@@ -1591,7 +1773,7 @@ export function setUpIpcMessages(
     try {
       cleanupSession = captureCatalogueSession();
     } catch (error) {
-      console.warn('Unable to begin generated-preview cleanup:', error);
+      warn('Unable to begin generated-preview cleanup:', error);
       return;
     }
     if (!beginCatalogueMaintenance()) {
@@ -1633,7 +1815,6 @@ export function setUpIpcMessages(
       const omittedHashes = Array.from(authorizedHashes).filter(
         (hash: string) => !survivingHashes.has(hash),
       );
-      const owner = activeWindow();
       const options = {
         buttons: ['Remove Generated Previews', 'Cancel'],
         cancelId: 1,
@@ -1652,9 +1833,7 @@ export function setUpIpcMessages(
         title: 'Clean Generated Previews?',
         type: 'warning' as const,
       };
-      const choice = owner
-        ? await dialog.showMessageBox(owner, options)
-        : await dialog.showMessageBox(options);
+      const choice = await showMessageBox(options);
       if (choice.response !== 0) {
         return;
       }
@@ -1723,7 +1902,7 @@ export function setUpIpcMessages(
         );
       }
     } catch (error) {
-      console.warn('Unable to clean generated previews:', error);
+      warn('Unable to clean generated previews:', error);
     } finally {
       if (cleanupBarrier) {
         finishPreviewCleanupBarrier(cleanupBarrier);
@@ -1775,7 +1954,7 @@ export function setUpIpcMessages(
       return;
     }
 
-    writeVhaFileToDisk(commit.finalObject, session.cataloguePath, (err) => {
+    return writeVhaFileToDisk(commit.finalObject, session.cataloguePath, (err) => {
       if (err) {
         releaseCataloguePersistence();
         event.sender.send('current-vha-file-save-failed', err.message || err.toString());
@@ -1802,6 +1981,7 @@ export function setUpIpcMessages(
    */
   trustedIpcHandle('export-catalogue-metadata', async (event, document: unknown): Promise<unknown> => {
     try {
+      const assertCurrentExport = captureNormalExportGuard();
       const json = serializeCatalogueMetadataExport(document);
       if (Buffer.byteLength(json, 'utf8') > CATALOGUE_METADATA_MAX_BYTES) {
         return {
@@ -1823,6 +2003,7 @@ export function setUpIpcMessages(
       const destination = path.extname(result.filePath).toLowerCase() === '.json'
         ? result.filePath
         : `${result.filePath}.json`;
+      assertCurrentExport();
       await writeJsonAtomically(destination, json);
 
       return {
@@ -1831,7 +2012,7 @@ export function setUpIpcMessages(
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'The metadata file could not be exported.';
-      console.error('Unable to export catalogue metadata:', error);
+      reportError('Unable to export catalogue metadata:', error);
       return { error: message, status: 'error' };
     }
   });
@@ -1842,6 +2023,7 @@ export function setUpIpcMessages(
    */
   trustedIpcHandle('export-vha2-catalogue', async (_event, finalObject: FinalObject): Promise<unknown> => {
     try {
+      const assertCurrentExport = captureNormalExportGuard();
       if (GLOBALS.catalogueAccessMode !== 'read-write') {
         return {
           error: 'A read-only legacy catalogue cannot be exported as another legacy copy.',
@@ -1873,6 +2055,7 @@ export function setUpIpcMessages(
       const destination = path.extname(result.filePath).toLowerCase() === '.vha2'
         ? result.filePath
         : `${result.filePath}.vha2`;
+      assertCurrentExport();
       await writeVhaJsonAtomically(destination, JSON.stringify(compatibleCatalogue));
 
       return {
@@ -1881,7 +2064,7 @@ export function setUpIpcMessages(
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'The .vha2 catalogue could not be exported.';
-      console.error('Unable to export a Video Hub App catalogue:', error);
+      reportError('Unable to export a Video Hub App catalogue:', error);
       return { error: message, status: 'error' };
     }
   });
@@ -1903,6 +2086,7 @@ export function setUpIpcMessages(
         return { status: 'cancelled' };
       }
 
+      assertOperationCurrent();
       const sourcePath = result.filePaths[0];
       if (path.extname(sourcePath).toLowerCase() !== '.json') {
         return { error: 'Choose a JSON metadata file.', status: 'error' };
@@ -1916,7 +2100,9 @@ export function setUpIpcMessages(
         return { error: 'The selected metadata file is larger than 50 MB.', status: 'error' };
       }
 
+      assertOperationCurrent();
       const contents = await fs.promises.readFile(sourcePath, 'utf8');
+      assertOperationCurrent();
       JSON.parse(contents.replace(/^\uFEFF/, ''));
 
       return {
@@ -1930,7 +2116,7 @@ export function setUpIpcMessages(
         : error instanceof Error
           ? error.message
           : 'The metadata file could not be imported.';
-      console.error('Unable to read catalogue metadata:', error);
+      reportError('Unable to read catalogue metadata:', error);
       return { error: message, status: 'error' };
     }
   });
@@ -1940,7 +2126,7 @@ export function setUpIpcMessages(
    * where the final catalogue file, asset folder, and all screenshots will be saved
    */
   trustedIpcOn('choose-output', (event) => {
-    showOpenDialog({
+    return showOpenDialog({
       properties: ['openDirectory']
     }).then(result => {
       const outputDirPath: string = result.filePaths[0];
@@ -1953,7 +2139,7 @@ export function setUpIpcMessages(
         event.sender.send('output-folder-chosen', selectedDirectory);
       }
     }).catch(error => {
-      console.warn('Unable to choose an output folder:', error);
+      warn('Unable to choose an output folder:', error);
     });
   });
 
@@ -1998,7 +2184,7 @@ export function setUpIpcMessages(
       }
       reviewedRealPath = authorized.fullPath;
     } catch (error) {
-      console.warn('Ignored unsafe rename path:', error);
+      warn('Ignored unsafe rename path:', error);
       event.sender.send('rename-file-response', index, false, renameTo, originalFile, 'RIGHTCLICK.errorSomeError');
       return;
     }
@@ -2012,7 +2198,6 @@ export function setUpIpcMessages(
     }
 
     try {
-      const owner = activeWindow();
       const options = {
         buttons: ['Rename', 'Cancel'],
         cancelId: 1,
@@ -2026,9 +2211,7 @@ export function setUpIpcMessages(
         title: 'Rename Media File?',
         type: 'warning' as const,
       };
-      const choice = owner
-        ? await dialog.showMessageBox(owner, options)
-        : await dialog.showMessageBox(options);
+      const choice = await showMessageBox(options);
       if (choice.response !== 0) {
         event.sender.send('rename-file-response', index, false, renameTo, originalFile, '');
         return;
@@ -2091,7 +2274,7 @@ export function setUpIpcMessages(
 
       event.sender.send('rename-file-response', index, success, renameTo, originalFile, errMsg);
     } catch (error) {
-      console.warn('Cancelled rename after the media path changed:', error);
+      warn('Cancelled rename after the media path changed:', error);
       event.sender.send('rename-file-response', index, false, renameTo, originalFile, 'RIGHTCLICK.errorSomeError');
     } finally {
       finishCatalogueMaintenance();
@@ -2101,7 +2284,8 @@ export function setUpIpcMessages(
   /**
    * Close the window / quit / exit the app
    */
-  trustedIpcOn('close-window', (event, settingsToSave: SettingsObject, finalObjectToSave: FinalObject | null) => {
+  trustedIpcOn('close-window', async (event, settingsToSave: SettingsObject, finalObjectToSave: FinalObject | null): Promise<void> => {
+    const notifyCloseAbandoned = operationOwners.getStore()?.closeAbandoned;
     let closeSession: CloseSessionSnapshot;
     let closeBaselineAuthority: Set<string>;
     try {
@@ -2115,14 +2299,15 @@ export function setUpIpcMessages(
           error instanceof Error ? error.message : String(error),
         );
       }
+      notifyCloseAbandoned?.();
       return;
     }
 
-    const reportCloseFailure = (error: unknown, message: string) => {
+    const reportCloseFailure = async (error: unknown, message: string): Promise<void> => {
       releaseCataloguePersistence();
+      if (!operationIsCurrent()) { return; }
       const errorMessage = error instanceof Error ? error.message : String(error);
       event.sender.send('close-window-save-failed', errorMessage);
-      const ownerWindow = activeWindow();
       const dialogOptions = {
         buttons: ['OK'],
         detail: errorMessage,
@@ -2130,15 +2315,13 @@ export function setUpIpcMessages(
         title: 'Unable to Close Safely',
         type: 'error' as const,
       };
-      if (ownerWindow && !ownerWindow.isDestroyed()) {
-        dialog.showMessageBox(ownerWindow, dialogOptions);
-      } else {
-        dialog.showMessageBox(dialogOptions);
-      }
+      await showMessageBox(dialogOptions);
+      notifyCloseAbandoned?.();
     };
 
     const closeWindow = () => {
       try {
+        assertOperationCurrent();
         GLOBALS.readyToQuit = true;
         releaseCataloguePersistence();
         const windowToClose = activeWindow();
@@ -2150,10 +2333,10 @@ export function setUpIpcMessages(
       }
     };
 
-    const reportCatalogueCloseFailure = (error: unknown): void => {
+    const reportCatalogueCloseFailure = async (error: unknown): Promise<void> => {
+      if (!operationIsCurrent()) { releaseCataloguePersistence(); return; }
       const errorMessage = error instanceof Error ? error.message : String(error);
       event.sender.send('close-window-save-failed', errorMessage);
-      const ownerWindow = activeWindow();
       const dialogOptions = {
         buttons: ['Keep Working', 'Quit Without Saving Catalogue Changes'],
         cancelId: 0,
@@ -2164,22 +2347,21 @@ export function setUpIpcMessages(
         title: 'Unable to Close Safely',
         type: 'error' as const,
       };
-      const response = ownerWindow && !ownerWindow.isDestroyed()
-        ? dialog.showMessageBox(ownerWindow, dialogOptions)
-        : dialog.showMessageBox(dialogOptions);
-      response.then((result) => {
+      return showMessageBox(dialogOptions).then((result) => {
         if (result.response === 1) {
           closeWindow();
         } else {
           releaseCataloguePersistence();
+          notifyCloseAbandoned?.();
         }
       }).catch((dialogError) => {
         releaseCataloguePersistence();
-        console.error('Unable to show the catalogue save failure dialog:', dialogError);
+        notifyCloseAbandoned?.();
+        reportError('Unable to show the catalogue save failure dialog:', dialogError);
       });
     };
 
-    const saveAndClose = (): void => {
+    const saveAndClose = async (): Promise<void> => {
       let json: string;
       let authorizedCommit: AuthorizedCatalogueCommit | null = null;
       try {
@@ -2225,17 +2407,15 @@ export function setUpIpcMessages(
         json = JSON.stringify(settingsToSave);
         fs.mkdirSync(GLOBALS.settingsPath, { recursive: true });
       } catch (error) {
-        reportCloseFailure(error, 'The application settings could not be prepared for saving. The app will remain open.');
-        return;
+        return reportCloseFailure(error, 'The application settings could not be prepared for saving. The app will remain open.');
       }
 
-      writeJsonAtomically(path.join(GLOBALS.settingsPath, 'settings.json'), json).then(() => {
+      return writeJsonAtomically(path.join(GLOBALS.settingsPath, 'settings.json'), json).then(() => {
         if (!closeSessionIsCurrent(closeSession)) {
-          reportCloseFailure(
+          return reportCloseFailure(
             new Error('The active catalogue changed while settings were being saved.'),
             'The app will remain open because the active catalogue changed during saving.',
           );
-          return;
         }
         if (
           !closeSession.catalogue
@@ -2247,24 +2427,21 @@ export function setUpIpcMessages(
         }
 
         if (!authorizedCommit) {
-          reportCloseFailure(
+          return reportCloseFailure(
             new Error('The catalogue save was not prepared.'),
             'The app will remain open because the current catalogue could not be prepared for saving.',
           );
-          return;
         }
 
-        writeVhaFileToDisk(authorizedCommit.finalObject, closeSession.catalogue.cataloguePath, (error: Error) => {
+        return writeVhaFileToDisk(authorizedCommit.finalObject, closeSession.catalogue.cataloguePath, (error: Error) => {
           if (error) {
-            reportCatalogueCloseFailure(error);
-            return;
+            return reportCatalogueCloseFailure(error);
           }
           if (!closeSessionIsCurrent(closeSession)) {
-            reportCloseFailure(
+            return reportCloseFailure(
               new Error('The active catalogue changed while it was being saved.'),
               'The app will remain open because the active catalogue changed during saving.',
             );
-            return;
           }
           preserveTrustedScannerAdditions(closeBaselineAuthority, authorizedCommit);
           reconcileSelectedSourceFolders(authorizedCommit.finalObject.inputDirs);
@@ -2273,24 +2450,21 @@ export function setUpIpcMessages(
           closeWindow();
         });
       }).catch((error: Error) => {
-        reportCloseFailure(error, 'The application settings could not be saved. The app will remain open.');
+        return reportCloseFailure(error, 'The application settings could not be saved. The app will remain open.');
       });
     };
 
     if (activeCustomThumbnailReplacements > 0) {
-      reportCloseFailure(
+      return reportCloseFailure(
         new Error('A custom thumbnail replacement is still in progress.'),
         'Wait for the current thumbnail replacement to finish before closing the application.',
       );
-      return;
     }
 
     if (!isThumbnailRegenerationActive()) {
-      saveAndClose();
-      return;
+      return saveAndClose();
     }
 
-    const ownerWindow = activeWindow();
     const dialogOptions = {
       buttons: ['Keep Working', 'Cancel Generation and Quit'],
       cancelId: 0,
@@ -2301,23 +2475,20 @@ export function setUpIpcMessages(
       title: 'Cancel Thumbnail Generation?',
       type: 'warning' as const,
     };
-    const closeChoice = ownerWindow && !ownerWindow.isDestroyed()
-      ? dialog.showMessageBox(ownerWindow, dialogOptions)
-      : dialog.showMessageBox(dialogOptions);
-
-    void closeChoice.then((result) => {
+    return showMessageBox(dialogOptions).then((result) => {
       if (result.response !== 1) {
         releaseCataloguePersistence();
         if (!event.sender.isDestroyed()) {
           event.sender.send('close-window-cancelled');
         }
+        notifyCloseAbandoned?.();
         return;
       }
 
       cancelThumbnailRegeneration();
-      saveAndClose();
+      return saveAndClose();
     }).catch((error: Error) => {
-      reportCloseFailure(error, 'The thumbnail operation could not be cancelled. The app will remain open.');
+      return reportCloseFailure(error, 'The thumbnail operation could not be cancelled. The app will remain open.');
     });
   });
 

@@ -183,6 +183,6 @@ test('closing before a catalogue is committed saves settings-only state and can 
   );
   assert.match(
     mainSource,
-    /win\.on\('close', \(event\) => \{\s*if \(!GLOBALS\.readyToQuit && getAngularToShutDown\(\)\) \{\s*event\.preventDefault\(\);/,
+    /win\.on\('close', \(event\) => \{\s*if \(\(privateApplicationWorkspace\.isActive \|\| !GLOBALS\.readyToQuit\) && getAngularToShutDown\(\)\) \{\s*event\.preventDefault\(\);/,
   );
 });

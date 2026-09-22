@@ -48,6 +48,68 @@ interface ActiveCustomImage {
   settled: Promise<void>;
 }
 
+// A queue cancellation is not proof that its native children or callbacks have
+// stopped. This ledger follows actual completion, including work whose public
+// timeout/cancellation promise has already returned.
+const normalMediaTasks = new Set<Promise<void>>();
+let normalMediaAdmissionOpen = true;
+let normalMediaGeneration = 0;
+let normalExtractionDrain: Promise<void> | undefined;
+let normalExtractionDrainPending = false;
+
+export function captureNormalMediaGeneration(): number {
+  return normalMediaGeneration;
+}
+
+export function normalMediaWorkIsCurrent(generation: number): boolean {
+  return normalMediaAdmissionOpen && generation === normalMediaGeneration;
+}
+
+/** Main-owned lifecycle accounting; callers must also guard admission. */
+export function beginNormalMediaTask(): () => void {
+  let complete: () => void;
+  const task = new Promise<void>((resolve) => { complete = resolve; });
+  normalMediaTasks.add(task);
+  let finished = false;
+  return (): void => {
+    if (finished) { return; }
+    finished = true;
+    normalMediaTasks.delete(task);
+    complete();
+  };
+}
+
+export function trackNormalMediaWork<T>(operation: Promise<T>): Promise<T> {
+  const complete = beginNormalMediaTask();
+  return operation.finally(complete);
+}
+
+/** Freeze admission immediately, then wait for real callbacks/child closes. */
+export function beginNormalExtractionDrain(): Promise<void> {
+  if (normalExtractionDrain) { return normalExtractionDrain; }
+  normalMediaAdmissionOpen = false;
+  normalMediaGeneration++;
+  normalExtractionDrainPending = true;
+  cancelActiveMediaProcesses();
+  normalExtractionDrain = (async () => {
+    while (normalMediaTasks.size > 0) {
+      await Promise.all(Array.from(normalMediaTasks));
+    }
+    normalExtractionDrainPending = false;
+  })();
+  return normalExtractionDrain;
+}
+
+/** Explicit normal-catalogue reset only; a pending drain cannot be bypassed. */
+export function resumeNormalExtraction(): void {
+  if (normalExtractionDrainPending) {
+    throw new Error('Normal media work is still stopping.');
+  }
+  normalExtractionDrain = undefined;
+  normalMediaAdmissionOpen = true;
+  normalMediaGeneration++;
+}
+
 const activeCustomImages = new Map<string, ActiveCustomImage>();
 const activeMediaProcesses = new Set<any>();
 let mediaProcessCancellationGeneration = 0;
@@ -451,7 +513,15 @@ export function extractAll(
   options: PreviewExtractionOptions = {},
 ): void {
 
-  const shouldContinue = options.shouldContinue ?? alwaysContinuePreviewWork;
+  const generation = captureNormalMediaGeneration();
+  const callerShouldContinue = options.shouldContinue ?? alwaysContinuePreviewWork;
+  const shouldContinue = (): boolean => normalMediaWorkIsCurrent(generation)
+    && previewWorkIsCurrent(callerShouldContinue);
+  const complete = beginNormalMediaTask();
+  const callerDone = done;
+  done = (success: boolean, error?: Error): void => {
+    try { callerDone(success, error); } finally { complete(); }
+  };
   const spawnMediaProcess: SpawnMediaProcess = options.spawnMediaProcess ?? spawn;
   const assertPreviewWorkCurrent = (): void => {
     if (!previewWorkIsCurrent(shouldContinue)) {
@@ -830,7 +900,11 @@ export function readJpegDimensions(contents: Buffer): JpegDimensions | undefined
   return undefined;
 }
 
-export async function isExpectedJpeg(
+export function isExpectedJpeg(...args: Parameters<typeof isExpectedJpegOwned>): Promise<boolean> {
+  return trackNormalMediaWork(isExpectedJpegOwned(...args));
+}
+
+async function isExpectedJpegOwned(
   filePath: string,
   expectedWidth: number,
   expectedHeight: number,
@@ -850,6 +924,7 @@ export async function isExpectedJpeg(
 const alwaysContinuePreviewWork: PreviewWorkGuard = (): boolean => true;
 
 function previewWorkIsCurrent(shouldContinue: PreviewWorkGuard | undefined): boolean {
+  if (!normalMediaAdmissionOpen) { return false; }
   try {
     return (shouldContinue ?? alwaysContinuePreviewWork)();
   } catch {
@@ -1111,11 +1186,10 @@ async function extractSystemThumbnail(
 
   try {
     const jpegData = await promiseWithTimeout(
-      Promise.resolve().then(() => createSystemThumbnail(
-        pathToVideo,
-        expectedWidth,
-        screenshotHeight,
-      )),
+      trackNormalMediaWork(Promise.resolve().then(() => {
+        if (!canPublish()) { throw new Error('Preview extraction was cancelled.'); }
+        return createSystemThumbnail(pathToVideo, expectedWidth, screenshotHeight);
+      })),
       SYSTEM_THUMBNAIL_REQUEST_TIMEOUT_MS,
     );
     if (!jpegData.length || !canPublish()) {
@@ -1161,7 +1235,14 @@ async function extractSystemThumbnail(
   }
 }
 
-export async function extractThumbnailWithRecovery(
+export function extractThumbnailWithRecovery(...args: Parameters<typeof extractThumbnailWithRecoveryOwned>): Promise<boolean> {
+  if (!normalMediaWorkIsCurrent(captureNormalMediaGeneration())) {
+    return Promise.resolve(false);
+  }
+  return trackNormalMediaWork(extractThumbnailWithRecoveryOwned(...args));
+}
+
+async function extractThumbnailWithRecoveryOwned(
   pathToVideo: string,
   screenshotHeight: number,
   duration: number,
@@ -1171,7 +1252,8 @@ export async function extractThumbnailWithRecovery(
 ): Promise<boolean> {
   const expectedWidth = Math.round(screenshotHeight * (16 / 9));
   const shouldContinue = options.shouldContinue ?? alwaysContinuePreviewWork;
-  const extractionStillCurrent = (): boolean => previewWorkIsCurrent(shouldContinue);
+  const generation = captureNormalMediaGeneration();
+  const extractionStillCurrent = (): boolean => normalMediaWorkIsCurrent(generation) && previewWorkIsCurrent(shouldContinue);
   const generationVersion = options.generationVersion === undefined
     ? currentGeneratedImageVersion(savePath)
     : options.generationVersion;
@@ -1376,7 +1458,14 @@ export async function runBoundedMediaWork<T>(
   }
 }
 
-export async function extractFilmstripWithRecovery(
+export function extractFilmstripWithRecovery(...args: Parameters<typeof extractFilmstripWithRecoveryOwned>): Promise<boolean> {
+  if (!normalMediaWorkIsCurrent(captureNormalMediaGeneration())) {
+    return Promise.resolve(false);
+  }
+  return trackNormalMediaWork(extractFilmstripWithRecoveryOwned(...args));
+}
+
+async function extractFilmstripWithRecoveryOwned(
   pathToVideo: string,
   duration: number,
   screenshotHeight: number,
@@ -1506,7 +1595,14 @@ export async function extractFilmstripWithRecovery(
  * @param newFile full path to sounce image to use as replacement
  * @param height
  */
-export async function replaceThumbnailWithNewImage(
+export function replaceThumbnailWithNewImage(...args: Parameters<typeof replaceThumbnailWithNewImageOwned>): Promise<boolean> {
+  if (!normalMediaWorkIsCurrent(captureNormalMediaGeneration())) {
+    return Promise.resolve(false);
+  }
+  return trackNormalMediaWork(replaceThumbnailWithNewImageOwned(...args));
+}
+
+async function replaceThumbnailWithNewImageOwned(
   oldFile: string,
   newFile: string,
   height: number,
@@ -1516,13 +1612,15 @@ export async function replaceThumbnailWithNewImage(
 
   console.log('Resizing new image and replacing old thumbnail');
 
+  const generation = captureNormalMediaGeneration();
   const width: number = Math.floor(height * (16 / 9));
   let sourceFile = newFile;
   let temporaryDirectory: string | undefined;
   invalidateGeneratedImage(oldFile);
   const replacementVersion = currentGeneratedImageVersion(oldFile);
   const canPublish = (): boolean => (
-    currentGeneratedImageVersion(oldFile) === replacementVersion
+    normalMediaWorkIsCurrent(generation)
+    && currentGeneratedImageVersion(oldFile) === replacementVersion
     && stillOwned()
   );
   let releaseCustomImage: () => void = () => undefined;
@@ -1541,10 +1639,12 @@ export async function replaceThumbnailWithNewImage(
       }
 
       const jpegData = await convertPngToJpeg(newFile);
+      if (!canPublish()) { return false; }
       if (!jpegData.length) {
         throw new Error('The dropped PNG could not be decoded.');
       }
       temporaryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'vha-custom-thumbnail-'));
+      if (!canPublish()) { return false; }
       sourceFile = path.join(temporaryDirectory, 'decoded-image.jpg');
       await fs.promises.writeFile(sourceFile, jpegData);
     }
@@ -1613,6 +1713,13 @@ export interface MediaProcessResult {
   timedOut: boolean;
 }
 
+/** Register main-owned probe/decoder children; unregister only after close. */
+export function registerNormalMediaProcess(mediaProcess: any): () => void {
+  if (!normalMediaAdmissionOpen) { throw new Error('Normal media work is stopped.'); }
+  activeMediaProcesses.add(mediaProcess);
+  return (): void => { activeMediaProcesses.delete(mediaProcess); };
+}
+
 /** Stop decoder processes owned by an import that has been cancelled/reset. */
 export function cancelActiveMediaProcesses(): void {
   mediaProcessCancellationGeneration++;
@@ -1637,6 +1744,7 @@ export function cancelActiveMediaProcesses(): void {
       }
     }, FORCE_KILL_DELAY_MS);
     forceKill.unref?.();
+    mediaProcess.once('close', () => clearTimeout(forceKill));
   });
 }
 
@@ -1661,6 +1769,9 @@ export function spawn_ffmpeg_and_run_detailed(
   spawnMediaProcess: SpawnMediaProcess = spawn,
 ): Promise<MediaProcessResult> {
 
+  if (!normalMediaAdmissionOpen) {
+    return Promise.resolve({ exitCode: null, processError: false, success: false, timedOut: false });
+  }
   return new Promise((resolve) => {
     let resultSettled = false;
     let timedOut = false;
@@ -1681,6 +1792,7 @@ export function spawn_ffmpeg_and_run_detailed(
       windowsHide: true,
     });
     activeMediaProcesses.add(ffmpeg_process);
+    const processClosed = beginNormalMediaTask();
 
     const processStillRunning = (): boolean => {
       return ffmpeg_process.exitCode === null && ffmpeg_process.signalCode === null;
@@ -1785,6 +1897,7 @@ export function spawn_ffmpeg_and_run_detailed(
       });
     });
     ffmpeg_process.on('close', () => {
+      processClosed();
       activeMediaProcesses.delete(ffmpeg_process);
       clearTimeout(killProcessTimeout);
       if (forceKillTimeout) {

@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 import { Subject } from 'rxjs';
+import { RendererMutationService } from '../../services/renderer-mutation.service';
 
 import type { ImageElement } from '../../../../interfaces/final-object.interface';
 import type { ContextMenuCoordinate } from '../../../../interfaces/shared-interfaces';
@@ -33,13 +34,14 @@ export class ManualTagsService {
   /** Persisted tag definitions changed and the catalogue should be marked dirty. */
   tagDefinitionsPersistenceChangedSubject = new Subject<void>();
 
-  constructor() { }
+  constructor(private readonly mutations: RendererMutationService) { }
 
   /**
    * Update the tagsList & tagsFrequencyMap with the tag
    * @param tag - tag to be added
    */
   addTag(tag: string): void {
+    this.mutations.assertAccepting();
     if (typeof tag !== 'string' || !tag) {
       return;
     }
@@ -55,6 +57,7 @@ export class ManualTagsService {
   }
 
   removeTag(tag: string): void {
+    this.mutations.assertAccepting();
     if (typeof tag !== 'string' || !tag) {
       return;
     }
@@ -74,6 +77,7 @@ export class ManualTagsService {
   }
 
   removeTagGlobally(tag: string): void {
+    this.mutations.assertAccepting();
     if (typeof tag !== 'string' || !tag) {
       return;
     }
@@ -94,6 +98,8 @@ export class ManualTagsService {
    * Removes all the existing tags in `tagList` and `tagsFrequencyMap`
    */
   removeAllTags(): void {
+    this.mutations.assertAccepting();
+    this.mutations.changed();
     this.tagsFrequencyMap.clear();
     this.tagDefinitions = [];
     this.tagsList = [];
@@ -101,6 +107,8 @@ export class ManualTagsService {
 
   /** Load persisted tag definitions without marking an opened catalogue dirty. */
   loadTagDefinitions(definitions: readonly string[] | undefined): void {
+    this.mutations.assertAccepting();
+    this.mutations.changed();
     this.tagDefinitions = this.deduplicateDefinitions(definitions || []);
     this.tagsList = this.tagDefinitions.slice();
     this.forceTagSortPipeUpdate();
@@ -117,6 +125,7 @@ export class ManualTagsService {
 
   /** Create a persistent tag definition without assigning it to any video. */
   addTagDefinition(input: string): string | null {
+    this.mutations.assertAccepting();
     const normalized = normalizeNewTagPath(input);
     if (this.findTagDefinition(normalized)) {
       return null;
@@ -131,6 +140,7 @@ export class ManualTagsService {
 
   /** Remove exact persistent definitions, leaving video assignments untouched. */
   removeTagDefinitions(paths: readonly string[], refreshTagPipes = true): number {
+    this.mutations.assertAccepting();
     const nextDefinitions = paths.reduce((definitions: string[], path: string) => (
       planExactTagDefinitionRemoval(definitions, path).nextDefinitions
     ), this.tagDefinitions.slice());
@@ -143,6 +153,7 @@ export class ManualTagsService {
 
   /** Remove every persistent definition in a hierarchy branch. */
   removeTagDefinitionBranch(branchPath: string, refreshTagPipes = true): number {
+    this.mutations.assertAccepting();
     const plan = planTagDefinitionBranchRemoval(this.tagDefinitions, branchPath);
     const removedCount = plan.affectedDefinitionCount;
     if (!removedCount) {
@@ -157,6 +168,7 @@ export class ManualTagsService {
     definitions: readonly string[],
     refreshTagPipes = true,
   ): boolean {
+    this.mutations.assertAccepting();
     const nextDefinitions = this.deduplicateDefinitions(definitions);
     const changed = nextDefinitions.length !== this.tagDefinitions.length
       || nextDefinitions.some((definition: string, index: number) => (
@@ -252,6 +264,7 @@ export class ManualTagsService {
    * @param allFiles - ImageElement array
    */
   populateManualTagsService(allFiles: ImageElement[]): void {
+    this.mutations.assertAccepting();
     allFiles.forEach((element: ImageElement): void => {
       if (element.tags) {
         element.tags.forEach((tag: string): void => {
@@ -263,6 +276,7 @@ export class ManualTagsService {
 
   /** Rebuild autocomplete and frequency data in one update after a global edit. */
   rebuildFromImages(allFiles: readonly ImageElement[]): void {
+    this.mutations.assertAccepting();
     const nextFrequencyMap = new Map<string, number>();
     const nextDefinitions = this.tagDefinitions.slice();
 
@@ -288,6 +302,9 @@ export class ManualTagsService {
       });
     });
 
+    if (nextDefinitions.length !== this.tagDefinitions.length) {
+      this.mutations.changed();
+    }
     this.tagsFrequencyMap = nextFrequencyMap;
     this.tagDefinitions = nextDefinitions;
     this.tagsList = nextDefinitions.slice();
@@ -304,6 +321,7 @@ export class ManualTagsService {
    * @param color - color hex code or null to remove color
    */
   setTagColor(tagName: string, color: string | null): void {
+    this.mutations.assertAccepting();
     if (typeof tagName !== 'string' || !tagName) {
       return;
     }
@@ -355,6 +373,8 @@ export class ManualTagsService {
    * @param tagColors - Record of tag name to color mapping
    */
   loadTagColors(tagColors: Record<string, string> | undefined): void {
+    this.mutations.assertAccepting();
+    this.mutations.changed();
     this.tagColors = tagColors ? { ...tagColors } : {};
   }
 
@@ -371,6 +391,7 @@ export class ManualTagsService {
     tagColors: Readonly<Record<string, string>>,
     refreshTagPipes = true,
   ): boolean {
+    this.mutations.assertAccepting();
     const currentKeys = Object.keys(this.tagColors);
     const nextKeys = Object.keys(tagColors);
     const changed = currentKeys.length !== nextKeys.length
@@ -408,6 +429,7 @@ export class ManualTagsService {
     if (existing) {
       return existing;
     }
+    this.mutations.changed();
     this.tagDefinitions.push(tagName);
     this.tagsList = this.tagDefinitions.slice();
     return tagName;
@@ -428,10 +450,12 @@ export class ManualTagsService {
   }
 
   private notifyPersistedDefinitionChange(): void {
+    this.mutations.changed();
     this.tagDefinitionsPersistenceChangedSubject.next();
   }
 
   private notifyPersistedColourChange(): void {
+    this.mutations.changed();
     this.tagColorUpdatedSubject.next();
     this.tagColorPersistenceChangedSubject.next();
   }

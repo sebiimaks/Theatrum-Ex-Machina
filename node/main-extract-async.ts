@@ -5,7 +5,7 @@ const { nativeImage, powerSaveBlocker } = require('electron');
 const async = require('async');
 const chokidar = require('chokidar');
 import * as path from 'path';
-import type { Dirent, PathLike } from 'fs';
+import type { Dirent, PathLike, Stats } from 'fs';
 import type { FSWatcher } from 'chokidar'; // probably the correct type for chokidar.watch() object
 const fs = require('fs');
 import { fdir } from 'fdir';
@@ -26,6 +26,12 @@ import {
   requireCatalogueMediaLocationAuthority,
 } from './catalogue-media-authority';
 import {
+  beginNormalExtractionDrain,
+  beginNormalMediaTask,
+  captureNormalMediaGeneration,
+  normalMediaWorkIsCurrent,
+  resumeNormalExtraction,
+  trackNormalMediaWork,
   cancelActiveMediaProcesses,
   capturePreviewPublicationEpoch,
   extractAll,
@@ -344,7 +350,7 @@ async function prepareCanonicalPreviewAssetDirectories(
   await Promise.all(Array.from(PREVIEW_ASSET_DIRECTORIES).map(async (subdirectory: string) => {
     const candidateDirectory = path.join(canonicalDirectory, subdirectory);
     if (!fs.existsSync(candidateDirectory)) {
-      await fs.promises.mkdir(candidateDirectory, { recursive: true });
+      await trackNormalMediaWork(fs.promises.mkdir(candidateDirectory, { recursive: true }));
     }
     const canonicalSubdirectory = requireCanonicalExistingPreviewPath(candidateDirectory, assetRoot);
     if (
@@ -449,6 +455,42 @@ const folderThumbnailCancellationWaiters: Set<() => void> = new Set();
 let folderThumbnailRegenerationGeneration = 0;
 let nextFolderThumbnailRegenerationJobId = 1;
 let thumbnailRegenerationBlocked = false;
+let normalMediaFrozen = false;
+let normalMediaDrainPromise: Promise<void> | undefined;
+let normalMediaDrainPending = false;
+const failedWatcherClosures = new Set<FSWatcher>();
+const initialScanPauseTimers = new Set<NodeJS.Timeout>();
+
+function assertNormalMediaAdmission(): void {
+  if (normalMediaFrozen || !normalMediaWorkIsCurrent(captureNormalMediaGeneration())) {
+    throw new Error('Normal media work is stopped.');
+  }
+}
+
+/** Revoke synchronously; resolve only after native and filesystem work settles. */
+export function beginNormalMediaDrain(): Promise<void> {
+  if (normalMediaDrainPromise) { return normalMediaDrainPromise; }
+  normalMediaFrozen = true;
+  normalMediaDrainPending = true;
+  initialScanQueueGeneration++;
+  initialScanPauseTimers.forEach(timer => clearTimeout(timer));
+  initialScanPauseTimers.clear();
+  activeInitialScanQueueTokens.clear();
+  closeAllWatchers();
+  folderScanCoordinator.reset();
+  cancelThumbnailRegeneration();
+  thumbQueue?.kill();
+  metadataQueue?.kill();
+  allowSleep();
+  normalMediaDrainPromise = beginNormalExtractionDrain().then(() => {
+    if (failedWatcherClosures.size > 0) {
+      throw new Error('A source watcher could not be stopped.');
+    }
+    normalMediaDrainPending = false;
+  });
+  return normalMediaDrainPromise;
+}
+
 let initialScanQueueGeneration = 0;
 const activeInitialScanQueueTokens: Set<symbol> = new Set();
 const INITIAL_SCAN_QUEUE_PAUSE_LIMIT_MS = 5 * 60 * 1000;
@@ -493,6 +535,8 @@ export function createBoundedCrawlerFileSystem(
   if (!Number.isSafeInteger(concurrency) || concurrency <= 0) {
     throw new Error('The source scanner concurrency is invalid.');
   }
+  const generation = captureNormalMediaGeneration();
+  const scanCurrent = (): boolean => !signal?.aborted && normalMediaWorkIsCurrent(generation);
   const pending: BoundedReaddirTask[] = [];
   let active = 0;
   let requestedDirectories = 0;
@@ -510,7 +554,7 @@ export function createBoundedCrawlerFileSystem(
   };
 
   const runNext = (): void => {
-    if (signal?.aborted) {
+    if (!scanCurrent()) {
       failPending(scanError('The source scan was cancelled.', 'ABORT_ERR'));
       return;
     }
@@ -525,10 +569,24 @@ export function createBoundedCrawlerFileSystem(
         entries: Dirent[],
       ) => {
         active--;
-        task.callback(error, entries);
+        task.callback(!scanCurrent() ? scanError('The source scan was cancelled.', 'ABORT_ERR') : error, !scanCurrent() ? undefined : entries);
         runNext();
       });
     }
+  };
+
+  signal?.addEventListener('abort', () => failPending(scanError('The source scan was cancelled.', 'ABORT_ERR')), { once: true });
+
+  const trackedCallbackOperation = (name: 'realpath' | 'stat') => (...args: any[]): void => {
+    const callback = args.pop();
+    const complete = beginNormalMediaTask();
+    const finish = (error: NodeJS.ErrnoException | null, result?: unknown): void => {
+      try {
+        callback(scanCurrent() ? error : scanError('The source scan was cancelled.', 'ABORT_ERR'), scanCurrent() ? result : undefined);
+      } finally { complete(); }
+    };
+    if (!scanCurrent()) { queueMicrotask(() => finish(null)); return; }
+    try { fs[name](...args, finish); } catch (error) { finish(error as NodeJS.ErrnoException); }
   };
 
   return {
@@ -537,7 +595,12 @@ export function createBoundedCrawlerFileSystem(
       options: { withFileTypes: true },
       callback: (error: NodeJS.ErrnoException | null, entries?: Dirent[]) => void,
     ): void => {
-      if (signal?.aborted) {
+      const complete = beginNormalMediaTask();
+      const originalCallback = callback;
+      callback = (error, entries): void => {
+        try { originalCallback(error, entries); } finally { complete(); }
+      };
+      if (!scanCurrent()) {
         queueMicrotask(() => callback(scanError('The source scan was cancelled.', 'ABORT_ERR')));
         return;
       }
@@ -556,9 +619,9 @@ export function createBoundedCrawlerFileSystem(
       runNext();
     },
     readdirSync: fs.readdirSync.bind(fs),
-    realpath: fs.realpath.bind(fs),
+    realpath: trackedCallbackOperation('realpath'),
     realpathSync: fs.realpathSync.bind(fs),
-    stat: fs.stat.bind(fs),
+    stat: trackedCallbackOperation('stat'),
     statSync: fs.statSync.bind(fs),
   };
 }
@@ -626,7 +689,14 @@ resetAllQueues();
  *  - Thumb queue
  */
 export function resetAllQueues(): void {
-
+  if (normalMediaDrainPending || failedWatcherClosures.size > 0) {
+    throw new Error('Normal media work is still stopping.');
+  }
+  resumeNormalExtraction();
+  normalMediaFrozen = false;
+  normalMediaDrainPromise = undefined;
+  initialScanPauseTimers.forEach(timer => clearTimeout(timer));
+  initialScanPauseTimers.clear();
   allowSleep();
   cancelActiveMediaProcesses();
   initialScanQueueGeneration++;
@@ -652,9 +722,12 @@ export function resetAllQueues(): void {
   automaticThumbnailHashesQueued.clear();
   importCompletionSent = false;
 
+  const queueGeneration = initialScanQueueGeneration;
+  const queueCurrent = (): boolean => !normalMediaFrozen && queueGeneration === initialScanQueueGeneration;
   metadataQueue = async.queue(metadataQueueRunner, METADATA_EXTRACTION_CONCURRENCY);
 
   metadataQueue.drain(() => {
+    if (!queueCurrent()) { return; }
 
     if (activeInitialScanQueueTokens.size === 0) {
       thumbQueue.resume();
@@ -674,6 +747,7 @@ export function resetAllQueues(): void {
   thumbQueue = async.queue(thumbQueueRunner, 1); // 1 is the number of threads
 
   thumbQueue.drain(() => {
+    if (!queueCurrent()) { return; }
 
     logPerformance('THUMB QUEUE took ', thumbExtractionStartTime);
     finishImport();
@@ -682,7 +756,7 @@ export function resetAllQueues(): void {
 }
 
 function finishImport(): void {
-  if (importCompletionSent) {
+  if (normalMediaFrozen || importCompletionSent) {
     return;
   }
   importCompletionSent = true;
@@ -694,7 +768,8 @@ function finishImport(): void {
 
 function enqueueMetadata(file: TempMetadataQueueObject): void {
   if (
-    pendingMetadataPaths.has(file.fullPath)
+    normalMediaFrozen
+    || pendingMetadataPaths.has(file.fullPath)
     || sourcePathIsCurrentlyIgnored(file.inputSource, file.partialPath)
   ) {
     return;
@@ -725,6 +800,7 @@ function pauseQueuesForInitialScan(description: string): () => void {
     }
     released = true;
     clearTimeout(pauseLimit);
+    initialScanPauseTimers.delete(pauseLimit);
     if (generation !== initialScanQueueGeneration) {
       return;
     }
@@ -742,12 +818,14 @@ function pauseQueuesForInitialScan(description: string): () => void {
     console.warn(`Initial folder scan exceeded its queue-pause limit: ${description}. Import work will continue.`);
     release();
   }, INITIAL_SCAN_QUEUE_PAUSE_LIMIT_MS);
+  initialScanPauseTimers.add(pauseLimit);
   pauseLimit.unref?.();
 
   return release;
 }
 
 function finishInitialFolderScan(releaseScanQueues: () => void): void {
+  if (normalMediaFrozen) { releaseScanQueues(); return; }
   releaseScanQueues();
   if (
     activeInitialScanQueueTokens.size === 0
@@ -784,6 +862,7 @@ function reportFolderScanFailure(
  * @param done    -- callback to indicate the current extraction finished
  */
 function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
+  if (normalMediaFrozen) { done(); return; }
   const previewPublicationEpoch = capturePreviewPublicationEpoch(element?.hash);
   let safeQueueElement: SafeThumbnailQueueElement;
   try {
@@ -874,6 +953,7 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
   }
 
   const regenerationStillCurrent = (): boolean => {
+    if (normalMediaFrozen || extractionQueueGeneration !== initialScanQueueGeneration) { return false; }
     if (!isRegenerationJob) {
       return true;
     }
@@ -884,6 +964,7 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
   };
 
   const previewExtractionStillCurrent = (): boolean => {
+    if (normalMediaFrozen) { return false; }
     if (
       isRegenerationJob
         ? !regenerationStillCurrent()
@@ -968,14 +1049,14 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
       } finally {
         finishRunner();
         lingeringThumbnailInstallations.delete(element.hash);
-        void removeRegenerationStagingFolder(
+        await removeRegenerationStagingFolder(
           generatedOutputFolder,
           previewAssetRoot,
         );
       }
     };
 
-    void completeRegeneration();
+    void trackNormalMediaWork(completeRegeneration());
   };
 
   const extractQueueItem = (generatedOutputFolder: string = screenshotOutputFolder): void => {
@@ -987,7 +1068,7 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
       );
       return;
     }
-    void prepareCanonicalPreviewAssetDirectories(previewAssetRoot, generatedOutputFolder)
+    void trackNormalMediaWork(prepareCanonicalPreviewAssetDirectories(previewAssetRoot, generatedOutputFolder)
       .then((canonicalGeneratedOutputFolder: string) => {
         if (!previewExtractionStillCurrent()) {
           throw new Error('Preview extraction was cancelled.');
@@ -1032,13 +1113,13 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
           false,
           error instanceof Error ? error : new Error('The preview output directory is invalid.'),
         );
-      });
+      }));
   };
 
   if (isRegenerationJob) {
     const stagingName = `${element.hash}-${process.pid}-${Date.now()}-${regenerationState.jobId}`;
     let stagingFolder = '';
-    prepareRegenerationStagingFolder(
+    void trackNormalMediaWork(prepareRegenerationStagingFolder(
       previewAssetRoot,
       stagingName,
     )
@@ -1049,20 +1130,20 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
         }
         extractQueueItem(stagingFolder);
       })
-      .catch((error: Error) => {
+      .catch(async (error: Error) => {
         settleThumbnailRegeneration(element.hash, regenerationState.jobId, error);
         finishRunner();
         if (stagingFolder) {
-          void removeRegenerationStagingFolder(
+          await removeRegenerationStagingFolder(
             stagingFolder,
             previewAssetRoot,
           );
         }
-      });
+      }));
     return;
   }
 
-  void prepareCanonicalPreviewAssetDirectories(previewAssetRoot, screenshotOutputFolder)
+  void trackNormalMediaWork(prepareCanonicalPreviewAssetDirectories(previewAssetRoot, screenshotOutputFolder)
     .then((canonicalScreenshotOutputFolder: string) => {
       if (!previewExtractionStillCurrent()) {
         throw new Error('Preview extraction was cancelled.');
@@ -1087,7 +1168,7 @@ function thumbQueueRunner(element: ThumbnailQueueElement, done): void {
         false,
         error instanceof Error ? error : new Error('The preview output directory is invalid.'),
       );
-    });
+    }));
 }
 
 function settleThumbnailRegeneration(
@@ -1171,7 +1252,7 @@ async function prepareRegenerationStagingFolder(
   }
   await Promise.all(['thumbnails', 'filmstrips', 'clips'].map(async (subdirectory: string) => {
     const directory = path.join(canonicalStagingFolder, subdirectory);
-    await fs.promises.mkdir(directory);
+    await trackNormalMediaWork(fs.promises.mkdir(directory));
     const canonicalDirectory = requireCanonicalExistingPreviewPath(directory, assetRoot);
     if (!isInsideDirectory(canonicalStagingFolder, canonicalDirectory)) {
       throw new Error('The thumbnail regeneration staging directory is invalid.');
@@ -1376,13 +1457,16 @@ function sendNewVideoMetadata(
  * @param done
  */
 export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
+  const queueGeneration = initialScanQueueGeneration;
+  const queueCurrent = (): boolean => !normalMediaFrozen && queueGeneration === initialScanQueueGeneration;
 
   let authorizedFilePath: string | undefined;
   let authorizedFileDevice: number | undefined;
   let authorizedFileInode: number | undefined;
   const scanStillCurrent = (): boolean => {
     if (
-      (file.scanSession && !folderScanCoordinator.isCurrent(file.scanSession))
+      !queueCurrent()
+      || (file.scanSession && !folderScanCoordinator.isCurrent(file.scanSession))
       || sourcePathIsCurrentlyIgnored(file.inputSource, file.partialPath)
     ) {
       return false;
@@ -1462,7 +1546,7 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
   metaDone++;
 
   const pathToProbe = authorizedFilePath as string;
-  runProbeWithOneRetry(
+  void trackNormalMediaWork(runProbeWithOneRetry(
     pathToProbe,
     () => {
       if (!scanStillCurrent()) {
@@ -1472,6 +1556,7 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
     },
   )
     .catch((probeError) => {
+      if (!scanStillCurrent()) { throw new Error('Metadata extraction was cancelled.'); }
       console.warn('Metadata probe failed; adding path-only catalogue entry:', pathToProbe, probeError);
       return createImportErrorElement(pathToProbe);
     })
@@ -1496,12 +1581,12 @@ export function metadataQueueRunner(file: TempMetadataQueueObject, done): void {
     .catch((error) => {
       // If the file vanished or the share disconnected completely, skip this
       // entry while guaranteeing that the following queue item still runs.
-      console.warn('Could not create an import-error catalogue entry:', file.fullPath, error);
+      if (queueCurrent()) { console.warn('Could not create an import-error catalogue entry:', file.fullPath, error); }
     })
     .finally(() => {
-      pendingMetadataPaths.delete(file.fullPath);
+      if (queueCurrent()) { pendingMetadataPaths.delete(file.fullPath); }
       done();
-    });
+    }));
 
 }
 
@@ -1548,6 +1633,7 @@ function scanConfiguredFolderScope(
   preventSleep();
   GLOBALS.angularApp.sender.send('started-watching-this-dir', inputSource, relativeScope);
   const releaseScanQueues = pauseQueuesForInitialScan(scanRoot);
+  const scanQueueGeneration = initialScanQueueGeneration;
   const finishCrawlerScan = (): void => {
     if (activeCrawlerScans.get(inputSource) === scanSession) {
       activeCrawlerScans.delete(inputSource);
@@ -1555,7 +1641,11 @@ function scanConfiguredFolderScope(
     if (activeCrawlerAbortControllers.get(inputSource) === scanAbortController) {
       activeCrawlerAbortControllers.delete(inputSource);
     }
-    finishInitialFolderScan(releaseScanQueues);
+    if (scanQueueGeneration === initialScanQueueGeneration) {
+      finishInitialFolderScan(releaseScanQueues);
+    } else {
+      releaseScanQueues();
+    }
   };
 
   const allAcceptableFiles = configuredMediaFileExtensions(GLOBALS.additionalExtensions);
@@ -1597,7 +1687,7 @@ function scanConfiguredFolderScope(
 
   const t0 = performance.now(); // LOGGING
 
-  crawler.withPromise().then((entries: string[]) => {
+  void trackNormalMediaWork(crawler.withPromise().then((entries: string[]) => {
 
     if (!folderScanCoordinator.isCurrent(scanSession)) {
       return;
@@ -1708,7 +1798,7 @@ function scanConfiguredFolderScope(
     );
   }).catch((error: Error) => {
     reportFolderScanFailure(scanSession, scanRoot, error, relativeScope);
-  }).finally(finishCrawlerScan);
+  }).finally(finishCrawlerScan));
 
 }
 
@@ -1745,6 +1835,7 @@ export function rescanSourceFolderScope(
   requestedScope: string,
   generateAutomaticPreviews = true,
 ): void {
+  assertNormalMediaAdmission();
   if (!Number.isSafeInteger(inputSource) || inputSource < 0) {
     throw new Error('The source folder index is invalid.');
   }
@@ -1791,6 +1882,7 @@ export function startFileSystemWatching(
   persistent: boolean,
   generateAutomaticPreviews = true,
 ): void {
+  assertNormalMediaAdmission();
 
   if (!Number.isSafeInteger(inputSource) || inputSource < 0) {
     throw new Error('The source folder index is invalid.');
@@ -1896,7 +1988,9 @@ export function startFileSystemWatching(
   let initialScanReady = false;
   let initialScanFailed = false;
   let authorizationFailureReported = false;
+  const watcherGeneration = initialScanQueueGeneration;
   const sourceStillAuthorized = (): boolean => {
+    if (normalMediaFrozen || watcherGeneration !== initialScanQueueGeneration) { return false; }
     const currentSourceFolder = GLOBALS.selectedSourceFolders[inputSource];
     if (!currentSourceFolder || !configuredSourceRootsEqual(currentSourceFolder.path, authorizedInputDir)) {
       return false;
@@ -1913,6 +2007,7 @@ export function startFileSystemWatching(
     }
   };
   const failClosedForUnauthorizedSource = (): boolean => {
+    if (normalMediaFrozen || watcherGeneration !== initialScanQueueGeneration) { return true; }
     if (!folderScanCoordinator.isCurrent(scanSession)) {
       return true;
     }
@@ -2117,12 +2212,13 @@ export function startFileSystemWatching(
         console.log('^^^^^^^^ - CONTINUING to watch this directory!');
       } else {
         console.log('^^^^^^^^ - stopping watching this directory');
-        watcher.close();  // chokidar seems to disregard `persistent` when `fsevents` is not enabled
+        closeOwnedWatcher(watcher);
       }
 
       logPerformance('Chokidar took ', t0);
     })
     .on('error', (error: Error) => {
+      if (normalMediaFrozen || watcherGeneration !== initialScanQueueGeneration) { return; }
       if (!initialScanReady) {
         if (initialScanFailed) {
           return;
@@ -2133,9 +2229,7 @@ export function startFileSystemWatching(
         if (watcherMap.get(inputSource) === watcher) {
           watcherMap.delete(inputSource);
         }
-        watcher.close().catch((closeError: Error) => {
-          console.warn('Unable to close a failed source-folder watcher:', authorizedInputDir, closeError);
-        });
+        closeOwnedWatcher(watcher);
         return;
       }
 
@@ -2192,6 +2286,7 @@ export function buildKnownCataloguePathsBySource(
 }
 
 export function resetWatchers(finalArray: ImageElement[]): void {
+  assertNormalMediaAdmission();
 
   // close every old watcher
   closeAllWatchers();
@@ -2283,6 +2378,7 @@ export function updateSourceFolderIgnoredSubdirectories(
   ignoredSubdirectories: string[];
   wasWatching: boolean;
 } {
+  assertNormalMediaAdmission();
   if (!Number.isSafeInteger(inputSource) || inputSource < 0) {
     throw new Error('The source folder index is invalid.');
   }
@@ -2364,10 +2460,21 @@ export function closeWatcher(inputSource: number): void {
   watcherMap.delete(inputSource);
   if (watcher) {
     console.log('closing ', inputSource);
-    watcher.close()
-      .then(() => console.log(inputSource, ' closed!'))
-      .catch((error: Error) => console.warn('Unable to close folder watcher:', inputSource, error));
+    closeOwnedWatcher(watcher);
   }
+}
+
+/** Keep native close completion separate from removing the public watcher map. */
+function closeOwnedWatcher(watcher: FSWatcher): void {
+  let closing: Promise<void>;
+  try { closing = watcher.close(); } catch {
+    failedWatcherClosures.add(watcher);
+    return;
+  }
+  void trackNormalMediaWork(closing.then(
+    () => { failedWatcherClosures.delete(watcher); },
+    () => { failedWatcherClosures.add(watcher); },
+  ));
 }
 
 /** Close every active source watcher before a catalogue's capabilities change. */
@@ -2394,6 +2501,7 @@ export function startWatcher(
   persistent: boolean,
   generateAutomaticPreviews = true,
 ): void {
+  assertNormalMediaAdmission();
   console.log('start watching !!!!', inputSource, typeof(inputSource), folderPath, persistent);
 
   if (!Number.isSafeInteger(inputSource) || inputSource < 0) {
@@ -2439,7 +2547,7 @@ export function startWatcher(
 }
 
 async function requireNonEmptyFile(filePath: string): Promise<void> {
-  const fileStats = await fs.promises.stat(filePath);
+  const fileStats = await trackNormalMediaWork<Stats>(fs.promises.stat(filePath));
   if (!fileStats.isFile() || fileStats.size === 0) {
     throw new Error('A generated preview file is empty.');
   }
@@ -2503,6 +2611,7 @@ async function hasAllThumbs(
  * @param fullArray          - ImageElement array
  */
 export function extractAnyMissingThumbs(fullArray: ImageElement[]): void {
+  assertNormalMediaAdmission();
   preventSleep();
   const requestHashes = new Set<string>();
   fullArray.forEach((element: ImageElement) => {
@@ -2539,7 +2648,7 @@ export function regenerateThumbnails(
   stillOwned?: () => boolean,
 ): Promise<number> {
   return new Promise((resolve, reject) => {
-    if (thumbnailRegenerationBlocked) {
+    if (normalMediaFrozen || thumbnailRegenerationBlocked) {
       reject(new Error('The catalogue is changing. Wait before regenerating thumbnails.'));
       return;
     }
@@ -2691,7 +2800,12 @@ function withFolderThumbnailCancellation<T>(operation: Promise<T>, jobId: number
  * source folder. Jobs run sequentially to avoid overwhelming local or network
  * storage, and a queue reset cancels the batch before another item is queued.
  */
-export async function regenerateFolderThumbnails(
+export function regenerateFolderThumbnails(...args: Parameters<typeof regenerateFolderThumbnailsOwned>): Promise<FolderThumbnailRegenerationResult> {
+  try { assertNormalMediaAdmission(); } catch (error) { return Promise.reject(error); }
+  return trackNormalMediaWork(regenerateFolderThumbnailsOwned(...args));
+}
+
+async function regenerateFolderThumbnailsOwned(
   sourceIndex: number,
   relativePath: string,
   elements: ImageElement[],
@@ -2768,7 +2882,7 @@ export async function regenerateFolderThumbnails(
   const regenerateFirstAvailableCandidate = async (candidates: ImageElement[]): Promise<number> => {
     try {
       await withFolderThumbnailCancellation(
-        fs.promises.access(sourceScopePath, fs.constants.R_OK),
+        trackNormalMediaWork(fs.promises.access(sourceScopePath, fs.constants.R_OK)),
         jobId,
       );
     } catch (error) {
@@ -2806,7 +2920,9 @@ export async function regenerateFolderThumbnails(
       candidateGroups,
       regenerateFirstAvailableCandidate,
       shouldCancel,
-      progress => onProgress?.({
+      progress => {
+        if (shouldCancel()) { return; }
+        onProgress?.({
         completed: progress.completed,
         failed: progress.failed,
         fileHash: progress.outcome.item[0].hash,
@@ -2814,7 +2930,8 @@ export async function regenerateFolderThumbnails(
         succeeded: progress.succeeded,
         success: progress.outcome.succeeded,
         total: progress.total,
-      }),
+        });
+      },
     );
 
     return {
@@ -2841,13 +2958,23 @@ export async function regenerateFolderThumbnails(
  * @param outputDirectory
  * @param assetDirectory
  */
-export async function removeThumbnailsNotInHub(
+export function removeThumbnailsNotInHub(...args: Parameters<typeof removeThumbnailsNotInHubOwned>): Promise<boolean> {
+  try { assertNormalMediaAdmission(); } catch (error) { return Promise.reject(error); }
+  return trackNormalMediaWork(removeThumbnailsNotInHubOwned(...args));
+}
+
+async function removeThumbnailsNotInHubOwned(
   hashesPresent: ReadonlyMap<string, 1>,
   outputDirectory: string,
   assetDirectory: string,
   shouldContinue: () => boolean = (): boolean => true,
   shouldDeleteHash: (hash: string) => boolean = (hash: string): boolean => !hashesPresent.has(hash),
 ): Promise<boolean> {
+  const generation = initialScanQueueGeneration;
+  const callerShouldContinue = shouldContinue;
+  shouldContinue = (): boolean => !normalMediaFrozen && generation === initialScanQueueGeneration && callerShouldContinue();
+  const callerShouldDeleteHash = shouldDeleteHash;
+  shouldDeleteHash = (hash: string): boolean => shouldContinue() && callerShouldDeleteHash(hash);
   const canonicalAssetDirectory = resolveCanonicalTheatrumAssetDirectory(
     outputDirectory,
     assetDirectory,
@@ -2994,6 +3121,7 @@ async function deletePreviewCleanupTask(
  * Prevent PC from going to sleep during screenshot extraction
  */
 export function preventSleep(): void {
+  if (normalMediaFrozen) { return; }
   console.log('preventing sleep');
   if (preventSleepIds.length > 0) {
     return;

@@ -1,4 +1,7 @@
 import { Injectable } from '@angular/core';
+import { RendererMutationService } from '../services/renderer-mutation.service';
+import { RendererIpcLifetime } from '../common/renderer-ipc-lifetime';
+import { SAVED_NORMAL_DOCUMENT_CHANNELS } from '../../../interfaces/saved-normal-document';
 
 import type {
   MainToRendererChannel,
@@ -31,11 +34,13 @@ function unavailableElectronApi(): never {
 export class ElectronService {
 
   private readonly bridge: TheatrumElectronBridge | undefined;
+  private readonly lifetime: RendererIpcLifetime;
 
   ipcRenderer: LegacyIpcRendererFacade;
   webFrame: LegacyWebFrameFacade;
 
-  constructor() {
+  constructor(private readonly mutations: RendererMutationService) {
+    this.lifetime = new RendererIpcLifetime(mutations);
     this.bridge = (globalThis as typeof globalThis & {
       theatrum?: TheatrumElectronBridge;
     }).theatrum;
@@ -45,7 +50,7 @@ export class ElectronService {
         if (!this.bridge) {
           return Promise.reject(new Error('The Electron desktop API is unavailable in this window.'));
         }
-        return this.bridge.ipc.invoke(channel as RendererToMainInvokeChannel, ...args);
+        return this.lifetime.invoke(() => this.bridge!.ipc.invoke(channel as RendererToMainInvokeChannel, ...args));
       },
       on: (channel: string, listener: (...args: any[]) => void): (() => void) => {
         if (!this.bridge) {
@@ -54,11 +59,17 @@ export class ElectronService {
         // Existing Angular listeners expect Electron's event parameter first.
         // Preload intentionally removes that privileged event object, so retain
         // the positional contract with an undefined placeholder.
-        return this.bridge.ipc.on(channel as MainToRendererChannel, (...args: any[]) => {
-          listener(undefined, ...args);
+        let subscribed = true;
+        const remove = this.bridge.ipc.on(channel as MainToRendererChannel, (...args: any[]) => {
+          const deliver = (): void => { if (subscribed) { listener(undefined, ...args); } };
+          if (channel === SAVED_NORMAL_DOCUMENT_CHANNELS.request || channel === SAVED_NORMAL_DOCUMENT_CHANNELS.release) {
+            deliver();
+          } else { this.lifetime.deliver(deliver); }
         });
+        return () => { subscribed = false; remove(); };
       },
       send: (channel: string, ...args: any[]): void => {
+        if (channel !== SAVED_NORMAL_DOCUMENT_CHANNELS.snapshot) { this.mutations.assertAccepting(); }
         if (!this.bridge) {
           unavailableElectronApi();
         }
@@ -68,10 +79,12 @@ export class ElectronService {
 
     this.webFrame = {
       clearCache: (): Promise<void> => {
+        this.mutations.assertAccepting();
         this.bridge?.webFrame.clearCache();
         return Promise.resolve();
       },
       setZoomFactor: (factor: number): void => {
+        this.mutations.assertAccepting();
         if (!this.bridge) {
           return;
         }
@@ -85,6 +98,7 @@ export class ElectronService {
   }
 
   copyText(text: string): void {
+    this.mutations.assertAccepting();
     if (!this.bridge) {
       unavailableElectronApi();
     }
@@ -92,6 +106,7 @@ export class ElectronService {
   }
 
   getPathForFile(file: File): string {
+    this.mutations.assertAccepting();
     if (!this.bridge) {
       unavailableElectronApi();
     }
@@ -99,4 +114,6 @@ export class ElectronService {
   }
 
   isElectron = (): boolean => this.bridge?.isElectron === true;
+
+  drainDeferredEvents(): void { this.lifetime.drain(); }
 }

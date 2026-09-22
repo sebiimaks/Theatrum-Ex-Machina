@@ -253,7 +253,7 @@ test('the Angular adapter owns exact Electron channels and Home owns state trans
     component,
     /closeSaveFailed: \(errorMessage\?: string\): void => \{[\s\S]*this\.isClosing = false;[\s\S]*this\.catalogueEditorSaving = false;[\s\S]*errorMessage \? 'Save failed: ' \+ errorMessage : 'Save failed'/,
   );
-  assert.match(component, /saveSucceeded: \(\): void => \{[\s\S]*finalArrayNeedsSaving = false[\s\S]*restoreSavedTags/);
+  assert.match(component, /saveSucceeded: \(\): void => \{[\s\S]*finalArrayNeedsSaving = false[\s\S]*markSaved/);
   assert.match(component, /saveFailed: \(errorMessage\?: string\): void => \{[\s\S]*catalogueOpenCoordinator\.finishOpen\(\)/);
   assert.match(component, /closeCancelled: \(\): void => \{[\s\S]*this\.isClosing = false/);
   assert.match(component, /this\.cataloguePersistenceIpc\.disconnect\(\)/);

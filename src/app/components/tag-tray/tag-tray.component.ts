@@ -1,3 +1,4 @@
+import type { OnDestroy } from '@angular/core';
 import { Component, effect, HostListener, input, output } from '@angular/core';
 import { TranslateService } from '@ngx-translate/core';
 
@@ -30,6 +31,7 @@ import type { Tag, TagEmit } from '../../../../interfaces/shared-interfaces';
 import type { AppStateInterface } from '../../common/app-state';
 
 import { ImageElementService } from './../../services/image-element.service';
+import { RendererMutationService } from '../../services/renderer-mutation.service';
 import { ModalService } from '../modal/modal.service';
 import { ManualTagsService } from '../tags-manual/manual-tags.service';
 
@@ -62,7 +64,7 @@ interface TagParentOption {
   ],
   animations: [modalAnimation]
 })
-export class TagTrayComponent {
+export class TagTrayComponent implements OnDestroy {
 
   readonly toggleBatchTaggingMode = output<void>();
   readonly handleTagWordClicked = output<TagEmit>();
@@ -79,6 +81,8 @@ export class TagTrayComponent {
   readonly verticalLayout = input<boolean>(false);
   readonly updateTotalSelectedTrigger = input<number>(0);
 
+  private destroyed = false;
+  private readonly unregisterDraftFlusher: () => void;
   private tagFilterString = '';
 
   get manualTagFilterString(): string {
@@ -127,10 +131,24 @@ export class TagTrayComponent {
     public imageElementService: ImageElementService,
     private modalService: ModalService,
     private translate: TranslateService,
+    public rendererMutations: RendererMutationService,
   ) {
+    this.unregisterDraftFlusher = this.rendererMutations.registerDraftFlusher(() => {
+      this.clearTagDragState();
+    });
     effect(() => {
       this.recomputeTrigger = this.updateTotalSelectedTrigger();
     });
+  }
+
+  ngOnDestroy(): void {
+    this.destroyed = true;
+    this.clearTagDragState();
+    this.unregisterDraftFlusher();
+  }
+
+  private get canMutate(): boolean {
+    return !this.destroyed && this.rendererMutations.accepting;
   }
 
   get displayedTagHierarchy(): TagHierarchyNode[] {
@@ -193,6 +211,9 @@ export class TagTrayComponent {
   }
 
   createTagDefinition(): void {
+    if (!this.canMutate) {
+      return;
+    }
     const nameValidation = validateAndNormalizeNewTagPath(this.newTagName);
     if (!nameValidation.valid || !nameValidation.normalized) {
       this.newTagError = nameValidation.error || this.translate.instant('TAGS.tagDefinitionInvalid');
@@ -227,11 +248,17 @@ export class TagTrayComponent {
   }
 
   selectAllPressed(): void {
+    if (!this.canMutate) {
+      return;
+    }
     this.recomputeTrigger = Date.now();
     this.selectAll.emit();
   }
 
   deselectAllPressed(): void {
+    if (!this.canMutate) {
+      return;
+    }
     this.recomputeTrigger = Date.now();
     this.selectNone.emit();
   }
@@ -265,6 +292,9 @@ export class TagTrayComponent {
   }
 
   tagClicked(node: TagHierarchyNode, event: PointerEvent): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (this.suppressNextTagClick) {
       this.suppressNextTagClick = false;
       event.preventDefault();
@@ -286,6 +316,9 @@ export class TagTrayComponent {
   }
 
   tagDragStart(event: DragEvent, node: TagHierarchyNode): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (!event.dataTransfer) {
       event.preventDefault();
       return;
@@ -305,6 +338,9 @@ export class TagTrayComponent {
   }
 
   beginTagPointerDrag(event: PointerEvent, node: TagHierarchyNode): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (!event.isPrimary || event.button !== 0) {
       return;
     }
@@ -327,6 +363,9 @@ export class TagTrayComponent {
 
   @HostListener('document:pointermove', ['$event'])
   handleTagPointerMove(event: PointerEvent): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (
       this.pointerDragPointerId !== event.pointerId
       || !this.pointerDragCandidatePath
@@ -354,6 +393,9 @@ export class TagTrayComponent {
 
   @HostListener('document:pointerup', ['$event'])
   finishTagPointerDrag(event: PointerEvent): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (this.pointerDragPointerId !== event.pointerId) {
       return;
     }
@@ -410,6 +452,9 @@ export class TagTrayComponent {
   }
 
   allowTagHierarchyDrop(event: DragEvent, destinationNode: TagHierarchyNode): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (!this.draggedTagPath) {
       return;
     }
@@ -425,6 +470,9 @@ export class TagTrayComponent {
   }
 
   allowTagRootDrop(event: DragEvent): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (!this.draggedTagPath) {
       return;
     }
@@ -440,6 +488,9 @@ export class TagTrayComponent {
   }
 
   dropTagOnNode(event: DragEvent, destinationNode: TagHierarchyNode): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (!this.draggedTagPath) {
       return;
     }
@@ -460,6 +511,9 @@ export class TagTrayComponent {
   }
 
   dropTagAtRoot(event: DragEvent): void {
+    if (!this.canMutate) {
+      return;
+    }
     const sourcePath = this.getDraggedTagBranch(event);
     if (!sourcePath) {
       return;
@@ -494,6 +548,9 @@ export class TagTrayComponent {
   }
 
   onTagRightClick(event: PointerEvent, node: TagHierarchyNode): void {
+    if (!this.canMutate) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
 
@@ -560,6 +617,9 @@ export class TagTrayComponent {
   }
 
   removeExactTag(node: TagHierarchyNode): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (!node.explicit) {
       return;
     }
@@ -568,6 +628,13 @@ export class TagTrayComponent {
   }
 
   private confirmExactRemoval(tagPath: string): void {
+    if (!this.canMutate) {
+      return;
+    }
+    const mutation = this.rendererMutations.capture();
+    if (!mutation) {
+      return;
+    }
     const exactValues = this.currentExactTagValues(tagPath);
     const affectedVideoCount = this.exactAffectedVideoCount(tagPath);
     const definitionCount = this.manualTagsService.hasTagDefinition(tagPath) ? 1 : 0;
@@ -594,7 +661,7 @@ export class TagTrayComponent {
       title: this.translate.instant('TAGS.confirmRemoveTagTitle'),
       tone: 'destructive',
     }).subscribe((confirmed: boolean) => {
-      if (!confirmed) {
+      if (!confirmed || this.destroyed || !this.rendererMutations.isCurrent(mutation)) {
         return;
       }
 
@@ -607,6 +674,9 @@ export class TagTrayComponent {
   }
 
   removeBranch(node: TagHierarchyNode): void {
+    if (!this.canMutate) {
+      return;
+    }
     if (!node.children.length) {
       return;
     }
@@ -615,6 +685,13 @@ export class TagTrayComponent {
   }
 
   private confirmBranchRemoval(branchPath: string): void {
+    if (!this.canMutate) {
+      return;
+    }
+    const mutation = this.rendererMutations.capture();
+    if (!mutation) {
+      return;
+    }
     const plan = planTagBranchRemoval(this.imageElementService.imageElements, branchPath);
     const definitionCount = this.manualTagsService.getTagDefinitions().filter((definition: string) => (
       isTagInBranch(definition, branchPath)
@@ -643,7 +720,7 @@ export class TagTrayComponent {
       title: this.translate.instant('TAGS.confirmRemoveBranchTitle'),
       tone: 'destructive',
     }).subscribe((confirmed: boolean) => {
-      if (!confirmed) {
+      if (!confirmed || this.destroyed || !this.rendererMutations.isCurrent(mutation)) {
         return;
       }
 
@@ -701,6 +778,9 @@ export class TagTrayComponent {
   }
 
   private removeExactTagValues(tagValues: readonly string[], definitionPath: string): void {
+    if (!this.canMutate) {
+      return;
+    }
     const retainedColors = Object.fromEntries(
       Object.entries(this.manualTagsService.getTagColors()).filter(([colorPath]: [string, string]) => (
         !tagPathsEqual(colorPath, definitionPath)
@@ -718,6 +798,9 @@ export class TagTrayComponent {
   }
 
   private applyBranchRemoval(plan: TagBranchRemovalPlan): void {
+    if (!this.canMutate) {
+      return;
+    }
     const retainedColors = Object.fromEntries(
       Object.entries(this.manualTagsService.getTagColors()).filter(([tagPath]: [string, string]) => (
         !isTagInBranch(tagPath, plan.branchPath)
@@ -732,6 +815,13 @@ export class TagTrayComponent {
   }
 
   private confirmTagBranchMove(sourcePath: string, destinationParentPath: string | null): void {
+    if (!this.canMutate) {
+      return;
+    }
+    const mutation = this.rendererMutations.capture();
+    if (!mutation) {
+      return;
+    }
     let plan: TagBranchMovePlan;
     try {
       plan = planTagBranchMove(
@@ -815,7 +905,7 @@ export class TagTrayComponent {
         toLabel: destinationParentPath === null ? 'Top level' : 'After',
       },
     }).subscribe((confirmed: boolean) => {
-      if (!confirmed) {
+      if (!confirmed || this.destroyed || !this.rendererMutations.isCurrent(mutation)) {
         return;
       }
 

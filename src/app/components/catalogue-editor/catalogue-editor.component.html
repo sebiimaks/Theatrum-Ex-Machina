@@ -5,6 +5,7 @@
 
 <section
   class="catalogue-editor"
+  [attr.inert]="rendererMutations.accepting ? null : ''"
   role="dialog"
   aria-modal="true"
   cdkTrapFocus [cdkTrapFocusAutoCapture]="true"

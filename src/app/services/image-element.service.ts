@@ -11,21 +11,32 @@ import { tagPathsEqual } from './../../../interfaces/tag-hierarchy';
 import { renameImageLocationFile } from './../../../interfaces/media-locations';
 import type { TagEmission } from './../../../interfaces/shared-interfaces';
 import type { YearEmission} from './../components/views/details/details.component';
+import { RendererMutationService } from './renderer-mutation.service';
 
 @Injectable({ providedIn: 'root' })
 export class ImageElementService {
 
-  public finalArrayNeedsSaving = false;
+  private needsSaving = false;
   public forceStarFilterUpdate = true;
   public imageElements: ImageElement[] = [];
 
-  constructor() { }
+  constructor(private readonly mutations: RendererMutationService) { }
+
+  get finalArrayNeedsSaving(): boolean {
+    return this.needsSaving;
+  }
+
+  set finalArrayNeedsSaving(value: boolean) {
+    if (value) { this.mutations.changed(); }
+    this.needsSaving = value;
+  }
 
   /**
    * Update imageElements with emission of element
    * @param emission
    */
   HandleEmission(emission: YearEmission | StarEmission | TagEmission | DefaultScreenEmission): void {
+    this.mutations.assertAccepting();
     const index: number = emission.index;
 
     if (       'year' in emission) {
@@ -57,6 +68,7 @@ export class ImageElementService {
    * Should not error out if two files have the same name
    */
   replaceFileNameInFinalArray(renameTo: string, oldFileName: string, index: number): void {
+    this.mutations.assertAccepting();
 
     if (this.imageElements[index].fileName === oldFileName) {
       if (!renameImageLocationFile(this.imageElements[index], oldFileName, renameTo)) {
@@ -73,6 +85,7 @@ export class ImageElementService {
    * @param index
    */
   updateNumberOfTimesPlayed(index: number): void {
+    this.mutations.assertAccepting();
 
     this.imageElements[index].lastPlayed = Date.now(); // update `lastPlayed`
 
@@ -89,6 +102,7 @@ export class ImageElementService {
    * Reset the number of times played for every file in the current hub.
    */
   resetTimesPlayed(): void {
+    this.mutations.assertAccepting();
     let changed = false;
 
     this.imageElements.forEach((element: ImageElement) => {
@@ -114,6 +128,7 @@ export class ImageElementService {
 
   /** Remove several equivalent exact tag values in one catalogue pass. */
   removeTagsFromAll(tags: readonly string[]): number {
+    this.mutations.assertAccepting();
     let affectedVideoCount = 0;
 
     this.imageElements.forEach((element: ImageElement) => {
@@ -141,6 +156,7 @@ export class ImageElementService {
 
   /** Apply a freshly revalidated hierarchy-removal plan in one transaction. */
   applyTagBranchRemovalPlan(plan: TagBranchRemovalPlan): number {
+    this.mutations.assertAccepting();
     let affectedVideoCount = 0;
 
     plan.entries.forEach((entry) => {
@@ -162,6 +178,7 @@ export class ImageElementService {
 
   /** Apply a freshly revalidated hierarchy-move plan in one transaction. */
   applyTagBranchMovePlan(plan: TagBranchMovePlan): number {
+    this.mutations.assertAccepting();
     const planIsCurrent = plan.entries.every((entry) => {
       const currentTags = this.imageElements[entry.index]?.tags;
       return Array.isArray(currentTags)
@@ -190,6 +207,7 @@ export class ImageElementService {
     index: number,
     plan: VideoTagBranchRemovalPlan,
   ): boolean {
+    this.mutations.assertAccepting();
     const element = this.imageElements[index];
     const currentTags = element?.tags;
     const planIsCurrent = Array.isArray(currentTags)
@@ -229,6 +247,7 @@ export class ImageElementService {
    * Update playlist field
    */
   updatePlaylist(index: number): void {
+    this.mutations.assertAccepting();
 
     if (this.imageElements[index].playlist) {
       delete this.imageElements[index].playlist;
@@ -243,6 +262,7 @@ export class ImageElementService {
    * Clear out the playlist
    */
   emptyPlaylist(): void {
+    this.mutations.assertAccepting();
     this.imageElements.forEach((element) => {
       delete element.playlist;
     });

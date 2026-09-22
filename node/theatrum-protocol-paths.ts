@@ -5,6 +5,7 @@ import {
   THEATRUM_APP_HOST,
   THEATRUM_APP_PROTOCOL,
   isTheatrumMediaAssetType,
+  type TheatrumMediaAssetType,
 } from '../interfaces/theatrum-protocol';
 
 function decodedProtocolPath(requestUrl: string): string | undefined {
@@ -27,6 +28,21 @@ function decodedProtocolPath(requestUrl: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** A private preview request identifies an asset, never a filesystem path. */
+export function parseTheatrumMediaRequest(requestUrl: string): {
+  assetType: TheatrumMediaAssetType; hash: string; video: boolean;
+} | undefined {
+  const decodedPath = decodedProtocolPath(requestUrl);
+  if (!decodedPath) { return undefined; }
+  const segments = decodedPath.split('/');
+  if (segments.length !== 3 || segments[0] !== 'media' || !isTheatrumMediaAssetType(segments[1])) {
+    return undefined;
+  }
+  const match = /^([a-zA-Z0-9_-]{1,200})\.(jpg|mp4)$/i.exec(segments[2]);
+  if (!match || (match[2].toLowerCase() === 'mp4' && segments[1] !== 'clips')) { return undefined; }
+  return { assetType: segments[1], hash: match[1], video: match[2].toLowerCase() === 'mp4' };
 }
 
 function isInsideDirectory(rootDirectory: string, candidatePath: string): boolean {

@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
 import { createTheatrumBridge } from '../interfaces/preload-bridge.ts';
+import { SAVED_NORMAL_DOCUMENT_CHANNELS } from '../interfaces/saved-normal-document';
 
 function createDependencies() {
   const sent: [string, unknown[]][] = [];
@@ -77,4 +78,23 @@ test('preload exposes only bounded utility calls', () => {
   assert.deepEqual(fixture.zoomFactors, [1.25]);
   assert.throws(() => bridge.webFrame.setZoomFactor(0.49), /between 0.5 and 3/);
   assert.equal(bridge.platform, 'darwin');
+});
+
+test('saved-document exchange exposes only the three directional handoff messages', () => {
+  const fixture = createDependencies();
+  const bridge = createTheatrumBridge(fixture.dependencies);
+  const channels = SAVED_NORMAL_DOCUMENT_CHANNELS;
+  const received: unknown[] = [];
+  bridge.ipc.on(channels.request, id => received.push(id));
+  bridge.ipc.on(channels.release, (_id, result) => received.push(result));
+  fixture.listeners.get(channels.request)!({ sender: 'privileged event' }, 'nonce');
+  fixture.listeners.get(channels.release)!({}, 'nonce', { saved: true });
+  bridge.ipc.send(channels.snapshot, 'nonce', { status: 'snapshot', document: null });
+  assert.deepEqual(received, ['nonce', { saved: true }]);
+  assert.deepEqual(fixture.sent, [[channels.snapshot, ['nonce', { status: 'snapshot', document: null }]]]);
+  for (const channel of [channels.request, channels.release, 'open-private-hub', 'private-password']) {
+    assert.throws(() => bridge.ipc.send(channel as any), /Blocked renderer IPC channel/);
+    assert.throws(() => bridge.ipc.invoke(channel as any), /Blocked renderer IPC channel/);
+  }
+  assert.throws(() => bridge.ipc.on(channels.snapshot as any, () => undefined), /Blocked renderer IPC channel/);
 });

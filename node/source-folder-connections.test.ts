@@ -9,8 +9,13 @@ import {
 
 function deferred<T>() {
   let resolve: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve: (value: T) => resolve(value) };
+  let reject: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return {
+    promise,
+    resolve: (value: T) => resolve(value),
+    reject: (reason: unknown) => reject(reason),
+  };
 }
 
 function fixture() {
@@ -283,4 +288,155 @@ test('new catalogue generations each receive initial connectivity notifications'
   });
   await state.coordinator.refresh();
   assert.deepEqual(state.statuses(), [true, true]);
+});
+
+test('pausing before a cycle starts prevents session capture and further refreshes', async () => {
+  const state = fixture();
+  let captures = 0;
+  state.dependencies.captureSession = () => { captures++; return undefined; };
+  const pending = state.coordinator.refresh();
+  const drain = state.coordinator.pauseAndDrain();
+  assert.equal(drain, pending);
+  await Promise.all([pending, drain]);
+  state.coordinator.reset();
+  await state.coordinator.refresh();
+  assert.equal(captures, 0);
+  state.coordinator.resume();
+  await state.coordinator.refresh();
+  assert.equal(captures, 1);
+});
+
+test('pausing in session capture includes the registered cycle in the drain', async () => {
+  const state = fixture();
+  const capture = state.dependencies.captureSession;
+  let drain: Promise<void> | undefined;
+  let probes = 0;
+  state.dependencies.captureSession = () => {
+    drain = state.coordinator.pauseAndDrain();
+    return capture();
+  };
+  state.dependencies.probe = async () => { probes++; return '/media'; };
+  const pending = state.coordinator.refresh();
+  await pending;
+  assert.equal(drain, pending);
+  assert.equal(probes, 0);
+  assert.deepEqual(state.changes, []);
+});
+
+for (const rejected of [false, true]) {
+  test(`pause waits for a pending probe and discards its ${rejected ? 'error' : 'result'}`, async () => {
+    const state = fixture();
+    const probe = deferred<string | undefined>();
+    const entered = deferred<void>();
+    let probes = 0;
+    let prompts = 0;
+    let drained = false;
+    state.dependencies.probe = () => { probes++; entered.resolve(); return probe.promise; };
+    state.dependencies.authorize = async () => { prompts++; return true; };
+    const pending = state.coordinator.refresh();
+    await entered.promise;
+    const drain = state.coordinator.pauseAndDrain();
+    void drain.then(() => { drained = true; });
+    assert.equal(state.coordinator.pauseAndDrain(), drain);
+    assert.equal(state.coordinator.refresh(), pending);
+    assert.throws(() => state.coordinator.resume(), /still draining/);
+    await Promise.resolve();
+    assert.equal(drained, false);
+    if (rejected) {
+      probe.reject(new Error('An old private source path must not be reported.'));
+    } else {
+      probe.resolve('/media');
+    }
+    await drain;
+    await state.coordinator.refresh();
+    assert.equal(drained, true);
+    assert.equal(probes, 1);
+    assert.equal(prompts, 0);
+    assert.deepEqual(state.changes, []);
+    assert.deepEqual(state.errors, []);
+  });
+}
+
+for (const rejected of [false, true]) {
+  test(`pause waits for native permission review and discards its ${rejected ? 'error' : 'approval'}`, async () => {
+    const state = fixture();
+    const review = deferred<boolean>();
+    const entered = deferred<void>();
+    let probes = 0;
+    let prompts = 0;
+    let drained = false;
+    state.setSession({
+      generation: 1,
+      cataloguePath: '/catalogue.scaena',
+      sources: [{ index: 0, path: '/media' }, { index: 1, path: '/other-media' }],
+    });
+    state.dependencies.probe = async source => { probes++; return source.path; };
+    state.dependencies.authorize = () => { prompts++; entered.resolve(); return review.promise; };
+    const pending = state.coordinator.refresh();
+    await entered.promise;
+    const drain = state.coordinator.pauseAndDrain();
+    void drain.then(() => { drained = true; });
+    assert.equal(drain, pending);
+    await Promise.resolve();
+    assert.equal(drained, false);
+    if (rejected) {
+      review.reject(new Error('Permission review failed for the old source.'));
+    } else {
+      review.resolve(true);
+    }
+    await drain;
+    assert.equal(drained, true);
+    assert.equal(probes, 1);
+    assert.equal(prompts, 1);
+    assert.deepEqual(state.changes, []);
+    assert.deepEqual(state.errors, []);
+  });
+}
+
+test('pause during the confirmation probe prevents a late connection notification', async () => {
+  const state = fixture();
+  const confirmation = deferred<string | undefined>();
+  const entered = deferred<void>();
+  let probes = 0;
+  state.dependencies.probe = async () => {
+    if (++probes === 1) {
+      return '/media';
+    }
+    entered.resolve();
+    return confirmation.promise;
+  };
+  const pending = state.coordinator.refresh();
+  await entered.promise;
+  const drain = state.coordinator.pauseAndDrain();
+  confirmation.resolve('/media');
+  await Promise.all([pending, drain]);
+  assert.deepEqual(state.changes, []);
+});
+
+test('resuming starts a fresh serial cycle for the current session', async () => {
+  const state = fixture();
+  state.setAvailable('/media');
+  let prompts = 0;
+  state.dependencies.authorize = async () => { prompts++; return true; };
+  await state.coordinator.refresh();
+  await state.coordinator.pauseAndDrain();
+  state.setSession({
+    generation: 2,
+    cataloguePath: '/replacement.scaena',
+    sources: [{ index: 1, path: '/replacement' }],
+  });
+  state.setAvailable('/replacement');
+  state.coordinator.reset();
+  await state.coordinator.refresh();
+  assert.equal(prompts, 1);
+  state.coordinator.resume();
+  const first = state.coordinator.refresh();
+  const second = state.coordinator.refresh();
+  assert.equal(first, second);
+  await first;
+  assert.equal(prompts, 2);
+  assert.deepEqual(state.changes, [
+    { index: 0, connected: true, canonicalPath: '/media' },
+    { index: 1, connected: true, canonicalPath: '/replacement' },
+  ]);
 });

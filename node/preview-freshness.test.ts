@@ -7,6 +7,7 @@ import type { ImageElement } from '../interfaces/final-object.interface';
 import { FilePathService } from '../src/app/components/views/file-path.service';
 import { ThumbnailComponent } from '../src/app/components/views/thumbnail/thumbnail.component';
 import { ClipComponent } from '../src/app/components/views/clip/clip.component';
+import { RendererMutationService } from '../src/app/services/renderer-mutation.service';
 
 function withNativePreviews(run: (paths: FilePathService) => void): void {
   const previousBridge = Object.getOwnPropertyDescriptor(globalThis, 'theatrum');
@@ -72,7 +73,9 @@ test('folder thumbnails and clip previews retry every visible child after extrac
   withNativePreviews((paths) => {
     const injector = Injector.create({ providers: [] });
     const thumbnail = runInInjectionContext(injector, () => new ThumbnailComponent(paths, undefined));
-    const clip = runInInjectionContext(injector, () => new ClipComponent(undefined, paths, undefined, undefined));
+    const clip = runInInjectionContext(injector, () => new ClipComponent(
+      undefined, paths, undefined, undefined, new RendererMutationService(),
+    ));
     const folder = video({ hash: 'first:second:third:fourth:fifth' });
     thumbnail.video = folder;
     clip.video = folder;
@@ -99,7 +102,7 @@ test('folder thumbnails and clip previews retry every visible child after extrac
 test('clip video and poster recover without resetting hover or autoplay state', () => {
   withNativePreviews((paths) => {
     const clip = runInInjectionContext(Injector.create({ providers: [] }), () => (
-      new ClipComponent(undefined, paths, undefined, undefined)
+      new ClipComponent(undefined, paths, undefined, undefined, new RendererMutationService())
     ));
     clip.video = video();
     clip.ngOnInit();

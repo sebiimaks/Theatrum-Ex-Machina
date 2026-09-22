@@ -13,6 +13,11 @@ import { AutoTagsSaveService } from './tags-auto/tags-save.service';
 import { CatalogueOpenCoordinatorService } from '../services/catalogue-open-coordinator.service';
 import { CataloguePersistenceIpcService } from '../services/catalogue-persistence-ipc.service';
 import { CatalogueSessionDocumentService } from '../services/catalogue-session-document.service';
+import { RendererMutationService } from '../services/renderer-mutation.service';
+import { RendererInteractionFreeze } from '../common/renderer-interaction-freeze';
+import { SavedNormalDocumentCoordinator } from '../common/saved-normal-document-coordinator';
+import { SAVED_NORMAL_DOCUMENT_CHANNELS } from '../../../interfaces/saved-normal-document';
+import type { SavedNormalDocumentRelease } from '../../../interfaces/saved-normal-document';
 import { ElectronService } from '../providers/electron.service';
 import { FilePathService } from './views/file-path.service';
 import { GalleryLayoutService } from '../services/gallery-layout.service';
@@ -386,6 +391,9 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   individualThumbnailRegenerationStatus: IndividualThumbnailRegenerationStatus | null = null;
   private catalogueSessionGeneration = 0;
+  private interactionFreeze: RendererInteractionFreeze | undefined;
+  private savedNormalDocument: SavedNormalDocumentCoordinator | undefined;
+  private readonly savedDocumentListeners: (() => void)[] = [];
   thumbnailRegenerationElapsedSeconds = 0;
   private thumbnailRegenerationStartedAt = 0;
   private thumbnailRegenerationTimer: number | null = null;
@@ -570,6 +578,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   // Listen for key presses
   @HostListener('document:keydown', ['$event'])
   handleKeyboardEvent(event: KeyboardEvent) {
+    if (!this.mutations.accepting) { event.preventDefault(); return; }
 
     // Material owns its nested confirmations, including Escape and restoration.
     if (event.defaultPrevented || event.isComposing || this.modalService.dialog.openDialogs.length) {
@@ -661,6 +670,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     public imageElementService: ImageElementService,
     public manualTagsService: ManualTagsService,
     public modalService: ModalService,
+    public mutations: RendererMutationService,
     public pipeSideEffectService: PipeSideEffectService,
     public resolutionFilterService: ResolutionFilterService,
     public shortcutService: ShortcutsService,
@@ -675,8 +685,9 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnInit() {
+    this.connectSavedNormalDocument();
     this.catalogueOpenCoordinator.connect({
-      canBeginOpen: () => !this.blockActionDuringFolderThumbnailRegeneration(),
+      canBeginOpen: () => this.mutations.accepting && !this.blockActionDuringFolderThumbnailRegeneration(),
       chooseLegacyCatalogueOpen: (fullPath: string) => this.chooseLegacyCatalogueOpen(fullPath),
       getCurrentCatalogueForSave: () => this.getFinalObjectForSaving(),
       legacyOpenCancelled: (fullPath: string) => this.handleLegacyCatalogueOpenCancelled(fullPath),
@@ -707,10 +718,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         this.catalogueEditorSaving = false;
         this.catalogueEditorSaveStatus = 'Saved';
         this.imageElementService.finalArrayNeedsSaving = false;
-        this.autoTagsSaveService.restoreSavedTags(
-          this.autoTagsSaveService.getAddTags(),
-          this.autoTagsSaveService.getRemoveTags()
-        );
+        this.autoTagsSaveService.markSaved();
         this.cd.detectChanges();
       },
     });
@@ -1737,6 +1745,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    for (const remove of this.savedDocumentListeners.splice(0)) { remove(); }
+    this.interactionFreeze?.dispose();
     this.clearVideoSelection();
     this.catalogueOpenCoordinator.disconnect();
     this.cataloguePersistenceIpc.disconnect();
@@ -1831,6 +1841,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * can be applied together after any required metadata warning.
    */
   toggleIgnoredSubdirectory(target: FolderScopeTarget): void {
+    const mutation = this.mutations.capture();
+    if (!mutation) { return; }
     const sourceIndex = Number(target?.sourceIndex);
     let relativePath: string;
     try {
@@ -1929,6 +1941,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     const expectedHubFile = this.appState.currentVhaFile;
     const expectedIgnored = currentIgnored.join('\0');
     const applyPlan = async (currentPlan: IgnoredSourceFolderRemovalPlan): Promise<void> => {
+      if (!this.mutations.isCurrent(mutation)) { return; }
       const currentFolder = this.sourceFolderService.selectedSourceFolder[sourceIndex];
       if (
         this.appState.currentVhaFile !== expectedHubFile
@@ -2012,7 +2025,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       title: this.translate.instant('STATISTICS.confirmIgnoreSubdirectoryTitle'),
       tone: 'destructive',
     }).subscribe((confirmed: boolean) => {
-      if (!confirmed || this.appState.currentVhaFile !== expectedHubFile) {
+      if (!confirmed || !this.mutations.isCurrent(mutation) || this.appState.currentVhaFile !== expectedHubFile) {
         return;
       }
 
@@ -2323,6 +2336,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   public saveCurrentVhaFile(): void {
+    if (!this.mutations.accepting) { return; }
     if (this.catalogueEditorSaving || this.blockActionDuringFolderThumbnailRegeneration()) {
       return;
     }
@@ -2386,6 +2400,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   public initiateClose(): void {
+    if (!this.mutations.accepting) { return; }
     this.isClosing = true;
     this.savePreviousViewSize();
     this.appState.imgsPerRow = this.imgsPerRow;
@@ -2408,7 +2423,87 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
+  /** Dedicated main-owned handoff; no private path, password or catalogue enters this renderer. */
+  private connectSavedNormalDocument(): void {
+    this.interactionFreeze = new RendererInteractionFreeze(document);
+    const coordinator = new SavedNormalDocumentCoordinator({
+      sessionIdentity: () => this.catalogueSessionGeneration,
+      revisionIdentity: () => this.mutations.revision,
+      freeze: () => {
+        if (this.isClosing || this.catalogueEditorSaving) {
+          throw new Error('The ordinary save or close request is still completing.');
+        }
+        const restoreInteraction = this.interactionFreeze!.freeze();
+        let resumeMutations: () => void;
+        try { resumeMutations = this.mutations.freeze(); }
+        catch (error) { restoreInteraction(); throw error; }
+        // Drafts are committed and old confirmation epochs are now invalid.
+        // Keep dialogs inert until main resumes; closing them can send ordinary IPC.
+        clearTimeout(this.newVideoImportTimeout);
+        this.newVideoImportTimeout = null;
+        this.newVideoImportCounter = 0;
+        return () => {
+          resumeMutations();
+          try {
+            this.modalService.dialog.closeAll();
+            this.electronService.drainDeferredEvents();
+            this.resetFinalArrayRef();
+            restoreInteraction();
+          } catch (error) {
+            this.mutations.quarantine();
+            throw error;
+          }
+        };
+      },
+      snapshot: () => !this.appState.currentVhaFile || this.catalogueReadOnly ? null
+        : this.catalogueSessionDocument.buildDocument({
+          accessMode: this.catalogueAccessMode,
+          hubName: this.appState.hubName,
+          numOfFolders: this.appState.numOfFolders,
+          screenshotSettings: this.currentScreenshotSettings,
+        }),
+      markSaved: () => {
+        if (this.appState.currentVhaFile && !this.catalogueReadOnly) {
+          this.imageElementService.finalArrayNeedsSaving = false;
+          this.autoTagsSaveService.markSaved();
+        }
+      },
+    }, {
+      sendSnapshot: (id, response) => this.electronService.ipcRenderer.send(SAVED_NORMAL_DOCUMENT_CHANNELS.snapshot, id, response),
+    });
+    this.savedNormalDocument = coordinator;
+    this.savedDocumentListeners.push(
+      this.electronService.ipcRenderer.on(SAVED_NORMAL_DOCUMENT_CHANNELS.request, (_event, id: unknown) => {
+        this.zone.run(() => { coordinator.prepare(id); });
+      }),
+      this.electronService.ipcRenderer.on(SAVED_NORMAL_DOCUMENT_CHANNELS.release, (_event, id: unknown, result: SavedNormalDocumentRelease) => {
+        this.zone.run(() => { coordinator.release(id, result); });
+      }),
+      this.electronService.ipcRenderer.on('normal-workspace-resumed', () => {
+        this.zone.run(() => { this.resumeNormalWorkspaceProgress(); });
+      }),
+    );
+  }
+
+  /** Main has drained old jobs; reset their indicators without discarding catalogue edits. */
+  private resumeNormalWorkspaceProgress(): void {
+    this.mutations.assertAccepting();
+    this.importStage = 'done';
+    this.progressString = '';
+    this.extractionPercent = 1;
+    this.timeExtractionStarted = undefined;
+    this.timeExtractionRemaining = undefined;
+    this.sourceFolderService.finishInterruptedScans();
+    this.allFinishedScanning = true;
+    this.folderThumbnailRegenerationSession.clear();
+    this.individualThumbnailRegenerationStatus = null;
+    this.stopThumbnailRegenerationClockIfIdle();
+    this.resetFinalArrayRef();
+  }
+
   public async exportVha2Catalogue(): Promise<void> {
+    const mutation = this.mutations.capture();
+    if (!mutation) { return; }
     if (this.catalogueReadOnly || !/\.scaena$/i.test(this.appState.currentVhaFile || '')) {
       this.showReadOnlyActionBlocked();
       return;
@@ -2437,7 +2532,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       title: this.translate.instant('SYSTEM.exportVha2ConfirmTitle'),
       tone: 'warning',
     }));
-    if (!confirmed) {
+    if (!confirmed || !this.mutations.isCurrent(mutation)) {
       return;
     }
 
@@ -3936,6 +4031,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * response cannot operate on stale catalogue entries.
    */
   confirmRegenerateFolderThumbnails(target: FolderScopeTarget): void {
+    const mutation = this.mutations.capture();
+    if (!mutation) { return; }
     if (this.catalogueReadOnly) {
       this.showReadOnlyActionBlocked();
       return;
@@ -4004,7 +4101,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       title: this.translate.instant('STATISTICS.confirmRegenerateFolderThumbnailsTitle'),
       tone: 'warning',
     }).subscribe((confirmed: boolean) => {
-      if (!confirmed || this.appState.currentVhaFile !== hubFile) {
+      if (!confirmed || !this.mutations.isCurrent(mutation) || this.appState.currentVhaFile !== hubFile) {
         return;
       }
       if (this.catalogueReadOnly) {
@@ -4352,6 +4449,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
    * Deletes a file (moves to recycling bin / trash) or dangerously deletes (bypassing trash)
    */
   deleteThisFile(item: ImageElement): void {
+    const mutation = this.mutations.capture();
+    if (!mutation) { return; }
     if (this.catalogueReadOnly) {
       this.showReadOnlyActionBlocked();
       return;
@@ -4384,7 +4483,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         toLabel: 'Destination',
       },
     }).subscribe((confirmed: boolean) => {
-      if (!confirmed) {
+      if (!confirmed || !this.mutations.isCurrent(mutation)) {
         return;
       }
 

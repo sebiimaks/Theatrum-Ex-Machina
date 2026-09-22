@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'">
+    <title>Private hub</title>
+    <link rel="stylesheet" href="gallery.css">
+    <script src="gallery.js" defer></script>
+  </head>
+  <body>
+    <header class="hub-header">
+      <div class="hub-identity">
+        <span class="brand-mark" aria-hidden="true">T</span>
+        <div><h1>Private hub</h1><span class="hub-subtitle">Notes and tags stay in this encrypted hub</span></div>
+      </div>
+      <div class="privacy-controls">
+        <span class="lock-state" id="lock-state"><span class="status-dot" aria-hidden="true"></span>Unlocked</span>
+        <button class="button button-secondary" id="protection-button" type="button" aria-expanded="false" aria-controls="protection-panel">Protection</button>
+        <button class="button lock-button" id="lock-hub" type="button">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"></path></svg>
+          Lock hub
+        </button>
+        <section class="protection-panel" id="protection-panel" aria-labelledby="protection-heading" tabindex="-1" hidden>
+          <div class="protection-heading-row">
+            <h2 id="protection-heading">Protection</h2>
+            <button class="icon-button" id="close-protection" type="button" aria-label="Close protection settings">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+            </button>
+          </div>
+          <label for="auto-lock-minutes">Auto-lock after</label>
+          <select id="auto-lock-minutes" aria-describedby="protection-help" disabled>
+            <option value="" disabled selected>Select a saved setting</option>
+            <option value="0">Off</option>
+            <option value="1">1 minute</option>
+            <option value="5">5 minutes (default)</option>
+            <option value="15">15 minutes</option>
+            <option value="30">30 minutes</option>
+          </select>
+          <p id="protection-help">Locks after inactivity in this private window, including while a preview is playing or previews are regenerating. Locking clears unsaved edits.</p>
+          <p class="protection-storage-note">This setting is saved in this encrypted hub.</p>
+          <p class="protection-storage-note">Copying and dragging are disabled. You can paste into password fields.</p>
+          <p id="protection-status" role="status" aria-live="polite"></p>
+          <div class="protection-actions">
+            <button class="button button-secondary" id="retry-protection" type="button" hidden>Try again</button>
+            <button class="button save-button" id="save-protection" type="button" disabled>Save setting</button>
+          </div>
+          <section class="password-section touch-id-section" aria-labelledby="touch-id-heading">
+            <h3 id="touch-id-heading">Touch ID</h3>
+            <p id="touch-id-summary" role="status" aria-live="polite">Checking Touch ID availability…</p>
+            <p id="touch-id-help">Touch ID unlocks this hub on this Mac only. Keep your hub password: use it if Touch ID is unavailable. If your enrolled fingerprints change, unlock with your password and enable Touch ID again.</p>
+            <button class="button button-secondary" id="touch-id-toggle" type="button" aria-expanded="false" aria-controls="touch-id-form" hidden>Enable Touch ID</button>
+            <button class="button button-secondary" id="touch-id-disable" type="button" hidden>Disable Touch ID</button>
+            <form id="touch-id-form" aria-labelledby="touch-id-heading" autocomplete="off" novalidate hidden>
+              <label for="touch-id-password">Current password</label>
+              <input id="touch-id-password" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="touch-id-help touch-id-status">
+              <button class="button save-button" id="touch-id-submit" type="submit">Enable Touch ID</button>
+            </form>
+            <p id="touch-id-status" role="status" aria-live="polite"></p>
+          </section>
+          <div class="password-section">
+            <button class="password-toggle" id="change-password-toggle" type="button" aria-expanded="false" aria-controls="change-password-form">
+              Change password
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
+            </button>
+            <form id="change-password-form" aria-labelledby="change-password-toggle" autocomplete="off" novalidate hidden>
+              <p id="password-help">Save or discard unsaved video edits first. Changing the password locks this hub. Old copies still accept the password they were saved with.</p>
+              <label for="current-password">Current password</label>
+              <input id="current-password" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="password-help password-status">
+              <label for="new-password">New password</label>
+              <input id="new-password" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="password-help password-status">
+              <label for="confirm-password">Confirm new password</label>
+              <input id="confirm-password" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="password-status">
+              <p id="password-status" role="status" aria-live="polite"></p>
+              <button class="button save-button" id="change-password-submit" type="submit">Change password and lock</button>
+            </form>
+          </div>
+          <div class="password-section">
+            <button class="password-toggle" id="unprotected-copy-toggle" type="button" aria-expanded="false" aria-controls="unprotected-copy-form">
+              Create unprotected copy
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
+            </button>
+            <form id="unprotected-copy-form" aria-labelledby="unprotected-copy-toggle" autocomplete="off" novalidate hidden>
+              <p id="unprotected-copy-help">Creates ordinary, unencrypted files containing the catalogue, notes, tags and previews. The encrypted hub and original videos are kept.</p>
+              <p id="unprotected-copy-warning">After your password is checked, choose a new destination. Manual or automatic locking can interrupt copying. An interrupted copy can leave unencrypted files in the selected folder.</p>
+              <label for="unprotected-copy-password">Current password</label>
+              <input id="unprotected-copy-password" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="unprotected-copy-help unprotected-copy-status">
+              <label class="copy-acknowledgement" for="unprotected-copy-acknowledge">
+                <input id="unprotected-copy-acknowledge" type="checkbox" aria-describedby="unprotected-copy-warning">
+                <span>I understand the new copy will be unencrypted.</span>
+              </label>
+              <p id="unprotected-copy-status" role="status" aria-live="polite" tabindex="-1"></p>
+              <div class="copy-actions">
+                <button class="button save-button" id="unprotected-copy-submit" type="submit" disabled>Create unprotected copy</button>
+                <button class="button button-secondary" id="cancel-unprotected-copy" type="button" hidden>Cancel copy</button>
+              </div>
+            </form>
+          </div>
+        </section>
+      </div>
+    </header>
+
+    <section class="gallery-toolbar" aria-label="Catalogue controls">
+      <div class="search-control">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg>
+        <label class="visually-hidden" for="gallery-search">Search videos and tags</label>
+        <input id="gallery-search" type="search" placeholder="Search videos and tags…" maxlength="200" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+      </div>
+      <p class="result-summary" id="result-summary"></p>
+    </section>
+
+    <main class="gallery-content" id="gallery-content" tabindex="-1" aria-label="Videos">
+      <p class="gallery-status" id="gallery-status" role="status" aria-live="polite" aria-atomic="true">Loading catalogue…</p>
+      <div class="empty-state" id="empty-state" hidden>
+        <span class="empty-symbol" aria-hidden="true">◇</span>
+        <h2 id="empty-title"></h2>
+        <p id="empty-message"></p>
+        <button class="button button-secondary" id="retry-gallery" type="button" hidden>Try again</button>
+      </div>
+      <div class="gallery-grid" id="gallery-grid" aria-busy="true"></div>
+    </main>
+
+    <footer class="gallery-pagination" aria-label="Catalogue pages">
+      <span id="page-label">Page 1</span>
+      <div class="page-actions">
+        <button class="button button-secondary" id="previous-page" type="button" disabled>Previous</button>
+        <button class="button button-secondary" id="next-page" type="button" disabled>Next</button>
+      </div>
+    </footer>
+
+    <section class="details-panel" id="details-panel" aria-labelledby="details-heading" hidden>
+      <div class="details-heading-row">
+        <h2 id="details-heading">Video details</h2>
+        <button class="icon-button" id="close-details" type="button" aria-label="Close video details" title="Close video details">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+        </button>
+      </div>
+      <p class="details-status" id="details-status" role="status" aria-live="polite"></p>
+      <div class="details-content" id="details-content" hidden>
+        <div class="preview-column">
+          <div class="preview-area">
+            <div class="preview-placeholder" id="detail-placeholder">No preview available</div>
+            <img class="detail-poster" id="detail-poster" alt="" draggable="false" referrerpolicy="no-referrer" hidden>
+            <video id="preview-video" preload="none" controls controlslist="nodownload noremoteplayback" disablepictureinpicture disableremoteplayback hidden></video>
+            <button class="button preview-button" id="play-preview" type="button" hidden>
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 5 11 7-11 7Z"></path></svg>
+              Play preview
+            </button>
+          </div>
+          <div class="generation-actions">
+            <button class="button button-secondary" id="regenerate-previews" type="button" disabled>Regenerate previews</button>
+            <button class="button button-secondary" id="cancel-regeneration" type="button" hidden>Cancel</button>
+          </div>
+          <p id="generation-status" role="status" aria-live="polite"></p>
+        </div>
+        <div class="detail-summary">
+          <h3 id="details-title"></h3>
+          <p class="detail-facts" id="details-facts"></p>
+          <p class="detail-rating" id="details-rating"></p>
+          <div class="detail-tags" id="details-tags" aria-label="Video tags"></div>
+          <div class="tag-entry" id="tag-entry">
+            <label class="visually-hidden" for="tag-draft">Add a video tag</label>
+            <input id="tag-draft" type="text" placeholder="Add tag" maxlength="512" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+            <button class="button button-secondary" id="add-tag" type="button">Add</button>
+          </div>
+          <p class="shortened-notice" id="shortened-notice" hidden>Some text is shortened in this preview.</p>
+        </div>
+        <div class="detail-notes">
+          <label for="details-notes">Video notes</label>
+          <textarea id="details-notes" placeholder="Add video notes" maxlength="65536" rows="4" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+        </div>
+      </div>
+      <div class="edit-footer" id="edit-footer" hidden>
+        <div class="edit-messages">
+          <p id="edit-status" role="status" aria-live="polite"></p>
+          <p id="lock-warning" hidden>Locking clears unsaved edits.</p>
+        </div>
+        <div class="edit-actions">
+          <button class="button button-secondary" id="discard-details" type="button" disabled>Discard</button>
+          <button class="button save-button" id="save-details" type="button" disabled>Save changes</button>
+        </div>
+      </div>
+      <button class="button button-secondary" id="retry-details" type="button" hidden>Try again</button>
+    </section>
+  </body>
+</html>

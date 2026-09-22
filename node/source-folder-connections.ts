@@ -44,6 +44,7 @@ function sameCanonicalPath(left: string | undefined, right: string | undefined):
  */
 export class SourceFolderConnections {
   private epoch = 0;
+  private paused = false;
   private running: Promise<void> | undefined;
   private sessionKey: string | undefined;
   private readonly observed = new Map<string, ObservedConnection>();
@@ -51,13 +52,22 @@ export class SourceFolderConnections {
   constructor(private readonly dependencies: SourceFolderConnectionDependencies) {}
 
   refresh(): Promise<void> {
+    if (this.paused) {
+      return this.running ?? Promise.resolve();
+    }
     if (this.running) {
       return this.running;
     }
 
     const epoch = this.epoch;
-    const run = this.checkSources(epoch)
-      .catch((error: unknown) => this.dependencies.reportError(error))
+    // Register the cycle before invoking dependencies, so even a synchronous
+    // pause in captureSession is included in the drain barrier.
+    const run = Promise.resolve().then(() => this.checkSources(epoch))
+      .catch((error: unknown) => {
+        if (this.isEpochCurrent(epoch)) {
+          this.dependencies.reportError(error);
+        }
+      })
       .finally(() => {
         if (this.running === run) {
           this.running = undefined;
@@ -67,15 +77,41 @@ export class SourceFolderConnections {
     return run;
   }
 
-  /** Invalidate pending work, including a permission dialog still awaiting input. */
+  /** Invalidate pending work without changing whether checks are paused. */
   reset(): void {
     this.epoch++;
     this.sessionKey = undefined;
     this.observed.clear();
   }
 
+  /**
+   * Revoke results immediately and wait for any probe or native permission
+   * review to settle. Native dialogs cannot be cancelled by this coordinator;
+   * their result is discarded, and the owner must await this before proceeding.
+   */
+  pauseAndDrain(): Promise<void> {
+    this.paused = true;
+    this.reset();
+    return this.running ?? Promise.resolve();
+  }
+
+  /** Resume scheduling only after the previous cycle has drained. */
+  resume(): void {
+    if (this.running) {
+      throw new Error('Source connection checks are still draining.');
+    }
+    this.reset();
+    this.paused = false;
+  }
+
   private async checkSources(epoch: number): Promise<void> {
+    if (!this.isEpochCurrent(epoch)) {
+      return;
+    }
     const captured = this.dependencies.captureSession();
+    if (!this.isEpochCurrent(epoch)) {
+      return;
+    }
     if (!captured) {
       this.sessionKey = undefined;
       this.observed.clear();
@@ -160,7 +196,11 @@ export class SourceFolderConnections {
     session: SourceConnectionSession,
     source: SourceConnectionSource,
   ): boolean {
-    return this.epoch === epoch && this.dependencies.isCurrent(session, source);
+    return this.isEpochCurrent(epoch) && this.dependencies.isCurrent(session, source);
+  }
+
+  private isEpochCurrent(epoch: number): boolean {
+    return !this.paused && this.epoch === epoch;
   }
 
   private publish(
