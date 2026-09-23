@@ -53,6 +53,7 @@ let capsule;
 let hub;
 let workspace;
 let configuration;
+let seededFilmstripPattern;
 let ordinaryMenu;
 let privateMenuObservations = 0;
 let restoredMenuObservations = 0;
@@ -365,19 +366,129 @@ async function workspaceOpening(directory, password, newPassword, marker) {
   })()`);
   await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 1 && document.querySelector('.video-title').textContent === 'Synthetic coastal clip'");
   await waitForRenderer(window, "document.querySelector('#gallery-grid .video-card img')?.naturalWidth === 32 && !document.querySelector('#gallery-grid .video-card img').hidden");
+  const clipResponses = [];
+  const filmstripResponses = [];
+  isolated.webRequest.onCompleted({ urls: ['theatrum://app/media/clips/native-video.mp4*', 'theatrum://app/media/filmstrips/*'] }, details => {
+    const responses = details.url.includes('/filmstrips/') ? filmstripResponses : clipResponses;
+    if (responses.length < 8) { responses.push({ status: details.statusCode, type: details.resourceType }); }
+  });
   setStage('gallery-details');
   await evaluate(window, "document.querySelector('#gallery-grid .video-card').click(); true");
   await waitForRenderer(window, `document.getElementById('details-notes').value === ${JSON.stringify(marker)}`);
   assert.equal(await evaluate(window, "document.getElementById('details-title').textContent"), 'Synthetic coastal clip');
   assert.equal(await evaluate(window, "document.querySelector('#gallery-grid .video-card').getAttribute('aria-pressed')"), 'true');
+  setStage('gallery-filmstrip');
+  assert.deepEqual(await evaluate(window, `({ hidden: document.getElementById('filmstrip-panel').hidden,
+    source: document.getElementById('detail-filmstrip').hasAttribute('src'),
+    expanded: document.getElementById('toggle-filmstrip').getAttribute('aria-expanded') })`),
+  { hidden: true, source: false, expanded: 'false' });
+  assert.equal(filmstripResponses.length, 0, 'Selecting a video must not request its filmstrip.');
+  await evaluate(window, "document.getElementById('toggle-filmstrip').click(); true");
+  await waitForRenderer(window, "document.getElementById('detail-filmstrip').naturalWidth === 96 && !document.getElementById('detail-filmstrip').hidden");
+  const originalFilmstripUrl = await evaluate(window, "document.getElementById('detail-filmstrip').currentSrc");
+  assert.match(originalFilmstripUrl, /^theatrum:\/\/app\/media\/filmstrips\/native-video\.jpg\?v=[a-f0-9]{32}$/);
+  assert.ok(filmstripResponses.some(response => response.status === 200 && response.type === 'image'));
+  assert.equal(await evaluate(window, "document.getElementById('toggle-filmstrip').getAttribute('aria-expanded')"), 'true');
+  assert.equal(await evaluate(window, "document.getElementById('preview-video').hasAttribute('src')"), false);
+  fs.writeFileSync(path.join(repository, 'tmp', 'private-filmstrip-review.png'), (await window.webContents.capturePage()).toPNG());
+  setStage('gallery-filmstrip-shell');
+  assert.equal(await evaluate(window, `(() => {
+    const header = document.querySelector('.hub-header').getBoundingClientRect();
+    const button = document.getElementById('lock-hub'); const box = button.getBoundingClientRect();
+    return header.top >= 0 && header.bottom <= innerHeight && box.top >= 0 && box.bottom <= innerHeight
+      && button.contains(document.elementFromPoint((box.left + box.right) / 2, (box.top + box.bottom) / 2));
+  })()`), true, 'Opening a filmstrip must keep the hub header and Lock hub control reachable.');
+  await evaluate(window, "document.getElementById('toggle-filmstrip').click(); true");
+  window.setSize(600, 400);
+  await delay(100);
+  await evaluate(window, "document.getElementById('toggle-filmstrip').click(); true");
+  await waitForRenderer(window, "document.getElementById('detail-filmstrip').naturalWidth === 96 && !document.getElementById('detail-filmstrip').hidden");
+  const filmstripLayout = await evaluate(window, `(() => {
+    const viewport = document.getElementById('filmstrip-viewport'); const rect = viewport.getBoundingClientRect();
+    const scroll = document.getElementById('details-scroll').getBoundingClientRect();
+    const heading = document.querySelector('.details-heading-row').getBoundingClientRect();
+    const footer = document.getElementById('edit-footer'); const footerRect = footer.getBoundingClientRect();
+    const header = document.querySelector('.hub-header').getBoundingClientRect();
+    const usable = id => {
+      const button = document.getElementById(id); const box = button.getBoundingClientRect();
+      const x = (box.left + box.right) / 2; const y = (box.top + box.bottom) / 2;
+      return box.top >= 0 && box.bottom <= innerHeight && button.contains(document.elementFromPoint(x, y));
+    };
+    return { left: rect.left, right: rect.right, width: innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      visibleHeight: Math.min(rect.bottom, scroll.bottom, footer.hidden ? innerHeight : footerRect.top, innerHeight)
+        - Math.max(rect.top, scroll.top, heading.bottom, 0),
+      closeReachable: usable('close-details'), toggleReachable: usable('toggle-filmstrip'),
+      cleanFooterHidden: footer.hidden && document.getElementById('save-details').disabled,
+      headerVisible: header.top >= 0 && header.bottom <= innerHeight,
+      lockReachable: usable('lock-hub'), protectionReachable: usable('protection-button'),
+      scrolls: viewport.scrollWidth > viewport.clientWidth, overflow: getComputedStyle(viewport).overflowX };
+  })()`);
+  fs.writeFileSync(path.join(repository, 'tmp', 'private-filmstrip-small-review.png'), (await window.webContents.capturePage()).toPNG());
+  // This fixture-only diagnostic contains bounded layout geometry and booleans,
+  // never catalogue text, media paths, keys, or renderer resource URLs.
+  fs.writeFileSync(path.join(repository, 'tmp', 'private-filmstrip-layout-review.json'), JSON.stringify(filmstripLayout));
+  setStage('gallery-filmstrip-geometry');
+  assert.ok(filmstripLayout.left >= 0 && filmstripLayout.right <= filmstripLayout.width
+    && filmstripLayout.documentWidth <= filmstripLayout.width && filmstripLayout.scrolls && filmstripLayout.overflow === 'auto');
+  setStage('gallery-filmstrip-visibility');
+  assert.ok(filmstripLayout.visibleHeight >= 48, 'The compact filmstrip must remain visible between the sticky header and footer.');
+  setStage('gallery-filmstrip-controls');
+  assert.ok(filmstripLayout.closeReachable && filmstripLayout.toggleReachable && filmstripLayout.cleanFooterHidden,
+    'The compact filmstrip controls must remain reachable.');
+  setStage('gallery-filmstrip-compact-shell');
+  assert.ok(filmstripLayout.headerVisible && filmstripLayout.lockReachable && filmstripLayout.protectionReachable,
+    'Opening a compact filmstrip must keep hub protection controls reachable.');
+  setStage('gallery-filmstrip-draft-controls');
+  assert.equal(await evaluate(window, `(() => {
+    const notes = document.getElementById('details-notes'); notes.value += ' unsaved filmstrip draft';
+    notes.dispatchEvent(new Event('input', { bubbles: true }));
+    const button = document.getElementById('save-details'); const box = button.getBoundingClientRect();
+    return !document.getElementById('edit-footer').hidden && !button.disabled
+      && box.top >= 0 && box.bottom <= innerHeight
+      && button.contains(document.elementFromPoint((box.left + box.right) / 2, (box.top + box.bottom) / 2));
+  })()`), true, 'Draft edits must restore reachable save controls while the compact filmstrip is open.');
+  await evaluate(window, `(() => {
+    const notes = document.getElementById('details-notes'); notes.value = ${JSON.stringify(marker)};
+    notes.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  assert.equal(await evaluate(window, "document.getElementById('save-details').disabled && document.getElementById('edit-footer').hidden"), true);
+  window.setSize(...originalSize);
+  await evaluate(window, "document.getElementById('toggle-filmstrip').click(); true");
+  assert.deepEqual(await evaluate(window, `({ hidden: document.getElementById('filmstrip-panel').hidden,
+    source: document.getElementById('detail-filmstrip').hasAttribute('src'),
+    expanded: document.getElementById('toggle-filmstrip').getAttribute('aria-expanded') })`),
+  { hidden: true, source: false, expanded: 'false' });
+  setStage('gallery-filmstrip-selection');
+  await evaluate(window, `(() => {
+    const input = document.getElementById('gallery-search'); input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 48");
+  await evaluate(window, "document.querySelectorAll('#gallery-grid .video-card')[0].click(); true");
+  await waitForRenderer(window, "document.getElementById('details-title').textContent === 'Synthetic coastal clip'");
+  // Change selection in the same turn as requesting an image. A late decode
+  // or retry from the previous video must never repaint the new selection.
+  await evaluate(window, `document.getElementById('toggle-filmstrip').click();
+    document.querySelectorAll('#gallery-grid .video-card')[1].click(); true`);
+  await waitForRenderer(window, "document.getElementById('details-title').textContent === 'Synthetic archive 01'");
+  await evaluate(window, "document.getElementById('detail-filmstrip').dispatchEvent(new Event('load')); true");
+  assert.deepEqual(await evaluate(window, `({ hidden: document.getElementById('filmstrip-panel').hidden,
+    source: document.getElementById('detail-filmstrip').hasAttribute('src') })`), { hidden: true, source: false });
+  await evaluate(window, "document.getElementById('toggle-filmstrip').click(); true");
+  await waitForRenderer(window, "document.getElementById('filmstrip-status').textContent === 'Filmstrip unavailable. Hide it and try again.'");
+  assert.equal(await evaluate(window, "document.getElementById('detail-filmstrip').hidden"), true);
+  await evaluate(window, `(() => {
+    const input = document.getElementById('gallery-search'); input.value = 'coastal';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 1");
+  await evaluate(window, "document.querySelector('#gallery-grid .video-card').click(); true");
+  await waitForRenderer(window, `document.getElementById('details-notes').value === ${JSON.stringify(marker)}`);
   setStage('gallery-clipboard');
   const clipboard = await clipboardBackstop(window, 'details-notes', marker);
   await syntheticPaste(window, 'details-notes', true);
   setStage('gallery-preview');
-  const clipResponses = [];
-  isolated.webRequest.onCompleted({ urls: ['theatrum://app/media/clips/native-video.mp4*'] }, details => {
-    if (clipResponses.length < 8) { clipResponses.push({ status: details.statusCode, type: details.resourceType }); }
-  });
   await evaluate(window, "document.getElementById('play-preview').click(); true");
   try {
     await waitForRenderer(window, "document.getElementById('preview-video').videoWidth === 32 && document.getElementById('preview-video').currentTime > 0");
@@ -399,6 +510,8 @@ async function workspaceOpening(directory, password, newPassword, marker) {
   await evaluate(window, `(() => {
     const notes = document.getElementById('details-notes'); notes.value = ${JSON.stringify(editedNote)};
     notes.dispatchEvent(new Event('input', { bubbles: true }));
+    document.getElementById('toggle-filmstrip').click();
+    document.getElementById('toggle-filmstrip').click();
     const tag = document.getElementById('tag-draft'); tag.value = ${JSON.stringify('Private>' + marker)};
     tag.dispatchEvent(new Event('input', { bubbles: true }));
     document.getElementById('add-tag').click();
@@ -437,11 +550,17 @@ async function workspaceOpening(directory, password, newPassword, marker) {
   };
   try {
     setStage('gallery-source-cancel');
-    await evaluate(window, "document.getElementById('regenerate-previews').click(); true");
+    await evaluate(window, "document.getElementById('toggle-filmstrip').click(); true");
+    await waitForRenderer(window, "document.getElementById('detail-filmstrip').naturalWidth === 96 && !document.getElementById('detail-filmstrip').hidden");
+    assert.equal(await evaluate(window, `document.getElementById('regenerate-previews').click();
+      !document.getElementById('detail-filmstrip').hasAttribute('src') && document.getElementById('filmstrip-panel').hidden`), true);
     await waitForRenderer(window, "document.getElementById('generation-status').textContent === 'Regeneration stopped. Previews refreshed.'");
     assert.equal(selections, 1);
     setStage('gallery-source-generate');
-    await evaluate(window, "document.getElementById('regenerate-previews').click(); true");
+    await evaluate(window, "document.getElementById('toggle-filmstrip').click(); true");
+    await waitForRenderer(window, "document.getElementById('detail-filmstrip').naturalWidth === 96 && !document.getElementById('detail-filmstrip').hidden");
+    assert.equal(await evaluate(window, `document.getElementById('regenerate-previews').click();
+      !document.getElementById('detail-filmstrip').hasAttribute('src') && document.getElementById('filmstrip-panel').hidden`), true);
     await waitForRenderer(window, "!document.getElementById('regenerate-previews').disabled");
     assert.equal(selections, 2);
     const generationStatus = await evaluate(window, "document.getElementById('generation-status').textContent");
@@ -463,6 +582,13 @@ async function workspaceOpening(directory, password, newPassword, marker) {
   });
   setStage('gallery-no-autoplay');
   assert.equal(await evaluate(window, "document.getElementById('preview-video').hasAttribute('src')"), false);
+  assert.equal(await evaluate(window, "document.getElementById('detail-filmstrip').hasAttribute('src')"), false);
+  setStage('gallery-generated-filmstrip');
+  await evaluate(window, "document.getElementById('toggle-filmstrip').click(); true");
+  await waitForRenderer(window, "document.getElementById('detail-filmstrip').naturalWidth === 768 && document.getElementById('detail-filmstrip').naturalHeight === 144 && !document.getElementById('detail-filmstrip').hidden");
+  const regeneratedFilmstripUrl = await evaluate(window, "document.getElementById('detail-filmstrip').currentSrc");
+  assert.notEqual(regeneratedFilmstripUrl, originalFilmstripUrl, 'Regeneration must retire the previous filmstrip URL.');
+  assert.match(regeneratedFilmstripUrl, /^theatrum:\/\/app\/media\/filmstrips\/native-video\.jpg\?v=[a-f0-9]{32}$/);
   setStage('gallery-generated-playback');
   await evaluate(window, "document.getElementById('play-preview').click(); true");
   await waitForRenderer(window, "document.getElementById('preview-video').videoWidth === 256 && document.getElementById('preview-video').currentTime > 0").catch(async error => {
@@ -482,7 +608,10 @@ async function workspaceOpening(directory, password, newPassword, marker) {
     encryptedMetadataSaved: true, tagNormalized: true, dirtyCloseGuard: true, discardReloaded: true,
     sourcePickerCancelledThenGranted: true, encryptedPreviewsRegenerated: true, refreshedPreviewWidth: 256,
     sourceUnchanged: true, noRegenerationAutoplay: true, encryptedProtectionSaved: true,
-    protectionMinimumWindowFits: true, cacheBytes: 0 });
+    filmstripOnlyOnRequest: true, encryptedFilmstripDecoded: true, filmstripMinimumWindowFits: true,
+    filmstripCloseClearedSource: true, filmstripSelectionRetired: true, missingFilmstripHandled: true,
+    filmstripDraftPreserved: true, filmstripRegenerationRetired: true, regeneratedFilmstripWidth: 768,
+    protectionMinimumWindowFits: true, cacheBytes: 0 }, [seededFilmstripPattern]);
   setStage('gallery-lock');
   const settled = workspace.settled;
   void evaluate(window, "document.getElementById('lock-hub').click(); true").catch(() => undefined);
@@ -509,6 +638,8 @@ async function workspaceOpening(directory, password, newPassword, marker) {
   await waitForRenderer(reopened, `document.getElementById('details-notes').value === ${JSON.stringify(editedNote)}`);
   assert.equal(await evaluate(reopened, `document.getElementById('details-tags').textContent.includes(${JSON.stringify(editedTag)})`), true);
   await waitForRenderer(reopened, "document.getElementById('detail-poster').naturalWidth === 256");
+  assert.deepEqual(await evaluate(reopened, `({ hidden: document.getElementById('filmstrip-panel').hidden,
+    source: document.getElementById('detail-filmstrip').hasAttribute('src') })`), { hidden: true, source: false });
   lifetime.abort();
   assert.equal(reopened.isDestroyed(), true);
   await workspace.settled;
@@ -869,6 +1000,18 @@ async function makeHub(password, marker) {
       const jpeg = Buffer.concat([encoded.stdout.subarray(0, 2), header, comment, encoded.stdout.subarray(2)]);
       for (const image of catalogue.images) { await writePrivateHubPreview(store, 'thumbnail', image.hash, jpeg); }
       await writePrivateHubPreview(store, 'clip-poster', 'native-video', jpeg);
+      const encodedStrip = spawnSync(getMediaToolPath('ffmpeg'), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
+        '-i', 'color=c=teal:size=96x18', '-vf', 'drawbox=x=32:y=0:w=32:h=18:color=coral:t=fill,drawbox=x=64:y=0:w=32:h=18:color=gold:t=fill',
+        '-frames:v', '1', '-threads', '1', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1'],
+      { cwd: repository, timeout: 15_000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+      assert.equal(encodedStrip.status, 0);
+      validatePrivateJpeg(encodedStrip.stdout, 96, 18);
+      // The parent also scans for the original encoded image without its
+      // canary comment, so stripping metadata cannot hide a cached copy.
+      seededFilmstripPattern = encodedStrip.stdout.toString('base64');
+      const strip = Buffer.concat([encodedStrip.stdout.subarray(0, 2), header, comment, encodedStrip.stdout.subarray(2)]);
+      try { await writePrivateHubPreview(store, 'filmstrip', 'native-video', strip); }
+      finally { strip.fill(0); encodedStrip.stdout.fill(0); }
       jpeg.fill(0); comment.fill(0); encoded.stdout.fill(0);
       const clip = spawnSync(getMediaToolPath('ffmpeg'), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
         '-i', 'color=c=teal:size=32x18:rate=10:duration=4', '-an', '-threads', '1', '-c:v', 'libx264',

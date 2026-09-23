@@ -4,9 +4,10 @@ import * as path from 'node:path';
 import { test, type TestContext } from 'node:test';
 
 import { NewImageElement, type FinalObject } from '../interfaces/final-object.interface';
-import { convertCatalogueToPrivateHub } from './private-hub-conversion';
+import { convertCatalogueToPrivateHub, isPrivateHubConversionCleanupFailure } from './private-hub-conversion';
 import { PrivateHubSession, type PrivateHubSessionOptions } from './private-hub-session';
-import { PrivateHubStore } from './private-hub-store';
+import { PrivateHubStore, PRIVATE_HUB_HEADER_FILE, isPrivateHubStoreCleanupFailure } from './private-hub-store';
+import { PRIVATE_HUB_LOCK_FILE } from './private-hub-lock';
 import { writePrivateHubMedia, PRIVATE_HUB_MEDIA_CHUNK_BYTES } from './private-hub-media';
 import { createPrivatePreviewSet, privatePreviewSetMemberId, privatePreviewSetRecordId, publishPrivatePreviewSet,
   type PrivatePreviewSet } from './private-hub-preview-set';
@@ -14,6 +15,11 @@ import { capturePrivatePreviewSource, isPrivatePreviewSourceCleanupFailure,
   type PrivatePreviewSource, type PrivatePreviewSourceOptions } from './private-preview-source';
 import * as previewGeneration from './private-hub-preview-generation';
 import * as mediaProcess from './private-media-process';
+import * as privateMedia from './private-hub-media';
+import { PrivateHubOpenCoordinator } from './private-hub-open';
+import { PrivateApplicationTransition } from './private-application-transition';
+import { NormalApplicationPause } from './normal-application-pause';
+import { NormalOperationScope } from './normal-operation-scope';
 
 const password = 'Session synthetic passphrase 2026';
 const hash = 'session-video';
@@ -27,7 +33,7 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => voi
 
 async function fixture(t: TestContext, options: PrivateHubSessionOptions = {}): Promise<{
   directory: string; session: PrivateHubSession; catalogue: FinalObject;
-  expectQuarantinedClose(): void;
+  expectQuarantinedClose(predicate?: (error: unknown) => boolean): void;
 }> {
   const temporary = path.join(__dirname, '..', 'tmp');
   await fs.mkdir(temporary, { recursive: true });
@@ -52,13 +58,15 @@ async function fixture(t: TestContext, options: PrivateHubSessionOptions = {}): 
   }
   await convertCatalogueToPrivateHub({ cataloguePath, destinationDirectory: directory, password, assertSourceQuiescent: () => undefined });
   const session = new PrivateHubSession(options);
-  let expectQuarantined = false;
+  let quarantinePredicate: ((error: unknown) => boolean) | undefined;
   t.after(async () => {
-    if (expectQuarantined) { await assert.rejects(session.close(), previewGeneration.isPrivatePreviewGenerationCleanupFailure); }
+    if (quarantinePredicate) { await assert.rejects(session.close(), quarantinePredicate); }
     else { await session.close(); }
     await fs.rm(root, { recursive: true, force: true });
   });
-  return { directory, session, catalogue, expectQuarantinedClose: () => { expectQuarantined = true; } };
+  return { directory, session, catalogue, expectQuarantinedClose: (predicate = previewGeneration.isPrivatePreviewGenerationCleanupFailure) => {
+    quarantinePredicate = predicate;
+  } };
 }
 
 async function generationFixture(t: TestContext): Promise<Awaited<ReturnType<typeof fixture>> & {
@@ -1140,4 +1148,223 @@ test('caller cancellation drains only its generation and leaves the session avai
   await rejected;
   assert.equal(source.signal.aborted, true);
   await f.session.writeCatalogue(f.generation, f.catalogue);
+});
+
+test('first activation retains a trusted conversion cleanup failure through generic unlock rejection', async t => {
+  const f = await fixture(t);
+  f.expectQuarantinedClose(isPrivateHubConversionCleanupFailure);
+  const getStore = captureStore(t);
+  const open = privateMedia.openPrivateHubMedia;
+  let returned = 0;
+  let activations = 0;
+  const write = PrivateHubStore.prototype.writeNewRecord;
+  t.mock.method(PrivateHubStore.prototype, 'writeNewRecord', async function (this: PrivateHubStore, id: string, bytes: Buffer) {
+    if (id === 'session:activation') { activations++; }
+    return write.call(this, id, bytes);
+  });
+  t.mock.method(privateMedia, 'openPrivateHubMedia', async (...args: Parameters<typeof open>) => {
+    const reader = await open(...args);
+    return { byteLength: reader.byteLength, readRange: () => ({
+      [Symbol.asyncIterator]() { return this; },
+      async next() { throw new Error(marker + ' verification failed'); },
+      async return() { returned++; throw new Error(marker + ' cleanup failed'); },
+    }) };
+  });
+  await assert.rejects(f.session.unlock(f.directory, password), { message: 'The private hub session is unavailable.' });
+  await assert.rejects(f.session.lock(), isPrivateHubConversionCleanupFailure);
+  assert.equal(getStore().locked, true);
+  assert.equal(f.session.status.state, 'locked');
+  assert.equal(returned, 1);
+  assert.equal(activations, 0);
+  await assert.rejects(f.session.close(), isPrivateHubConversionCleanupFailure);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  await assert.rejects(f.session.lock(), isPrivateHubConversionCleanupFailure);
+  await assert.rejects(f.session.unlock(f.directory, password), { message: 'The private hub session is unavailable.' });
+});
+
+test('static storage-open cleanup failure survives the generic unlock error and repeated disposal', async t => {
+  const f = await fixture(t);
+  f.expectQuarantinedClose(isPrivateHubStoreCleanupFailure);
+  const open = fs.open;
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (args[0] === path.join(f.directory, PRIVATE_HUB_HEADER_FILE)) {
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => { await close(); throw new Error(marker + ' private header close failed'); });
+    }
+    return handle;
+  });
+  await assert.rejects(f.session.unlock(f.directory, password), { message: 'The private hub session is unavailable.' });
+  let failure: unknown;
+  await assert.rejects(f.session.lock(), error => { failure = error; return isPrivateHubStoreCleanupFailure(error); });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  await assert.rejects(f.session.close(), error => error === failure);
+  await assert.rejects(f.session.lock(), error => error === failure);
+  await assert.rejects(f.session.unlock(f.directory, password), { message: 'The private hub session is unavailable.' });
+  assert.equal(f.session.status.state, 'locked');
+});
+
+test('late successful storage descriptor close cannot clear session or revocation quarantine', async t => {
+  const f = await fixture(t);
+  f.expectQuarantinedClose(isPrivateHubStoreCleanupFailure);
+  const finishClose = deferred();
+  t.after(() => { finishClose.resolve(); });
+  const open = fs.open;
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (args[0] === path.join(f.directory, PRIVATE_HUB_LOCK_FILE)) {
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => { await close(); await finishClose.promise; });
+    }
+    return handle;
+  });
+  const { generation } = await f.session.unlock(f.directory, password);
+  const revoked = f.session.revocationDrained(generation);
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback, milliseconds, ...args) =>
+    schedule(callback, milliseconds === 5000 ? 50 : milliseconds, ...args));
+  const locking = f.session.lock();
+  let failure: unknown;
+  const revocationRejected = assert.rejects(revoked, isPrivateHubStoreCleanupFailure);
+  await assert.rejects(locking, error => { failure = error; return isPrivateHubStoreCleanupFailure(error); });
+  await revocationRejected;
+  finishClose.resolve();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  await assert.rejects(f.session.close(), error => error === failure);
+  await assert.rejects(f.session.lock(), error => error === failure);
+  await assert.rejects(f.session.unlock(f.directory, password));
+  assert.equal(f.session.isCurrent(generation), false);
+});
+
+test('cleanup failure from a late unadopted store blocks restoration after unlock cancellation', async t => {
+  const f = await fixture(t);
+  f.expectQuarantinedClose(isPrivateHubStoreCleanupFailure);
+  const opened = deferred();
+  const returnStore = deferred();
+  t.after(() => { returnStore.resolve(); });
+  const nativeOpen = fs.open;
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof nativeOpen>) => {
+    const handle = await nativeOpen(...args);
+    if (args[0] === path.join(f.directory, PRIVATE_HUB_LOCK_FILE)) {
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => { await close(); throw new Error(marker + ' late storage close'); });
+    }
+    return handle;
+  });
+  const open = PrivateHubStore.open.bind(PrivateHubStore);
+  t.mock.method(PrivateHubStore, 'open', async (...args: Parameters<typeof open>) => {
+    const store = await open(...args);
+    opened.resolve();
+    await returnStore.promise;
+    return store;
+  });
+  const unlocking = assert.rejects(f.session.unlock(f.directory, password), { message: 'The private hub session is unavailable.' });
+  await opened.promise;
+  const locking = f.session.lock();
+  returnStore.resolve();
+  await unlocking;
+  await assert.rejects(locking, isPrivateHubStoreCleanupFailure);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  await assert.rejects(f.session.close(), isPrivateHubStoreCleanupFailure);
+  await assert.rejects(f.session.unlock(f.directory, password));
+});
+
+// Keep this last: a proven cleanup failure intentionally quarantines the real
+// opening coordinator's process-wide admission, with no test reset backdoor.
+test('late activation cleanup cannot restore normal admission after the outer transition is cancelled', async t => {
+  const f = await fixture(t);
+  f.expectQuarantinedClose(isPrivateHubConversionCleanupFailure);
+  const getStore = captureStore(t);
+  let deadline!: () => void;
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback, milliseconds, ...args) => {
+    if (milliseconds === 5000) { deadline = () => callback(...args); }
+    return schedule(callback, milliseconds, ...args);
+  });
+  const returning = deferred();
+  const finishReturn = deferred();
+  let expireCleanup!: () => void;
+  let returned = false;
+  const open = privateMedia.openPrivateHubMedia;
+  t.mock.method(privateMedia, 'openPrivateHubMedia', async (...args: Parameters<typeof open>) => {
+    const reader = await open(...args);
+    return { byteLength: reader.byteLength, readRange: () => ({
+      [Symbol.asyncIterator]() { return this; },
+      async next() { throw new Error(marker + ' verification interrupted'); },
+      async return() {
+        expireCleanup = deadline;
+        returning.resolve();
+        await finishReturn.promise;
+        returned = true;
+        return { done: true, value: undefined };
+      },
+    }) };
+  });
+  let browsers = 0;
+  const coordinator = new PrivateHubOpenCoordinator({
+    createSession: () => f.session,
+    requestPassword: async () => password,
+    createBrowser: async () => { browsers++; throw new Error('A failed activation must not allocate a browser'); },
+  });
+  const operations = new NormalOperationScope();
+  let resumes = 0;
+  const normal = new NormalApplicationPause({
+    operations, canPause: () => true, onPause: () => undefined,
+    pauseSources: async () => undefined, drainMedia: async () => undefined,
+    resumeSources: () => undefined, resumeMedia: () => undefined, onResume: () => { resumes++; },
+  });
+  const owner = { isCurrent: () => true };
+  const saved = Object.freeze({});
+  let frozen = false;
+  let hidden = false;
+  let rendererReleases = 0;
+  let quits = 0;
+  const transition = new PrivateApplicationTransition({
+    normal, captureNormal: () => owner, selectDirectory: async () => f.directory,
+    document: {
+      prepare: async (_owner, proof) => { normal.assertPaused(proof); frozen = true; return saved; },
+      assertSaved: proof => { assert.equal(proof, saved); },
+      cancel: async () => { frozen = false; },
+    },
+    createWorkspace: () => coordinator,
+    hideNormal: () => { hidden = true; }, restoreNormal: () => { hidden = false; },
+    releaseRenderer: () => { rendererReleases++; }, quit: () => { quits++; },
+  });
+  const opening = transition.open();
+  try {
+    await returning.promise;
+    let disposed = false;
+    const cancellation = transition.cancel().then(() => { disposed = true; });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(disposed, false, 'Outer disposal must retain the pending activation verification');
+    assert.equal(getStore().locked, true);
+    expireCleanup();
+    assert.equal(await opening, 'unavailable');
+    await cancellation;
+    await transition.settled;
+    assert.equal(returned, false);
+    assert.deepEqual(coordinator.status, { state: 'failed', cleanupFailed: true });
+    assert.equal(transition.status.state, 'failed');
+    assert.equal(transition.status.cleanupFailed, true);
+    assert.equal(normal.status.state, 'paused');
+    assert.equal(operations.accepting, false);
+    assert.equal(frozen, true);
+    assert.equal(hidden, true);
+    assert.equal(resumes, 0);
+    assert.equal(rendererReleases, 0);
+    assert.equal(browsers, 0);
+    await assert.rejects(f.session.lock(), isPrivateHubConversionCleanupFailure);
+  } finally { finishReturn.resolve(); }
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(returned, true);
+  await assert.rejects(f.session.close(), isPrivateHubConversionCleanupFailure);
+  await assert.rejects(f.session.unlock(f.directory, password));
+  assert.equal(await transition.open(), 'unavailable');
+  await transition.requestQuit();
+  assert.equal(quits, 0);
+  assert.equal(operations.accepting, false);
+  assert.equal(frozen, true);
+  assert.equal(hidden, true);
+  assert.equal(resumes, 0);
+  assert.equal(rendererReleases, 0);
 });

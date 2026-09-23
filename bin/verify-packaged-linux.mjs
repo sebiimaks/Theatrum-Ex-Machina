@@ -24,6 +24,7 @@ const packageVersion = projectPackageJson.version;
 const linuxPackageName = builderConfiguration.deb?.packageName || projectPackageJson.name;
 const require = createRequire(import.meta.url);
 const asar = require('@electron/asar');
+const { verifyPrivacyPayload } = require('./privacy-package.cjs');
 
 function run(command, args, timeout = 30_000) {
   const result = spawnSync(command, args, {
@@ -225,6 +226,7 @@ function verifyLinkedLibraries(filePath, packagedApplicationRoot, allowPackagedL
 }
 
 function verifyApplicationArchive(resourcesPath) {
+  verifyPrivacyPayload({ resourcesPath, projectDirectory, platform: 'linux', arch: 'x64', asar });
   const applicationArchive = path.join(resourcesPath, 'app.asar');
   assertNonempty(applicationArchive, 'application archive');
   const archivedFiles = asar.listPackage(applicationArchive);

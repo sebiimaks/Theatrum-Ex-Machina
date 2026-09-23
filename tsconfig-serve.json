@@ -6,6 +6,7 @@
       "es2023",
       "dom"
     ],
+    "module": "commonjs",
     "moduleResolution": "node",
     "sourceMap": true,
     "target": "es2022",

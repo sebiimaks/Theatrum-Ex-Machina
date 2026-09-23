@@ -26,6 +26,7 @@ export interface PrivateGalleryDetail extends PrivateGalleryItem {
   notes: string;
   clipUrl: string;
   posterUrl: string;
+  filmstripUrl: string;
   truncated: boolean;
   editable: boolean;
   revision: string;

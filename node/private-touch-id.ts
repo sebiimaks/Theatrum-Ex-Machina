@@ -1,5 +1,4 @@
-import { join } from 'node:path';
-import type * as Electron from 'electron';
+import { getPrivateHelperPath } from './private-helper-paths';
 
 export interface PrivateTouchIdProvider {
   availability(): Promise<'available' | 'unavailable'>;
@@ -48,9 +47,7 @@ function defaultLoader(): PrivateTouchIdNativeBinding | undefined {
   // This module is main-owned. No renderer or ordinary Node process loads the
   // addon, and neither paths nor native method names come from an IPC payload.
   if (!process.versions.electron || process.type !== 'browser') { return undefined; }
-  const { app } = require('electron') as typeof Electron;
-  const root = app.isPackaged ? process.resourcesPath : join(__dirname, '..', 'build');
-  return require(join(root, 'privacy-tools', 'private-touch-id.node')) as PrivateTouchIdNativeBinding;
+  return require(getPrivateHelperPath('private-touch-id.node')) as PrivateTouchIdNativeBinding;
 }
 function identityValid(identity: unknown): identity is string {
   return typeof identity === 'string' && /^[0-9a-f]{64}$/.test(identity);

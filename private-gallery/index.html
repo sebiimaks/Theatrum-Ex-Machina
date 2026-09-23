@@ -132,43 +132,68 @@
     <section class="details-panel" id="details-panel" aria-labelledby="details-heading" hidden>
       <div class="details-heading-row">
         <h2 id="details-heading">Video details</h2>
-        <button class="icon-button" id="close-details" type="button" aria-label="Close video details" title="Close video details">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
-        </button>
-      </div>
-      <p class="details-status" id="details-status" role="status" aria-live="polite"></p>
-      <div class="details-content" id="details-content" hidden>
-        <div class="preview-column">
-          <div class="preview-area">
-            <div class="preview-placeholder" id="detail-placeholder">No preview available</div>
-            <img class="detail-poster" id="detail-poster" alt="" draggable="false" referrerpolicy="no-referrer" hidden>
-            <video id="preview-video" preload="none" controls controlslist="nodownload noremoteplayback" disablepictureinpicture disableremoteplayback hidden></video>
-            <button class="button preview-button" id="play-preview" type="button" hidden>
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 5 11 7-11 7Z"></path></svg>
-              Play preview
+        <div class="details-heading-actions">
+          <div class="filmstrip-navigation">
+            <button class="icon-button" id="filmstrip-previous" type="button" aria-label="Show earlier preview frames" aria-controls="filmstrip-viewport" disabled>
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m14 6-6 6 6 6"></path></svg>
+            </button>
+            <button class="icon-button" id="filmstrip-next" type="button" aria-label="Show later preview frames" aria-controls="filmstrip-viewport" disabled>
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m10 6 6 6-6 6"></path></svg>
             </button>
           </div>
-          <div class="generation-actions">
-            <button class="button button-secondary" id="regenerate-previews" type="button" disabled>Regenerate previews</button>
-            <button class="button button-secondary" id="cancel-regeneration" type="button" hidden>Cancel</button>
-          </div>
-          <p id="generation-status" role="status" aria-live="polite"></p>
+          <button class="button button-secondary filmstrip-toggle" id="toggle-filmstrip" type="button" aria-expanded="false" aria-controls="filmstrip-panel" disabled>Show filmstrip</button>
+          <button class="icon-button" id="close-details" type="button" aria-label="Close video details" title="Close video details">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+          </button>
         </div>
-        <div class="detail-summary">
-          <h3 id="details-title"></h3>
-          <p class="detail-facts" id="details-facts"></p>
-          <p class="detail-rating" id="details-rating"></p>
-          <div class="detail-tags" id="details-tags" aria-label="Video tags"></div>
-          <div class="tag-entry" id="tag-entry">
-            <label class="visually-hidden" for="tag-draft">Add a video tag</label>
-            <input id="tag-draft" type="text" placeholder="Add tag" maxlength="512" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
-            <button class="button button-secondary" id="add-tag" type="button">Add</button>
+      </div>
+      <div class="details-scroll" id="details-scroll">
+        <p class="details-status" id="details-status" role="status" aria-live="polite"></p>
+        <section class="filmstrip-panel" id="filmstrip-panel" aria-labelledby="filmstrip-heading" hidden>
+          <div class="filmstrip-heading-row">
+            <div>
+              <h3 id="filmstrip-heading">Filmstrip</h3>
+              <p id="filmstrip-help">Scroll to browse the video’s preview frames. Use the arrow keys when the strip is focused.</p>
+            </div>
           </div>
-          <p class="shortened-notice" id="shortened-notice" hidden>Some text is shortened in this preview.</p>
-        </div>
-        <div class="detail-notes">
-          <label for="details-notes">Video notes</label>
-          <textarea id="details-notes" placeholder="Add video notes" maxlength="65536" rows="4" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+          <p class="filmstrip-status" id="filmstrip-status" role="status" aria-live="polite"></p>
+          <div class="filmstrip-viewport" id="filmstrip-viewport" role="region" aria-label="Video preview frames" aria-describedby="filmstrip-help" tabindex="0" hidden>
+            <img id="detail-filmstrip" alt="Preview frames from the selected video" draggable="false" referrerpolicy="no-referrer" decoding="async" hidden>
+          </div>
+        </section>
+        <div class="details-content" id="details-content" hidden>
+          <div class="preview-column">
+            <div class="preview-area">
+              <div class="preview-placeholder" id="detail-placeholder">No preview available</div>
+              <img class="detail-poster" id="detail-poster" alt="" draggable="false" referrerpolicy="no-referrer" hidden>
+              <video id="preview-video" preload="none" controls controlslist="nodownload noremoteplayback" disablepictureinpicture disableremoteplayback hidden></video>
+              <button class="button preview-button" id="play-preview" type="button" hidden>
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 5 11 7-11 7Z"></path></svg>
+                Play preview
+              </button>
+            </div>
+            <div class="generation-actions">
+              <button class="button button-secondary" id="regenerate-previews" type="button" disabled>Regenerate previews</button>
+              <button class="button button-secondary" id="cancel-regeneration" type="button" hidden>Cancel</button>
+            </div>
+            <p id="generation-status" role="status" aria-live="polite"></p>
+          </div>
+          <div class="detail-summary">
+            <h3 id="details-title"></h3>
+            <p class="detail-facts" id="details-facts"></p>
+            <p class="detail-rating" id="details-rating"></p>
+            <div class="detail-tags" id="details-tags" aria-label="Video tags"></div>
+            <div class="tag-entry" id="tag-entry">
+              <label class="visually-hidden" for="tag-draft">Add a video tag</label>
+              <input id="tag-draft" type="text" placeholder="Add tag" maxlength="512" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+              <button class="button button-secondary" id="add-tag" type="button">Add</button>
+            </div>
+            <p class="shortened-notice" id="shortened-notice" hidden>Some text is shortened in this preview.</p>
+          </div>
+          <div class="detail-notes">
+            <label for="details-notes">Video notes</label>
+            <textarea id="details-notes" placeholder="Add video notes" maxlength="65536" rows="4" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+          </div>
         </div>
       </div>
       <div class="edit-footer" id="edit-footer" hidden>

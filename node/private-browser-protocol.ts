@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { PrivateHubSession } from './private-hub-session';
 import { parseTheatrumMediaRequest } from './theatrum-protocol-paths';
+import { resolvePrivateUiDirectory } from './private-ui-paths';
 
 export const PRIVATE_BROWSER_ENTRY_URL = 'theatrum://app/index.html';
 const MAX_STATIC_BYTES = 8 * 1024 * 1024;
@@ -30,6 +31,12 @@ export interface PrivateUnlockProtocolOptions {
 }
 
 const UNLOCK_ASSETS = new Set(['/index.html', '/unlock.js', '/unlock.css']);
+const CONVERSION_ASSETS = new Set(['/index.html', '/conversion.js', '/conversion.css']);
+
+export function isPrivateConversionRequestAllowed(url: string, method: string): boolean {
+  const requestPath = allowedPath(url, method);
+  return !!requestPath && CONVERSION_ASSETS.has(requestPath);
+}
 
 export function isPrivateUnlockRequestAllowed(url: string, method: string): boolean {
   const requestPath = allowedPath(url, method);
@@ -103,9 +110,15 @@ export function createPrivateUnlockProtocolHandler(options: PrivateUnlockProtoco
   return createProtocolHandler(options);
 }
 
+/** Creation has no media authority and serves only its three bundled assets. */
+export function createPrivateConversionProtocolHandler(options: PrivateUnlockProtocolOptions): (request: Request) => Promise<Response> {
+  return createProtocolHandler(options, undefined, CONVERSION_ASSETS);
+}
+
 function createProtocolHandler(
   options: PrivateUnlockProtocolOptions,
   mediaAuthority?: Pick<PrivateBrowserProtocolOptions, 'hub' | 'generation'>,
+  staticAssets = UNLOCK_ASSETS,
 ): (request: Request) => Promise<Response> {
   const capsuleCurrent = options.isCurrent;
   let root: string | undefined;
@@ -114,7 +127,7 @@ function createProtocolHandler(
   try {
     if (typeof options.appDirectory !== 'string' || !path.isAbsolute(options.appDirectory) || options.appDirectory.includes('\0')
       || !fs.constants.O_NOFOLLOW || !fs.constants.O_NONBLOCK) { throw new Error(); }
-    root = path.resolve(options.appDirectory);
+    root = resolvePrivateUiDirectory(path.resolve(options.appDirectory));
     rootIdentity = fs.lstatSync(root, { bigint: true });
     if (!rootIdentity.isDirectory() || rootIdentity.isSymbolicLink() || fs.realpathSync.native(root) !== root) { throw new Error(); }
   } catch { root = undefined; rootIdentity = undefined; }
@@ -179,7 +192,7 @@ function createProtocolHandler(
   return async request => {
     if (request.method !== 'GET' && request.method !== 'HEAD') { return empty(405); }
     const requestPath = allowedPath(request.url, request.method);
-    if (!requestPath || (!mediaAuthority && !UNLOCK_ASSETS.has(requestPath)) || !current(request)) { return empty(404); }
+    if (!requestPath || (!mediaAuthority && !staticAssets.has(requestPath)) || !current(request)) { return empty(404); }
     let response: Response | undefined;
     let admittedStaticRead = false;
     try {

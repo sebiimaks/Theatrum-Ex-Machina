@@ -19,6 +19,7 @@
   const next = byId('next-page');
   const pageLabel = byId('page-label');
   const details = byId('details-panel');
+  const detailsScroll = byId('details-scroll');
   const detailsContent = byId('details-content');
   const detailsStatus = byId('details-status');
   const detailsTitle = byId('details-title');
@@ -38,6 +39,13 @@
   const posterPlaceholder = byId('detail-placeholder');
   const video = byId('preview-video');
   const play = byId('play-preview');
+  const filmstripToggle = byId('toggle-filmstrip');
+  const filmstripPanel = byId('filmstrip-panel');
+  const filmstripImage = byId('detail-filmstrip');
+  const filmstripStatus = byId('filmstrip-status');
+  const filmstripViewport = byId('filmstrip-viewport');
+  const filmstripPrevious = byId('filmstrip-previous');
+  const filmstripNext = byId('filmstrip-next');
   const regenerate = byId('regenerate-previews');
   const cancelGeneration = byId('cancel-regeneration');
   const generationStatus = byId('generation-status');
@@ -143,6 +151,9 @@
 
   function previewUrl(value, kind) {
     if (typeof value !== 'string' || value.length > 4096) { return ''; }
+    if (kind === 'filmstrip') {
+      return /^theatrum:\/\/app\/media\/filmstrips\/[a-zA-Z0-9_-]{1,200}\.jpg(?:\?v=[a-f0-9]{32})?$/.exec(value)?.[0] === value ? value : '';
+    }
     try {
       const url = new URL(value);
       const prefix = kind === 'thumbnail' ? '/media/thumbnails/' : '/media/clips/';
@@ -214,6 +225,12 @@
       if (remove) { remove.disabled = !enabled || pending || locked; }
     }
     updateProtection();
+    updateEditFooter();
+  }
+
+  function updateEditFooter() {
+    editFooter.hidden = !selectedDetail || detailsContent.hidden
+      || (!filmstripPanel.hidden && !dirty() && !saving && !reloading && !conflict);
   }
 
   function protectionBlocked() {
@@ -233,6 +250,10 @@
     retryGallery.disabled = locked || !!protectionPending;
     retryDetails.disabled = locked || !!protectionPending;
     play.disabled = locked || regenerating || !!protectionPending || !!video.getAttribute('src');
+    if (locked || regenerating || protectionPending) { closeFilmstrip(); }
+    filmstripToggle.disabled = locked || saving || reloading || detailLoading || regenerating || !!protectionPending
+      || !selectedDetail || !previewUrl(selectedDetail.filmstripUrl, 'filmstrip');
+    updateFilmstripNavigation();
     updatePasswordControls();
     updateCopyControls();
     updateTouchIdControls();
@@ -797,6 +818,7 @@
   }
 
   function applyMetadata(item) {
+    closeFilmstrip();
     selectedDetail = { ...item, tags: Array.isArray(item.tags) ? item.tags.filter(tag => typeof tag === 'string') : [] };
     draftTags = [...selectedDetail.tags];
     tagDraft.value = '';
@@ -817,6 +839,7 @@
   }
 
   function refreshPreviews(item) {
+    closeFilmstrip();
     cancelImages('detail');
     stopVideo();
     const posterUrl = previewUrl(item.posterUrl, 'clip');
@@ -1008,6 +1031,11 @@
           if (success) {
             job.image.hidden = false;
             job.placeholder.hidden = true;
+            if (job.scope === 'filmstrip') {
+              filmstripViewport.hidden = false;
+              filmstripPanel.setAttribute('aria-busy', 'false');
+              updateFilmstripNavigation();
+            }
           } else {
             job.image.removeAttribute('src');
             if (job.attempts < IMAGE_ATTEMPTS) {
@@ -1017,7 +1045,9 @@
                 if (imageIsCurrent(job)) { imageQueue.push(job); pumpImages(); }
               }, job.attempts * 300);
             } else {
-              job.placeholder.textContent = 'Preview unavailable';
+              job.placeholder.textContent = job.scope === 'filmstrip'
+                ? 'Filmstrip unavailable. Hide it and try again.' : 'Preview unavailable';
+              if (job.scope === 'filmstrip') { filmstripPanel.setAttribute('aria-busy', 'false'); }
             }
           }
         }
@@ -1054,14 +1084,69 @@
     play.disabled = false;
   }
 
+  function updateFilmstripNavigation() {
+    const unavailable = locked || filmstripPanel.hidden || filmstripImage.hidden || saving || reloading
+      || regenerating || !!protectionPending;
+    const maximum = Math.max(0, filmstripViewport.scrollWidth - filmstripViewport.clientWidth);
+    filmstripPrevious.disabled = unavailable || filmstripViewport.scrollLeft <= 1;
+    filmstripNext.disabled = unavailable || filmstripViewport.scrollLeft >= maximum - 1;
+  }
+
+  function closeFilmstrip() {
+    cancelImages('filmstrip');
+    // Clear the element even when it never reached the image queue.
+    filmstripImage.onload = null;
+    filmstripImage.onerror = null;
+    filmstripImage.removeAttribute('src');
+    filmstripImage.hidden = true;
+    filmstripPanel.hidden = true;
+    filmstripPanel.setAttribute('aria-busy', 'false');
+    filmstripViewport.hidden = true;
+    filmstripViewport.scrollLeft = 0;
+    filmstripStatus.textContent = '';
+    filmstripStatus.hidden = false;
+    filmstripToggle.textContent = 'Show filmstrip';
+    filmstripToggle.setAttribute('aria-expanded', 'false');
+    filmstripPrevious.disabled = true;
+    filmstripNext.disabled = true;
+    updateEditFooter();
+    pumpImages();
+  }
+
+  function toggleFilmstrip() {
+    if (filmstripToggle.disabled || locked || saving || reloading || detailLoading || regenerating || protectionPending) { return; }
+    if (!filmstripPanel.hidden) { closeFilmstrip(); return; }
+    const url = previewUrl(selectedDetail?.filmstripUrl, 'filmstrip');
+    if (!url) { return; }
+    filmstripPanel.hidden = false;
+    filmstripPanel.setAttribute('aria-busy', 'true');
+    filmstripStatus.textContent = 'Loading filmstrip…';
+    filmstripStatus.hidden = false;
+    filmstripToggle.textContent = 'Hide filmstrip';
+    filmstripToggle.setAttribute('aria-expanded', 'true');
+    updateEditFooter();
+    // Scroll only this panel. scrollIntoView can also move the clipped root
+    // viewport in a short window and make Lock hub unreachable.
+    detailsScroll.scrollTop = 0;
+    queueImage(filmstripImage, filmstripStatus, url, 'filmstrip');
+  }
+
+  function scrollFilmstrip(direction) {
+    if (locked || filmstripPanel.hidden || filmstripImage.hidden || saving || reloading || regenerating || protectionPending) { return; }
+    filmstripViewport.scrollLeft += direction * Math.max(144, filmstripViewport.clientWidth * .8);
+    updateFilmstripNavigation();
+  }
+
   function closeDetails(restoreFocus = false) {
     detailEpoch++;
     clearTimeout(detailRetryTimer);
     cancelImages('detail');
+    closeFilmstrip();
     stopVideo();
     clipUrl = '';
     selectedId = '';
     details.hidden = true;
+    detailsScroll.scrollTop = 0;
     detailsContent.hidden = true;
     detailsStatus.textContent = '';
     detailsTitle.textContent = '';
@@ -1469,6 +1554,11 @@
   regenerate.addEventListener('click', () => { void regeneratePreviews(); });
   cancelGeneration.addEventListener('click', cancelRegeneration);
   play.addEventListener('click', () => { void playPreview(); });
+  filmstripToggle.addEventListener('click', toggleFilmstrip);
+  filmstripPrevious.addEventListener('click', () => { scrollFilmstrip(-1); });
+  filmstripNext.addEventListener('click', () => { scrollFilmstrip(1); });
+  filmstripViewport.addEventListener('scroll', updateFilmstripNavigation);
+  window.addEventListener('resize', updateFilmstripNavigation);
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) { return; }
     const target = event.target;

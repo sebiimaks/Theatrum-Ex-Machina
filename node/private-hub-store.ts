@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { isPrivateHubPassword } from '../interfaces/private-hub-credentials';
-import { PrivateHubLease } from './private-hub-lock';
+import { PrivateHubLease, isPrivateHubLeaseCleanupFailure } from './private-hub-lock';
 import { createPrivateTouchIdCleanupFailure, isPrivateTouchIdCleanupFailure, type PrivateTouchIdProvider } from './private-touch-id';
 
 import {
@@ -26,6 +26,20 @@ export const PRIVATE_HUB_HEADER_FILE = 'private-hub.json';
 // A process may own only one session for a directory, including while locking.
 // A separate filesystem lease arbitrates other cooperating local processes.
 const activeDirectories = new Set<string>();
+const quarantinedDirectories = new Map<string, Error>();
+const CLEANUP_TIMEOUT_MS = 5000;
+const cleanupFailures = new WeakSet<object>();
+
+function cleanupFailure(): Error {
+  const error = new Error('Private hub storage cleanup could not be confirmed.');
+  cleanupFailures.add(error);
+  return error;
+}
+
+/** Main must not restore normal admission or reuse a store after this failure. */
+export function isPrivateHubStoreCleanupFailure(error: unknown): error is Error {
+  return typeof error === 'object' && error !== null && cleanupFailures.has(error);
+}
 
 interface Snapshot {
   dev: number;
@@ -101,6 +115,7 @@ export class PrivateHubStore {
   #changingPassword = false;
   #touchIdDrain: Promise<void> | undefined;
   #touchIdCleanupFailed = false;
+  #cleanupFailure: Error | undefined;
   #lease: PrivateHubLease | undefined;
   readonly #lockController = new AbortController();
 
@@ -123,21 +138,27 @@ export class PrivateHubStore {
       PrivateHubStore.reserve(directory);
       store = new PrivateHubStore(directory, root, header.hubId, key);
       store.attachLease(await PrivateHubLease.acquire(directory));
-      const bytes = Buffer.from(JSON.stringify(header), 'utf8');
-      if (bytes.length > PRIVATE_HUB_MAX_HEADER_BYTES) {
-        throw new Error('The private hub header exceeds its size limit.');
-      }
-      await store.commitFile(path.join(directory, PRIVATE_HUB_HEADER_FILE), bytes, undefined);
-      const published = await store.readFile(
-        path.join(directory, PRIVATE_HUB_HEADER_FILE), PRIVATE_HUB_MAX_HEADER_BYTES,
-      );
-      if (!published.bytes.equals(bytes)) {
-        throw new Error('The newly created private hub header changed before verification.');
-      }
-      store.#header = published.snapshot;
+      // Startup owns file handles too. A lease-loss lock must drain them before
+      // releasing either the OS lease or this process's directory reservation.
+      await store.enqueue(async () => {
+        const bytes = Buffer.from(JSON.stringify(header), 'utf8');
+        if (bytes.length > PRIVATE_HUB_MAX_HEADER_BYTES) {
+          throw new Error('The private hub header exceeds its size limit.');
+        }
+        await store.commitFile(path.join(directory, PRIVATE_HUB_HEADER_FILE), bytes, undefined);
+        const published = await store.readFile(
+          path.join(directory, PRIVATE_HUB_HEADER_FILE), PRIVATE_HUB_MAX_HEADER_BYTES,
+        );
+        if (!published.bytes.equals(bytes)) {
+          throw new Error('The newly created private hub header changed before verification.');
+        }
+        store.#header = published.snapshot;
+      });
+      store.assertUnlocked();
       return store;
     } catch (error) {
       key.fill(0);
+      store?.retainCleanupFailure(error);
       await store?.lock();
       // An interrupted creation can leave an incomplete encrypted directory.
       // Never recursively delete it or adopt it on a subsequent create attempt.
@@ -172,8 +193,8 @@ export class PrivateHubStore {
       return opened;
     } catch (error) {
       key?.fill(0);
-      await store.#lease?.release().catch(() => undefined);
-      activeDirectories.delete(directory);
+      store.retainCleanupFailure(error);
+      await store.lock();
       throw error;
     }
   }
@@ -198,6 +219,8 @@ export class PrivateHubStore {
       const current = await store.readFile(path.join(directory, PRIVATE_HUB_HEADER_FILE), PRIVATE_HUB_MAX_HEADER_BYTES);
       return !signal.aborted && enabled && unchanged(candidate.snapshot, current.snapshot) && candidate.bytes.equals(current.bytes);
     } catch (error) {
+      store.retainCleanupFailure(error);
+      if (isPrivateHubStoreCleanupFailure(error)) { throw error; }
       if (isPrivateTouchIdCleanupFailure(error)) { throw error; }
       return false;
     } finally { await store.lock(); }
@@ -243,8 +266,12 @@ export class PrivateHubStore {
       return opened;
     } catch (error) {
       key?.fill(0);
+      store.retainCleanupFailure(error);
       try { await store.lock(); }
-      catch { throw createPrivateTouchIdCleanupFailure(); }
+      catch (cleanupError) {
+        if (isPrivateHubStoreCleanupFailure(cleanupError)) { throw cleanupError; }
+        throw createPrivateTouchIdCleanupFailure();
+      }
       if (isPrivateTouchIdCleanupFailure(error)) { throw error; }
       throw new Error('Private hub Touch ID unavailable.');
     } finally {
@@ -254,10 +281,34 @@ export class PrivateHubStore {
   }
 
   private static reserve(directory: string): void {
+    const failure = quarantinedDirectories.get(directory);
+    if (failure) { throw failure; }
     if (activeDirectories.has(directory)) {
       throw new Error('This private hub already has an open session in this process.');
     }
     activeDirectories.add(directory);
+  }
+
+  private retainCleanupFailure(error: unknown): void {
+    if (!isPrivateHubStoreCleanupFailure(error) && !isPrivateHubLeaseCleanupFailure(error)) { return; }
+    this.#cleanupFailure ??= quarantinedDirectories.get(this.directory)
+      ?? (isPrivateHubStoreCleanupFailure(error) ? error : cleanupFailure());
+    quarantinedDirectories.set(this.directory, this.#cleanupFailure);
+    // Invalidate immediately; awaiting this from an admitted operation would
+    // deadlock its own queue. lock() retains and reports the failure to owners.
+    void this.lock().catch(() => undefined);
+  }
+
+  private async confirmCleanup(work: () => Promise<unknown>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([Promise.resolve().then(work), new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(cleanupFailure()), CLEANUP_TIMEOUT_MS);
+      })]);
+    } catch {
+      this.retainCleanupFailure(cleanupFailure());
+      throw this.#cleanupFailure;
+    } finally { if (timer) { clearTimeout(timer); } }
   }
 
   private attachLease(lease: PrivateHubLease): void {
@@ -290,7 +341,17 @@ export class PrivateHubStore {
       this.#lockCompletion = Promise.all([this.#queue.catch(() => undefined), this.#touchIdDrain]).then(async () => {
         // Release the OS lock only after already-submitted IO settles.
         // Its persistent inode is never removed, including after replacement.
-        await this.#lease?.release().catch(() => undefined);
+        // The lease owns bounded graceful shutdown, helper exit and descriptor
+        // close phases. Do not race its graceful-kill boundary with our shorter
+        // individual-handle deadline.
+        try { await this.#lease?.release(); }
+        catch {
+          this.retainCleanupFailure(cleanupFailure());
+          throw this.#cleanupFailure;
+        }
+        // Even a late successful close cannot prove that an earlier timeout
+        // was safe. Retain this process reservation until application restart.
+        if (this.#cleanupFailure) { throw this.#cleanupFailure; }
         activeDirectories.delete(this.directory);
         if (this.#touchIdCleanupFailed) { throw createPrivateTouchIdCleanupFailure(); }
       });
@@ -390,7 +451,10 @@ export class PrivateHubStore {
       });
       this.assertWriteCurrent(current);
       return outcome;
-    } catch { throw new Error('Private hub authentication unavailable.'); }
+    } catch {
+      if (this.#cleanupFailure) { throw this.#cleanupFailure; }
+      throw new Error('Private hub authentication unavailable.');
+    }
     finally { authenticatedKey?.fill(0); password = ''; this.#changingPassword = false; }
   }
 
@@ -411,6 +475,7 @@ export class PrivateHubStore {
         return enabled ? 'enabled' : 'disabled';
       });
     } catch (error) {
+      if (this.#cleanupFailure) { throw this.#cleanupFailure; }
       if (isPrivateTouchIdCleanupFailure(error)) { throw error; }
       return 'unavailable';
     }
@@ -491,6 +556,7 @@ export class PrivateHubStore {
         void this.lock();
         throw error;
       }
+      if (this.#cleanupFailure) { throw this.#cleanupFailure; }
       throw new Error('Private hub Touch ID unavailable.');
     } finally {
       wipe();
@@ -536,6 +602,7 @@ export class PrivateHubStore {
       this.assertWriteCurrent(current);
       return result;
     } catch (error) {
+      if (this.#cleanupFailure) { throw this.#cleanupFailure; }
       if (isPrivateTouchIdCleanupFailure(error)) {
         this.#touchIdCleanupFailed = true;
         void this.lock();
@@ -573,11 +640,14 @@ export class PrivateHubStore {
         await this.assertRoot();
         this.assertWriteCurrent(current);
         const entries = await fs.promises.opendir(this.directory);
-        for await (const entry of entries) {
-          this.assertWriteCurrent(current);
-          if (entry.name.startsWith(PRIVATE_HUB_HEADER_FILE + '.')
-            && (entry.name.endsWith('.pending') || entry.name === PRIVATE_HUB_HEADER_FILE + '.bak')) { throw new Error(); }
-        }
+        try {
+          let entry: fs.Dirent | null;
+          while ((entry = await entries.read()) !== null) {
+            this.assertWriteCurrent(current);
+            if (entry.name.startsWith(PRIVATE_HUB_HEADER_FILE + '.')
+              && (entry.name.endsWith('.pending') || entry.name === PRIVATE_HUB_HEADER_FILE + '.bak')) { throw new Error(); }
+          }
+        } finally { await this.confirmCleanup(() => entries.close()); }
         const headerPath = path.join(this.directory, PRIVATE_HUB_HEADER_FILE);
         const candidate = await this.readFile(headerPath, PRIVATE_HUB_MAX_HEADER_BYTES);
         this.assertWriteCurrent(current);
@@ -626,6 +696,7 @@ export class PrivateHubStore {
     } catch (error) {
       if (isPrivateTouchIdCleanupFailure(error)) { this.#touchIdCleanupFailed = true; }
       if (publicationStarted || this.#touchIdCleanupFailed) { void this.lock(); }
+      if (this.#cleanupFailure) { throw this.#cleanupFailure; }
       if (isPrivateTouchIdCleanupFailure(error)) { throw error; }
       throw new Error('Private hub password change unavailable.');
     } finally {
@@ -650,6 +721,7 @@ export class PrivateHubStore {
   }
 
   private assertUnlocked(): void {
+    if (this.#cleanupFailure) { throw this.#cleanupFailure; }
     if (this.#locked) {
       throw new Error('The private hub is locked.');
     }
@@ -785,20 +857,23 @@ export class PrivateHubStore {
     let pending: Candidate['pending'];
     // Stream a potentially large hub namespace instead of allocating all names.
     const entries = await fs.promises.opendir(this.directory);
-    for await (const entry of entries) {
-      this.assertUnlocked();
-      if (!entry.name.startsWith(prefix) || !/^[0-9a-f]{48}\.pending$/.test(entry.name.slice(prefix.length))) {
-        continue;
-      }
-      const candidatePath = path.join(this.directory, entry.name);
-      const candidate = await fs.promises.lstat(candidatePath);
-      if (sameFile(candidate, snapshot)) {
-        if (pending || !candidate.isFile() || candidate.isSymbolicLink() || candidate.nlink !== 2) {
-          throw new Error('The private hub publication has unrecognized hard links.');
+    try {
+      let entry: fs.Dirent | null;
+      while ((entry = await entries.read()) !== null) {
+        this.assertUnlocked();
+        if (!entry.name.startsWith(prefix) || !/^[0-9a-f]{48}\.pending$/.test(entry.name.slice(prefix.length))) {
+          continue;
         }
-        pending = { filePath: candidatePath, snapshot: candidate };
+        const candidatePath = path.join(this.directory, entry.name);
+        const candidate = await fs.promises.lstat(candidatePath);
+        if (sameFile(candidate, snapshot)) {
+          if (pending || !candidate.isFile() || candidate.isSymbolicLink() || candidate.nlink !== 2) {
+            throw new Error('The private hub publication has unrecognized hard links.');
+          }
+          pending = { filePath: candidatePath, snapshot: candidate };
+        }
       }
-    }
+    } finally { await this.confirmCleanup(() => entries.close()); }
     if (!pending) {
       throw new Error('Private hub files must be regular files without unrecognized hard links.');
     }
@@ -841,35 +916,35 @@ export class PrivateHubStore {
     const handle = await fs.promises.open(filePath, flags);
     let bytes: Buffer | undefined;
     try {
-      const opened = await handle.stat();
-      if (!opened.isFile() || opened.nlink !== (publication?.pending ? 2 : 1) || !unchanged(before, opened)
-        || opened.size > maximum || !Number.isSafeInteger(opened.size) || opened.size < 0) {
-        throw new Error('The private hub file changed or exceeds its size limit.');
-      }
-      // One extra byte detects growth without allowing an unbounded readFile allocation.
-      bytes = Buffer.alloc(opened.size + 1);
-      let total = 0;
-      while (total < bytes.length) {
-        this.assertUnlocked();
-        const { bytesRead } = await handle.read(bytes, total, bytes.length - total, total);
-        if (bytesRead === 0) {
-          break;
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile() || opened.nlink !== (publication?.pending ? 2 : 1) || !unchanged(before, opened)
+          || opened.size > maximum || !Number.isSafeInteger(opened.size) || opened.size < 0) {
+          throw new Error('The private hub file changed or exceeds its size limit.');
         }
-        total += bytesRead;
-      }
-      const after = await handle.stat();
-      const currentPublication = allowPublication ? await this.publicationSnapshot(filePath) : undefined;
-      const current = allowPublication ? currentPublication?.snapshot : await fileSnapshot(filePath);
-      await this.assertRoot();
-      if (currentPublication?.pending?.filePath !== publication?.pending?.filePath || total !== opened.size || !unchanged(opened, after) || !current || !unchanged(opened, current)) {
-        throw new Error('The private hub file changed while it was being read.');
-      }
-      return { bytes: bytes.subarray(0, total), snapshot: current, pending: currentPublication?.pending };
+        // One extra byte detects growth without allowing an unbounded readFile allocation.
+        bytes = Buffer.alloc(opened.size + 1);
+        let total = 0;
+        while (total < bytes.length) {
+          this.assertUnlocked();
+          const { bytesRead } = await handle.read(bytes, total, bytes.length - total, total);
+          if (bytesRead === 0) {
+            break;
+          }
+          total += bytesRead;
+        }
+        const after = await handle.stat();
+        const currentPublication = allowPublication ? await this.publicationSnapshot(filePath) : undefined;
+        const current = allowPublication ? currentPublication?.snapshot : await fileSnapshot(filePath);
+        await this.assertRoot();
+        if (currentPublication?.pending?.filePath !== publication?.pending?.filePath || total !== opened.size || !unchanged(opened, after) || !current || !unchanged(opened, current)) {
+          throw new Error('The private hub file changed while it was being read.');
+        }
+        return { bytes: bytes.subarray(0, total), snapshot: current, pending: currentPublication?.pending };
+      } finally { await this.confirmCleanup(() => handle.close()); }
     } catch (error) {
       bytes?.fill(0);
       throw error;
-    } finally {
-      await handle.close();
     }
   }
 
@@ -882,7 +957,7 @@ export class PrivateHubStore {
         }
         await handle.sync();
       } finally {
-        await handle.close();
+        await this.confirmCleanup(() => handle.close());
       }
     }
   }
@@ -895,7 +970,8 @@ export class PrivateHubStore {
     const temporary = path.join(this.directory, path.basename(target) + '.' + randomBytes(24).toString('hex') + '.pending');
     const handle = await fs.promises.open(temporary, 'wx', 0o600);
     let ownedTemporary: Snapshot | undefined;
-    let closed = false;
+    let closing: Promise<void> | undefined;
+    const close = (): Promise<void> => closing ??= this.confirmCleanup(() => handle.close());
     try {
       ownedTemporary = await handle.stat();
       await handle.writeFile(bytes);
@@ -905,8 +981,7 @@ export class PrivateHubStore {
         if (!sameFile(written, ownedTemporary) || !written.isFile() || written.nlink !== 1 || written.size !== bytes.length) { throw new Error(); }
         ownedTemporary = written;
       }
-      await handle.close();
-      closed = true;
+      await close();
       await this.assertRoot();
       const current = await fileSnapshot(target);
       if (expected ? !current || !unchanged(expected, current) : current !== undefined) {
@@ -936,9 +1011,9 @@ export class PrivateHubStore {
       await this.syncDirectory();
       this.assertWriteCurrent(isCurrent);
     } finally {
-      if (!closed) {
-        await handle.close().catch(() => undefined);
-      }
+      // Do not retry uncertain closure or remove its still-owned staging file.
+      // A close failure takes precedence over an ordinary write/stat failure.
+      await close();
       // Clean up only our own staging inode under the original directory.
       try {
         const root = await directorySnapshot(this.directory);

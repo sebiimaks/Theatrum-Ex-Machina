@@ -1,8 +1,11 @@
 import * as assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import type { WebContents } from 'electron';
-import { createPrivateTouchIdCleanupFailure, isPrivateTouchIdCleanupFailure } from './private-touch-id';
+import { createPrivateTouchIdCleanupFailure, isPrivateTouchIdCleanupFailure, type PrivateTouchIdProvider } from './private-touch-id';
+import { PrivateHubStore, PRIVATE_HUB_HEADER_FILE, isPrivateHubStoreCleanupFailure } from './private-hub-store';
 
 const ENTRY_URL = 'theatrum://app/index.html';
 type Handler = (event: any, ...args: unknown[]) => boolean | Promise<boolean>;
@@ -362,6 +365,58 @@ test('failed or absent Touch ID availability leaves password submission usable',
   } finally { await dispose(); }
 });
 
+
+test('storage cleanup uncertainty during Touch ID availability quarantines the password prompt', async t => {
+  // A separate module instance owns this deliberately quarantined admission;
+  // the shipping module has no reset path and the Touch ID case below stays independent.
+  const modulePath = require.resolve('./private-password-request');
+  const cached = require.cache[modulePath];
+  let isolatedRegister: typeof register;
+  try {
+    delete require.cache[modulePath];
+    NodeModule._load = function(request: string, ...args: unknown[]) {
+      if (request === 'electron') { return { ipcMain }; }
+      return originalLoad.call(this, request, ...args);
+    };
+    isolatedRegister = require('./private-password-request').registerPrivatePasswordRequest;
+  } finally { require.cache[modulePath] = cached; NodeModule._load = originalLoad; }
+  const root = await fs.mkdtemp(path.join(__dirname, '..', 'tmp', 'private-password-store-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const directory = path.join(root, 'hub');
+  const store = await PrivateHubStore.create(directory, 'Synthetic prompt storage passphrase');
+  await store.lock();
+  const open = fs.open;
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (args[0] === path.join(directory, PRIVATE_HUB_HEADER_FILE)) {
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => { await close(); throw new Error('Synthetic private storage diagnostic'); });
+    }
+    return handle;
+  });
+  const provider: PrivateTouchIdProvider = {
+    availability: async () => 'available', has: async () => false,
+    enroll: async () => 'unavailable', unlock: async () => undefined, remove: async () => false,
+  };
+  const contents = new Contents(); let cancelled = 0;
+  const options = { contents: contents as unknown as WebContents, isCurrent: () => true,
+    onSubmit: () => assert.fail('Password fallback cannot reopen uncertain storage'), onCancel: () => { cancelled++; },
+    onTouchId: () => assert.fail('Touch ID cannot reopen uncertain storage'),
+    touchIdAvailable: () => PrivateHubStore.touchIdAvailable(directory, provider, new AbortController().signal) };
+  const dispose = isolatedRegister(options);
+  const event = { sender: contents, senderFrame: contents.mainFrame };
+  const submit = handlers.get('private-password-submit')!;
+  assert.equal(await handlers.get('private-password-touch-id-available')!(event), false);
+  assert.equal(cancelled, 1);
+  assert.equal(submit(event, 'fallback'), false);
+  const disposal = dispose();
+  let failure: unknown;
+  await assert.rejects(disposal, error => { failure = error; return isPrivateHubStoreCleanupFailure(error); });
+  assert.equal(handlers.size, 0);
+  assert.equal(dispose(), disposal);
+  await assert.rejects(dispose(), error => error === failure);
+  assert.throws(() => isolatedRegister(options), /unavailable/);
+});
 
 test('a poisoned availability query makes prompt disposal reject and preserves quarantine', async () => {
   const contents = new Contents(); let cancelled = 0;

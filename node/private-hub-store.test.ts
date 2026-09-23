@@ -12,21 +12,23 @@ import {
   PRIVATE_HUB_MAX_SEALED_RECORD_BYTES,
 } from './private-hub-crypto.ts';
 import { PRIVATE_HUB_LOCK_FILE, PrivateHubLease, PrivateHubLeaseError } from './private-hub-lock.ts';
-import { PRIVATE_HUB_HEADER_FILE, PrivateHubStore } from './private-hub-store.ts';
+import { PRIVATE_HUB_HEADER_FILE, PrivateHubStore, isPrivateHubStoreCleanupFailure } from './private-hub-store.ts';
 
 const password = 'Synthetic private hub test passphrase';
 const canary = 'PRIVATE-CANARY-source-video-title-personal-note-and-tags';
 
-async function fixture(t: TestContext): Promise<{ root: string; directory: string; store: PrivateHubStore }> {
+async function fixture(t: TestContext): Promise<{ root: string; directory: string; store: PrivateHubStore; expectQuarantinedClose(): void }> {
   // Keep all synthetic filesystem fixtures inside the authorized checkout.
   const root = await fs.promises.mkdtemp(path.join(path.resolve(__dirname, '..'), '.private-hub-store-test-'));
   const directory = path.join(root, 'vault');
   const store = await PrivateHubStore.create(directory, password);
+  let quarantined = false;
   t.after(async () => {
-    await store.lock();
+    if (quarantined) { await assert.rejects(store.lock(), isPrivateHubStoreCleanupFailure); }
+    else { await store.lock(); }
     await fs.promises.rm(root, { recursive: true, force: true });
   });
-  return { root, directory, store };
+  return { root, directory, store, expectQuarantinedClose: () => { quarantined = true; } };
 }
 
 async function primaryPath(directory: string): Promise<string> {
@@ -584,4 +586,311 @@ test('helper death keeps the shared OS lock until an already-submitted publicati
   } finally {
     await reopened.lock();
   }
+});
+
+async function cleanupRejection(work: Promise<unknown>): Promise<Error> {
+  let failure: Error | undefined;
+  await assert.rejects(work, error => {
+    if (!isPrivateHubStoreCleanupFailure(error)) { return false; }
+    failure = error;
+    return true;
+  });
+  assert.ok(failure);
+  return failure;
+}
+
+async function assertQuarantined(store: PrivateHubStore, directory: string, failure: Error): Promise<void> {
+  assert.equal(store.locked, true);
+  assert.equal(store.lockSignal.aborted, true);
+  await assert.rejects(store.lock(), error => error === failure);
+  await assert.rejects(store.readRecord('catalogue'), error => error === failure);
+  await assert.rejects(PrivateHubStore.open(directory, password), error => error === failure);
+  assert.equal(isPrivateHubStoreCleanupFailure(new Error(failure.message)), false, 'only owned cleanup failures have the brand');
+}
+
+test('uncertain staging closure preserves the old primary and backup and permanently revokes the store', async t => {
+  const { directory, store, expectQuarantinedClose } = await fixture(t);
+  await store.writeRecord('catalogue', Buffer.from(canary));
+  const primary = await primaryPath(directory);
+  const originalBytes = await fs.promises.readFile(primary);
+  const open = fs.promises.open;
+  let failedTemporary: string | undefined;
+  let closeCount = 0;
+  t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    const file = String(args[0]);
+    if (file.startsWith(primary + '.') && !file.startsWith(primary + '.bak.') && file.endsWith('.pending')) {
+      failedTemporary = file;
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => { closeCount++; await close(); throw new Error('Synthetic close failure'); });
+    }
+    return handle;
+  });
+  expectQuarantinedClose();
+  const failure = await cleanupRejection(store.writeRecord('catalogue', Buffer.from('replacement confidential notes')));
+  assert.equal(closeCount, 1, 'the same failed close is not retried or forgotten in finally');
+  assert.deepEqual(await fs.promises.readFile(primary), originalBytes);
+  assert.deepEqual(await fs.promises.readFile(primary + '.bak'), originalBytes);
+  assert.ok(failedTemporary);
+  const staging = await fs.promises.readFile(failedTemporary);
+  assert.equal(staging.includes('replacement confidential notes'), false);
+  await assertQuarantined(store, directory, failure);
+});
+
+test('read cleanup uncertainty overrides an ordinary read error and wipes the owned key and read buffer', async t => {
+  let ownedKey: Buffer | undefined;
+  const create = privateHubCrypto.createPrivateHub;
+  t.mock.method(privateHubCrypto, 'createPrivateHub', async (...args: Parameters<typeof create>) => {
+    const result = await create(...args);
+    ownedKey = result.key;
+    return result;
+  });
+  const { directory, store, expectQuarantinedClose } = await fixture(t);
+  await store.writeRecord('catalogue', Buffer.from(canary));
+  const primary = await primaryPath(directory);
+  const open = fs.promises.open;
+  let ownedBuffer: Buffer | undefined;
+  t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (String(args[0]) === primary) {
+      t.mock.method(handle, 'read', async (buffer: Buffer) => {
+        ownedBuffer = buffer;
+        buffer.fill(37);
+        throw new Error('Synthetic read failure');
+      });
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => { await close(); throw new Error('Synthetic close failure'); });
+    }
+    return handle;
+  });
+  expectQuarantinedClose();
+  const failure = await cleanupRejection(store.readRecord('catalogue'));
+  assert.ok(ownedKey?.every(byte => byte === 0));
+  assert.ok(ownedBuffer?.every(byte => byte === 0));
+  await assertQuarantined(store, directory, failure);
+});
+
+test('directory fsync closure uncertainty prevents reporting a published write as safely completed', { skip: process.platform === 'win32' }, async t => {
+  const { directory, store, expectQuarantinedClose } = await fixture(t);
+  const open = fs.promises.open;
+  let closed = 0;
+  t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (String(args[0]) === directory) {
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => { closed++; await close(); throw new Error('Synthetic directory close failure'); });
+    }
+    return handle;
+  });
+  expectQuarantinedClose();
+  const failure = await cleanupRejection(store.writeRecord('catalogue', Buffer.from(canary)));
+  assert.equal(closed, 1);
+  const primary = await primaryPath(directory);
+  assert.equal((await fs.promises.readFile(primary)).includes(canary), false);
+  await assertQuarantined(store, directory, failure);
+});
+
+test('password directory iteration reports uncertain closure even when its body rejects stale header files', async t => {
+  const { directory, store, expectQuarantinedClose } = await fixture(t);
+  const header = path.join(directory, PRIVATE_HUB_HEADER_FILE);
+  await fs.promises.copyFile(header, header + '.bak');
+  const before = await fingerprint(directory);
+  const opendir = fs.promises.opendir;
+  t.mock.method(fs.promises, 'opendir', async (...args: Parameters<typeof opendir>) => {
+    const entries = await opendir(...args);
+    const close = entries.close.bind(entries);
+    t.mock.method(entries, 'close', async () => { await close(); throw new Error('Synthetic iterator close failure'); });
+    return entries;
+  });
+  expectQuarantinedClose();
+  const failure = await cleanupRejection(store.changePassword(password, 'Synthetic replacement password', () => true));
+  assert.deepEqual(await fingerprint(directory), before);
+  await assertQuarantined(store, directory, failure);
+});
+
+test('publication directory iteration cannot repair aliases after its descriptor closure is unconfirmed', async t => {
+  const { directory, store, expectQuarantinedClose } = await fixture(t);
+  await store.writeRecord('catalogue', Buffer.from(canary));
+  const primary = await primaryPath(directory);
+  const alias = primary + '.' + 'a'.repeat(48) + '.pending';
+  await fs.promises.link(primary, alias);
+  const before = await fingerprint(directory);
+  const opendir = fs.promises.opendir;
+  t.mock.method(fs.promises, 'opendir', async (...args: Parameters<typeof opendir>) => {
+    const entries = await opendir(...args);
+    const close = entries.close.bind(entries);
+    t.mock.method(entries, 'close', async () => { await close(); throw new Error('Synthetic iterator close failure'); });
+    return entries;
+  });
+  expectQuarantinedClose();
+  const failure = await cleanupRejection(store.readRecord('catalogue'));
+  assert.deepEqual(await fingerprint(directory), before);
+  assert.equal((await fs.promises.stat(alias)).nlink, 2);
+  await assertQuarantined(store, directory, failure);
+});
+
+test('a stalled descriptor close fails within its cleanup deadline and stays quarantined after late success', async t => {
+  const { directory, store, expectQuarantinedClose } = await fixture(t);
+  await store.writeRecord('catalogue', Buffer.from(canary));
+  const primary = await primaryPath(directory);
+  const schedule = globalThis.setTimeout;
+  let latestDeadline: (() => void) | undefined;
+  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, milliseconds: number, ...args: unknown[]) => {
+    if (milliseconds === 5000) { latestDeadline = () => callback(...args); }
+    return schedule(callback, milliseconds, ...args);
+  });
+  let enterClose: () => void;
+  const entered = new Promise<void>(resolve => { enterClose = resolve; });
+  let finishClose: () => void;
+  const delayed = new Promise<void>(resolve => { finishClose = resolve; });
+  t.after(() => finishClose());
+  let expireClose: (() => void) | undefined;
+  const open = fs.promises.open;
+  t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (String(args[0]) === primary) {
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => {
+        expireClose = latestDeadline;
+        await close();
+        enterClose();
+        await delayed;
+      });
+    }
+    return handle;
+  });
+  const reading = store.readRecord('catalogue');
+  await entered;
+  const locking = store.lock();
+  let drained = false;
+  void locking.then(() => { drained = true; }, () => { drained = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(drained, false, 'locking waits for admitted descriptor cleanup');
+  expectQuarantinedClose();
+  assert.ok(expireClose);
+  expireClose();
+  const failure = await cleanupRejection(reading);
+  await assert.rejects(locking, error => error === failure);
+  finishClose();
+  await delayed;
+  await new Promise(resolve => setImmediate(resolve));
+  await assertQuarantined(store, directory, failure);
+});
+
+test('static create failure retains cleanup uncertainty and wipes the key before a store can escape', async t => {
+  const { root } = await fixture(t);
+  const directory = path.join(root, 'failed-create');
+  let ownedKey: Buffer | undefined;
+  const create = privateHubCrypto.createPrivateHub;
+  t.mock.method(privateHubCrypto, 'createPrivateHub', async (...args: Parameters<typeof create>) => {
+    const result = await create(...args);
+    ownedKey = result.key;
+    return result;
+  });
+  const open = fs.promises.open;
+  t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (String(args[0]).startsWith(path.join(directory, PRIVATE_HUB_HEADER_FILE) + '.') && String(args[0]).endsWith('.pending')) {
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => { await close(); throw new Error('Synthetic creation close failure'); });
+    }
+    return handle;
+  });
+  const failure = await cleanupRejection(PrivateHubStore.create(directory, password));
+  assert.ok(ownedKey?.every(byte => byte === 0));
+  await assert.rejects(PrivateHubStore.open(directory, password), error => error === failure);
+  await assert.rejects(fs.promises.stat(path.join(directory, PRIVATE_HUB_HEADER_FILE)), { code: 'ENOENT' });
+});
+
+test('static open cannot normalize a header descriptor close failure or release its process reservation', async t => {
+  const { directory, store } = await fixture(t);
+  await store.lock();
+  const open = fs.promises.open;
+  t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (String(args[0]) === path.join(directory, PRIVATE_HUB_HEADER_FILE)) {
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => { await close(); throw new Error('Synthetic header close failure'); });
+    }
+    return handle;
+  });
+  const failure = await cleanupRejection(PrivateHubStore.open(directory, password));
+  await assert.rejects(PrivateHubStore.open(directory, password), error => error === failure);
+});
+
+test('store startup retains lease cleanup uncertainty before acquisition returns and after wrong-password rejection', async t => {
+  for (const phase of ['acquire', 'release'] as const) {
+    await t.test(phase, async subtest => {
+      const { directory, store } = await fixture(subtest);
+      await store.lock();
+      const open = fs.promises.open;
+      subtest.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+        const handle = await open(...args);
+        if (String(args[0]) === path.join(directory, PRIVATE_HUB_LOCK_FILE)) {
+          if (phase === 'acquire') { subtest.mock.method(handle, 'stat', async () => { throw new Error('Synthetic lease stat failure'); }); }
+          const close = handle.close.bind(handle);
+          subtest.mock.method(handle, 'close', async () => { await close(); throw new Error('Synthetic lease close failure'); });
+        }
+        return handle;
+      });
+      const failure = await cleanupRejection(PrivateHubStore.open(directory, phase === 'acquire' ? password : 'wrong password'));
+      await assert.rejects(PrivateHubStore.open(directory, password), error => error === failure);
+    });
+  }
+});
+
+test('helper death during creation drains the startup handle before releasing admission and retains late cleanup failure', async t => {
+  const { root } = await fixture(t);
+  const directory = path.join(root, 'interrupted-create');
+  let enterClose: () => void;
+  const entered = new Promise<void>(resolve => { enterClose = resolve; });
+  let finishClose: () => void;
+  const delayed = new Promise<void>(resolve => { finishClose = resolve; });
+  t.after(() => finishClose());
+  const open = fs.promises.open;
+  t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (String(args[0]).startsWith(path.join(directory, PRIVATE_HUB_HEADER_FILE) + '.') && String(args[0]).endsWith('.pending')) {
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => {
+        enterClose();
+        await delayed;
+        await close();
+        throw new Error('Synthetic startup close failure');
+      });
+    }
+    return handle;
+  });
+  const spawn = childProcess.spawn;
+  let helper: childProcess.ChildProcess | undefined;
+  const spawning = t.mock.method(childProcess, 'spawn', (...args: Parameters<typeof spawn>) => {
+    helper = spawn(...args);
+    return helper;
+  });
+  const lock = PrivateHubStore.prototype.lock;
+  const lockingStores: PrivateHubStore[] = [];
+  t.mock.method(PrivateHubStore.prototype, 'lock', function(this: PrivateHubStore): Promise<void> {
+    if (this.directory === directory) { lockingStores.push(this); }
+    return lock.call(this);
+  });
+  const creation = PrivateHubStore.create(directory, password);
+  await entered;
+  spawning.mock.restore();
+  assert.ok(helper);
+  const exited = once(helper, 'close');
+  helper.kill('SIGKILL');
+  await exited;
+  const creatingStore = lockingStores[0];
+  assert.ok(creatingStore);
+  const locking = creatingStore.lock();
+  let drained = false;
+  void locking.then(() => { drained = true; }, () => { drained = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(drained, false);
+  await assert.rejects(PrivateHubStore.open(directory, password), /already has an open session/);
+  await assert.rejects(PrivateHubLease.acquire(directory), PrivateHubLeaseError);
+  finishClose();
+  const failure = await cleanupRejection(creation);
+  await assert.rejects(locking, error => error === failure);
+  await assertQuarantined(creatingStore, directory, failure);
 });

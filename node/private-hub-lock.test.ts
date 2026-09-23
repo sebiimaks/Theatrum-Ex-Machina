@@ -1,12 +1,13 @@
 import * as assert from 'node:assert/strict';
 import * as childProcess from 'node:child_process';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { test, type TestContext } from 'node:test';
+import { PassThrough } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { PRIVATE_HUB_LOCK_FILE, PrivateHubLease, PrivateHubLeaseError } from './private-hub-lock.ts';
+import { isPrivateHubLeaseCleanupFailure, PRIVATE_HUB_LOCK_FILE, PrivateHubLease, PrivateHubLeaseError } from './private-hub-lock.ts';
 
 const root = path.resolve(__dirname, '..');
 
@@ -225,4 +226,130 @@ test('unsupported filesystem response is clear and unexpected post-ready output 
   await once(lease.lostSignal, 'abort');
   await assert.rejects(lease.assertOwned(), /lock was lost/);
   await lease.release();
+});
+
+function shortCleanupDeadlines(t: TestContext): void {
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) =>
+    schedule(callback, milliseconds === 5_000 ? 50 : milliseconds === 10_000 ? 100 : milliseconds, ...args));
+}
+
+function unconfirmedHelper(t: TestContext, response: string): { child: EventEmitter; kills: () => number } {
+  let kills = 0;
+  const child = Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+    exitCode: null, signalCode: null,
+    kill: () => { kills++; return false; },
+  });
+  t.mock.method(childProcess, 'spawn', () => {
+    process.nextTick(() => child.stdout.emit('data', Buffer.from(response)));
+    return child;
+  });
+  return { child, kills: () => kills };
+}
+
+test('pre-helper refusal is ordinary only when its owned descriptor closes successfully', async t => {
+  const directory = await fixture(t);
+  const file = path.join(directory, PRIVATE_HUB_LOCK_FILE);
+  await fs.promises.writeFile(file, 'invalid lock contents', { mode: 0o600 });
+  await assert.rejects(PrivateHubLease.acquire(directory), error => !isPrivateHubLeaseCleanupFailure(error));
+  const open = fs.promises.open;
+  t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    const close = handle.close.bind(handle);
+    t.mock.method(handle, 'close', async () => { await close(); throw new Error('synthetic close failure'); });
+    return handle;
+  });
+  await assert.rejects(PrivateHubLease.acquire(directory), error => {
+    assert.ok(isPrivateHubLeaseCleanupFailure(error));
+    assert.equal(isPrivateHubLeaseCleanupFailure(new Error(error.message)), false);
+    assert.equal(isPrivateHubLeaseCleanupFailure({ message: error.message }), false);
+    return true;
+  });
+});
+
+test('parent descriptor rejection remains the same branded failure on every release', async t => {
+  const directory = await fixture(t);
+  const open = fs.promises.open;
+  let closes = 0;
+  const capture = t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    const close = handle.close.bind(handle);
+    t.mock.method(handle, 'close', async () => { closes++; await close(); throw new Error('synthetic close failure'); });
+    return handle;
+  });
+  const lease = await PrivateHubLease.acquire(directory);
+  capture.mock.restore();
+  const release = lease.release();
+  let failure: unknown;
+  await assert.rejects(release, error => { failure = error; return isPrivateHubLeaseCleanupFailure(error); });
+  assert.equal(lease.lostSignal.aborted, true);
+  assert.equal(lease.release(), release);
+  await assert.rejects(lease.release(), error => error === failure);
+  assert.equal(closes, 1);
+});
+
+test('descriptor-close timeout cannot be reset by its later successful settlement', async t => {
+  const directory = await fixture(t);
+  const open = fs.promises.open;
+  let finish!: () => void;
+  const delayed = new Promise<void>(resolve => { finish = resolve; });
+  const capture = t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    const close = handle.close.bind(handle);
+    t.mock.method(handle, 'close', async () => { await close(); await delayed; });
+    return handle;
+  });
+  const lease = await PrivateHubLease.acquire(directory);
+  capture.mock.restore();
+  shortCleanupDeadlines(t);
+  const release = lease.release();
+  let failure: unknown;
+  await assert.rejects(release, error => { failure = error; return isPrivateHubLeaseCleanupFailure(error); });
+  finish();
+  await delayed;
+  assert.equal(lease.release(), release);
+  await assert.rejects(lease.release(), error => error === failure);
+  assert.equal(lease.lostSignal.aborted, true);
+});
+
+test('unconfirmed helper exit attempts descriptor closure and stays failed after late exit', async t => {
+  const directory = await fixture(t);
+  const file = path.join(directory, PRIVATE_HUB_LOCK_FILE);
+  await fs.promises.writeFile(file, '', { mode: 0o600 });
+  const stat = await fs.promises.stat(file);
+  const helper = unconfirmedHelper(t, `READY ${stat.dev} ${stat.ino}\n`);
+  const open = fs.promises.open;
+  let closes = 0;
+  t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    const close = handle.close.bind(handle);
+    t.mock.method(handle, 'close', async () => { closes++; await close(); });
+    return handle;
+  });
+  const lease = await PrivateHubLease.acquire(directory);
+  shortCleanupDeadlines(t);
+  const release = lease.release();
+  let failure: unknown;
+  await assert.rejects(release, error => { failure = error; return isPrivateHubLeaseCleanupFailure(error); });
+  assert.equal(helper.kills(), 1);
+  assert.equal(closes, 1);
+  helper.child.emit('exit');
+  helper.child.emit('close');
+  assert.equal(lease.release(), release);
+  await assert.rejects(lease.release(), error => error === failure);
+});
+
+test('failed handshake propagates unconfirmed helper cleanup before any lease is returned', async t => {
+  const directory = await fixture(t);
+  const helper = unconfirmedHelper(t, 'INVALID\n');
+  shortCleanupDeadlines(t);
+  let failure: unknown;
+  await assert.rejects(PrivateHubLease.acquire(directory), error => {
+    failure = error;
+    return isPrivateHubLeaseCleanupFailure(error);
+  });
+  assert.equal(helper.kills(), 1);
+  helper.child.emit('close');
+  assert.ok(isPrivateHubLeaseCleanupFailure(failure));
 });

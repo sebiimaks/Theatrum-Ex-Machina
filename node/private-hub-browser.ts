@@ -5,13 +5,17 @@ import * as path from 'node:path';
 import type { PrivateHubSession } from './private-hub-session';
 import { THEATRUM_APP_PROTOCOL } from '../interfaces/theatrum-protocol';
 import { createPrivateBrowserProtocolHandler, createPrivateUnlockProtocolHandler, isPrivateBrowserRequestAllowed,
-  isPrivateUnlockRequestAllowed, PRIVATE_BROWSER_ENTRY_URL } from './private-browser-protocol';
+  isPrivateUnlockRequestAllowed, createPrivateConversionProtocolHandler, isPrivateConversionRequestAllowed, PRIVATE_BROWSER_ENTRY_URL } from './private-browser-protocol';
+import { registerPrivateConversionRequest } from './private-conversion-request';
+import type { PrivateConversionReview, PrivateConversionProgress } from '../interfaces/private-conversion';
 import { registerPrivatePasswordRequest } from './private-password-request';
 import { registerPrivateGalleryRequest } from './private-gallery-request';
 import { PrivateHubIdleLock } from './private-hub-idle-lock';
 import { acquirePrivateNativeMenu, isPrivateNativeMenuCleanupFailure } from './private-native-menu';
-import type { PrivateHubUnlockChoice } from './private-hub-open';
+import type { PrivateHubPreparedOpen, PrivateHubUnlockChoice } from './private-hub-open';
 import { privateNativeInputAction } from './private-native-input';
+import { getPrivateUiPath } from './private-ui-paths';
+import { privateConversionDestination } from './private-conversion-destination';
 
 /** External ownership is main-only and requires a caller-owned abort lifetime. */
 export type PrivateHubLifecycle = 'standalone' | 'external';
@@ -39,8 +43,22 @@ export interface PrivatePasswordPromptOptions {
   readonly lifecycle?: PrivateHubLifecycle;
 }
 
+export interface PrivateConversionPromptOptions {
+  readonly signal: AbortSignal;
+  readonly isCurrent: () => boolean;
+  readonly visible?: boolean;
+  readonly lifecycle?: PrivateHubLifecycle;
+  readonly review: PrivateConversionReview;
+  /** Abort conversion work synchronously; browser disposal then drains the request. */
+  readonly onRetire: () => void;
+  readonly start: (password: string, allowMissingPreviews: boolean,
+    onProgress: (progress: PrivateConversionProgress) => void,
+    chooseDestination: () => Promise<string | undefined>) => Promise<PrivateHubPreparedOpen | undefined>;
+}
+
 type BrowserAuthority = { kind: 'hub'; options: PrivateHubBrowserOptions }
-  | { kind: 'password'; options: PrivatePasswordPromptOptions; submitted: (password: PrivateHubUnlockChoice) => void };
+  | { kind: 'password'; options: PrivatePasswordPromptOptions; submitted: (password: PrivateHubUnlockChoice) => void }
+  | { kind: 'conversion'; options: PrivateConversionPromptOptions; prepared: (result: PrivateHubPreparedOpen) => void };
 
 let activeBrowser: PrivateHubBrowser | undefined;
 const disposedFailures = new WeakSet<Error>();
@@ -71,6 +89,9 @@ export class PrivateHubBrowser {
   readonly #submitted: ((password: PrivateHubUnlockChoice) => void) | undefined;
   readonly #touchIdAvailable: (() => Promise<boolean>) | undefined;
   readonly #observesSystemLifecycle: boolean;
+  readonly #conversion?: PrivateConversionPromptOptions;
+  readonly #prepared?: (result: PrivateHubPreparedOpen) => void;
+  #disposeConversionRequest?: () => Promise<void>;
   #disposePasswordRequest: (() => Promise<void>) | undefined;
   #disposeGalleryRequest: (() => Promise<void>) | undefined;
   #idleLock: PrivateHubIdleLock | undefined;
@@ -96,12 +117,18 @@ export class PrivateHubBrowser {
       this.#hubRevokedDrain = options.hub.revocationDrained(options.generation);
       this.#transitionSignal = options.signal;
       this.#isAuthorized = options.isAuthorized ?? (() => true);
-    } else {
+    } else if (authority.kind === 'password') {
       this.#appDirectory = path.resolve(__dirname, '../private-unlock');
       this.#signal = authority.options.signal;
       this.#isAuthorized = authority.options.isCurrent;
       this.#submitted = authority.submitted;
       this.#touchIdAvailable = authority.options.touchIdAvailable;
+    } else {
+      this.#conversion = Object.freeze({ ...authority.options });
+      this.#prepared = authority.prepared;
+      this.#appDirectory = path.resolve(__dirname, '../private-conversion');
+      this.#signal = authority.options.signal;
+      this.#isAuthorized = authority.options.isCurrent;
     }
     this.#closed = new Promise(resolve => { this.#resolveClosed = resolve; });
   }
@@ -148,6 +175,30 @@ export class PrivateHubBrowser {
       await browser?.close().catch(() => undefined);
       throw unavailable(browser ? browser.#cleanupComplete && !browser.#cleanupFailed && !browser.#window : !activeBrowser);
     } finally { password = undefined; }
+  }
+
+  /** A one-use creation window; prepared credentials leave only after confirmed browser/work drainage. */
+  static async requestConversion(options: PrivateConversionPromptOptions): Promise<PrivateHubPreparedOpen | undefined> {
+    let browser: PrivateHubBrowser | undefined;
+    let prepared: PrivateHubPreparedOpen | undefined;
+    try {
+      const captured = Object.freeze({ ...options });
+      const { signal, isCurrent } = captured;
+      if (!(signal instanceof AbortSignal) || !app.isReady() || activeBrowser || signal.aborted || isCurrent() !== true) {
+        throw unavailable();
+      }
+      browser = new PrivateHubBrowser({ kind: 'conversion', options: captured, prepared: value => { prepared = value; } });
+      activeBrowser = browser;
+      await browser.initialize();
+      if (captured.visible !== false) { browser.show(); }
+      await browser.closed;
+      if (browser.status.cleanupFailed) { throw unavailable(); }
+      const authorized = !signal.aborted && isCurrent() === true;
+      return authorized && !signal.aborted ? prepared : undefined;
+    } catch {
+      await browser?.close().catch(() => undefined);
+      throw unavailable(browser ? browser.#cleanupComplete && !browser.#cleanupFailed && !browser.#window : !activeBrowser);
+    } finally { prepared = undefined; }
   }
 
   get status(): Readonly<{ state: 'opening' | 'open' | 'closed'; cleanupFailed: boolean }> {
@@ -207,7 +258,7 @@ export class PrivateHubBrowser {
 
   private async initialize(): Promise<void> {
     try {
-      this.#nativeMenu = acquirePrivateNativeMenu({ kind: this.#submitted ? 'password' : 'hub',
+      this.#nativeMenu = acquirePrivateNativeMenu({ kind: this.#conversion ? 'conversion' : this.#submitted ? 'password' : 'hub',
         onClose: () => this.retire(), onPaste: () => this.nativeEdit('paste'), onSelectAll: () => this.nativeEdit('select-all') });
     } catch (error) {
       if (isPrivateNativeMenuCleanupFailure(error)) { this.#cleanupFailed = true; }
@@ -247,7 +298,8 @@ export class PrivateHubBrowser {
     isolated.webRequest.onBeforeRequest((details, callback) => {
       let allowed = false;
       try {
-        const routeAllowed = this.#submitted ? isPrivateUnlockRequestAllowed : isPrivateBrowserRequestAllowed;
+        const routeAllowed = this.#conversion ? isPrivateConversionRequestAllowed
+          : this.#submitted ? isPrivateUnlockRequestAllowed : isPrivateBrowserRequestAllowed;
         allowed = this.current() && routeAllowed(details.url, details.method)
           && !!this.#window && !this.#window.isDestroyed() && details.webContentsId === this.#window.webContents.id
           && details.resourceType !== 'subFrame'
@@ -279,7 +331,9 @@ export class PrivateHubBrowser {
       ? createPrivateBrowserProtocolHandler({
         hub: this.#hub, generation: this.#generation!, appDirectory: this.#appDirectory, isCurrent: this.current,
       })
-      : createPrivateUnlockProtocolHandler({ appDirectory: this.#appDirectory, isCurrent: this.current });
+      : this.#conversion
+        ? createPrivateConversionProtocolHandler({ appDirectory: this.#appDirectory, isCurrent: this.current })
+        : createPrivateUnlockProtocolHandler({ appDirectory: this.#appDirectory, isCurrent: this.current });
     // A generic 404 document can otherwise count as a successful navigation.
     // Validate the app entry before creating a renderer or allowing show().
     const entry = await handler(new Request(PRIVATE_BROWSER_ENTRY_URL, { method: 'HEAD' }));
@@ -287,13 +341,15 @@ export class PrivateHubBrowser {
     this.assertCurrent();
     await isolated.protocol.handle(THEATRUM_APP_PROTOCOL, handler);
     this.assertCurrent();
-    const preload = path.resolve(__dirname, this.#submitted ? '../private-password-preload.cjs' : '../private-gallery-preload.cjs');
+    const preload = getPrivateUiPath(this.#conversion ? 'private-conversion-preload.cjs'
+      : this.#submitted ? 'private-password-preload.cjs' : 'private-gallery-preload.cjs');
     const stat = fs.lstatSync(preload);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs.realpathSync.native(preload) !== preload) { throw unavailable(); }
     const window = new BrowserWindow({
-      title: this.#submitted ? 'Unlock private hub — Theatrum Ex Machina' : 'Private hub — Theatrum Ex Machina',
-      show: false, width: this.#submitted ? 540 : 1200, height: this.#submitted ? 620 : 800,
-      minWidth: this.#submitted ? 400 : 600, minHeight: 400,
+      title: this.#conversion ? 'Create private copy — Theatrum Ex Machina'
+        : this.#submitted ? 'Unlock private hub — Theatrum Ex Machina' : 'Private hub — Theatrum Ex Machina',
+      show: false, width: this.#conversion ? 680 : this.#submitted ? 540 : 1200, height: this.#conversion ? 860 : this.#submitted ? 620 : 800,
+      minWidth: this.#conversion ? 440 : this.#submitted ? 400 : 600, minHeight: 400,
       webPreferences: {
         session: isolated,
         nodeIntegration: false, nodeIntegrationInSubFrames: false, nodeIntegrationInWorker: false,
@@ -345,7 +401,37 @@ export class PrivateHubBrowser {
     window.on('close', event => {
       if (!this.#retiring) { event.preventDefault(); this.retire(); }
     });
-    if (this.#submitted) {
+    if (this.#conversion) {
+      this.#disposeConversionRequest = registerPrivateConversionRequest({
+        contents, isCurrent: this.current, review: this.#conversion.review,
+        onCancel: () => this.retire(), onComplete: () => this.retire(),
+        start: async (password, allowMissing, onProgress) => {
+          try {
+            const preparing = this.#conversion!.start(password, allowMissing, onProgress, async () => {
+              this.assertCurrent();
+              const result = await dialog.showOpenDialog(window, {
+                title: 'Create private copy',
+                message: 'Choose a folder to contain the encrypted copy. A new “Private hub” subfolder will be created; existing files will not be replaced.',
+                buttonLabel: 'Create private copy here',
+                properties: ['openDirectory', 'createDirectory', 'dontAddToRecent'], securityScopedBookmarks: false,
+              });
+              this.assertCurrent();
+              if (result.canceled) { return undefined; }
+              if (result.filePaths.length !== 1) { throw new Error('The destination folder is unavailable.'); }
+              const destination = await privateConversionDestination(result.filePaths[0]);
+              this.assertCurrent();
+              return destination;
+            });
+            password = '';
+            const prepared = await preparing;
+            this.assertCurrent();
+            if (!prepared) { return 'cancelled'; }
+            this.#prepared!(prepared);
+            return 'completed';
+          } finally { password = ''; }
+        },
+      });
+    } else if (this.#submitted) {
       this.#disposePasswordRequest = registerPrivatePasswordRequest({
         contents, isCurrent: this.current, onSubmit: this.#submitted, onCancel: () => this.retire(),
         touchIdAvailable: this.#touchIdAvailable, onTouchId: () => this.#submitted!({ method: 'touch-id' }),
@@ -401,6 +487,10 @@ export class PrivateHubBrowser {
     if (this.#retiring) { return; }
     this.#retiring = true;
     this.#state = 'closed';
+    try { this.#conversion?.onRetire(); } catch { this.#cleanupFailed = true; }
+    let conversionDrain: Promise<void> | undefined;
+    try { conversionDrain = this.#disposeConversionRequest?.(); } catch { this.#cleanupFailed = true; }
+    this.#disposeConversionRequest = undefined;
     this.#idleLock?.dispose();
     this.#idleLock = undefined;
     this.#signal.removeEventListener('abort', this.onRevoked);
@@ -426,7 +516,7 @@ export class PrivateHubBrowser {
     const isolated = this.#session;
     const cleanup: (() => Promise<unknown>)[] = [() => hubDrain ?? Promise.resolve(),
       () => this.#hubRevokedDrain ?? Promise.resolve(), () => galleryDrain ?? Promise.resolve(),
-      () => passwordDrain ?? Promise.resolve()];
+      () => passwordDrain ?? Promise.resolve(), () => conversionDrain ?? Promise.resolve()];
     if (isolated) {
       cleanup.push(() => isolated.closeAllConnections(), () => isolated.clearData(),
         () => isolated.clearCache(), () => isolated.clearCodeCaches({}),

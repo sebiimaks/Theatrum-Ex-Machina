@@ -64,6 +64,8 @@ You can also export an editable `.scaena` catalogue as a Video Hub App-compatibl
 
 ## What's new in 2.0.0
 
+For the password-protected private-hub workflow in the macOS development branch, see [Try private hubs](./docs/private-hubs-first-build.md). This experimental feature is separate from the published 2.0.0 release.
+
 - A redesigned library with catalogue navigation, consistent gallery controls, searchable settings, and improved compact layouts.
 - Collapsible tag hierarchies, a Recently played collection, and a gallery toolbar for Word cloud, Similar, Recent, Details, and Tags.
 - Clear video selection, optional Auto-open Details, and editable notes in the bottom Details panel.

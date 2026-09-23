@@ -19,6 +19,10 @@ class ElementStub {
   readOnly = false;
   disabled = false;
   checked = false;
+  scrollLeft = 0;
+  scrollTop = 0;
+  clientWidth = 300;
+  scrollWidth = 1200;
   value = '';
   className = '';
   attributes = new Map<string, string>();
@@ -95,6 +99,7 @@ function ready(items: any[], total = items.length, offset = 0): any { return { s
 function detail(entry = item(), overrides: Record<string, unknown> = {}): any {
   return { status: 'ready', item: { ...entry, notes: 'Private notes',
     posterUrl: 'theatrum://app/media/clips/0.jpg', clipUrl: 'theatrum://app/media/clips/0.mp4',
+    filmstripUrl: 'theatrum://app/media/filmstrips/0.jpg',
     editable: true, regenerable: true, revision: 'a'.repeat(32), ...overrides } };
 }
 
@@ -268,6 +273,231 @@ test('private gallery caps visible image loading at three, leaving clip capacity
   assert.match(failed.parent!.textContent, /Preview unavailable/);
   assert.equal(h.timers, 0);
   assert.equal(h.activeImages.length, 0);
+});
+
+test('filmstrips load only when requested and share the bounded image queue with thumbnails and posters', async () => {
+  const h = harness({ list: async () => ready(Array.from({ length: 6 }, (_, index) => item(index))) });
+  await selectFirst(h);
+  const strip = h.byId('detail-filmstrip');
+  assert.equal(strip.src, '');
+  assert.equal(h.byId('filmstrip-panel').hidden, true);
+  assert.equal(h.activeImages.length, 3);
+  h.byId('toggle-filmstrip').fire('click');
+  assert.equal(strip.src, '', 'An explicit request still waits for image admission');
+  assert.equal(h.byId('toggle-filmstrip').getAttribute('aria-expanded'), 'true');
+  assert.equal(h.byId('filmstrip-panel').getAttribute('aria-busy'), 'true');
+  while (!strip.onload) {
+    assert.ok(h.activeImages.length > 0 && h.activeImages.length <= 3);
+    h.activeImages[0].onload!();
+  }
+  assert.equal(strip.src, 'theatrum://app/media/filmstrips/0.jpg');
+  assert.ok(h.activeImages.length <= 3);
+  strip.onload();
+  assert.equal(strip.hidden, false);
+  assert.equal(h.byId('filmstrip-viewport').hidden, false);
+  assert.equal(h.byId('filmstrip-panel').getAttribute('aria-busy'), 'false');
+  assert.equal(h.byId('filmstrip-previous').disabled, true);
+  assert.equal(h.byId('filmstrip-next').disabled, false);
+  h.byId('filmstrip-next').fire('click');
+  assert.ok(h.byId('filmstrip-viewport').scrollLeft > 0);
+  assert.equal(h.byId('filmstrip-previous').disabled, false);
+  h.byId('filmstrip-viewport').scrollLeft = 900;
+  h.byId('filmstrip-viewport').fire('scroll');
+  assert.equal(h.byId('filmstrip-next').disabled, true);
+  assert.equal(h.byId('preview-video').plays, 0);
+});
+
+test('hiding a loading or retrying filmstrip cancels its work and old callbacks cannot repaint a reopened strip', async () => {
+  for (const retrying of [false, true]) {
+    const h = harness(); await selectFirst(h);
+    h.byId('toggle-filmstrip').fire('click');
+    const strip = h.byId('detail-filmstrip');
+    const lateLoad = strip.onload!;
+    const lateError = strip.onerror!;
+    if (retrying) { lateError(); assert.equal(h.timers, 1); }
+    h.byId('toggle-filmstrip').fire('click');
+    assert.equal(h.timers, 0);
+    assert.equal(strip.src, '');
+    assert.equal(strip.onload, null);
+    assert.equal(strip.onerror, null);
+    assert.equal(strip.hidden, true);
+    assert.equal(h.byId('filmstrip-panel').hidden, true);
+    assert.equal(h.byId('toggle-filmstrip').getAttribute('aria-expanded'), 'false');
+    h.byId('toggle-filmstrip').fire('click');
+    const freshLoad = strip.onload!;
+    lateLoad(); lateError();
+    assert.equal(strip.hidden, true, 'A retired load cannot reveal a newly requested strip');
+    assert.equal(strip.onload, freshLoad, 'Old handlers cannot retire a replacement request');
+    assert.equal(h.timers, 0);
+    freshLoad();
+    assert.equal(strip.hidden, false);
+    assert.equal(strip.starts.length, 2);
+  }
+});
+
+test('filmstrip decode failures retry finitely with a generic message and support an explicit retry', async () => {
+  const h = harness(); await selectFirst(h);
+  h.byId('toggle-filmstrip').fire('click');
+  const strip = h.byId('detail-filmstrip');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    strip.onerror!();
+    if (attempt < 2) { await h.runTimer(); }
+  }
+  assert.equal(strip.starts.length, 3);
+  assert.equal(strip.src, '');
+  assert.equal(strip.hidden, true);
+  assert.equal(h.timers, 0);
+  assert.equal(h.byId('filmstrip-panel').getAttribute('aria-busy'), 'false');
+  assert.equal(h.byId('filmstrip-status').textContent, 'Filmstrip unavailable. Hide it and try again.');
+  h.byId('toggle-filmstrip').fire('click');
+  h.byId('toggle-filmstrip').fire('click');
+  strip.onload!();
+  assert.equal(strip.hidden, false);
+  assert.equal(h.byId('filmstrip-status').hidden, true);
+  assert.equal(strip.starts.length, 4);
+});
+
+test('changing selection retires filmstrip work and does not load the new strip until requested', async () => {
+  const h = harness({ list: async () => ready([item(0), item(1)]), detail: async id => {
+    const index = Number(id.split('-')[1]);
+    return detail(item(index), { filmstripUrl: `theatrum://app/media/filmstrips/${index}.jpg` });
+  } });
+  await selectFirst(h);
+  while (h.activeImages.length) { h.activeImages[0].onload!(); }
+  h.byId('toggle-filmstrip').fire('click');
+  const strip = h.byId('detail-filmstrip');
+  const staleLoad = strip.onload!;
+  h.cards[1].fire('click'); await settle();
+  assert.equal(strip.src, '');
+  assert.equal(h.byId('filmstrip-panel').hidden, true);
+  staleLoad();
+  assert.equal(strip.hidden, true);
+  h.byId('toggle-filmstrip').fire('click');
+  assert.equal(strip.src, 'theatrum://app/media/filmstrips/1.jpg');
+  strip.onload!();
+  assert.equal(strip.hidden, false);
+  assert.equal(h.byId('details-title').textContent, 'Private video 1');
+});
+
+test('filmstrip viewing preserves note and tag drafts, and opening Protection retires its pending load', async () => {
+  const pending = deferred();
+  const h = harness({ protection: async () => pending.promise });
+  await selectFirst(h); draftNotes(h); draftTag(h, 'Pending private tag');
+  h.byId('toggle-filmstrip').fire('click');
+  const strip = h.byId('detail-filmstrip');
+  strip.onload!();
+  h.byId('toggle-filmstrip').fire('click');
+  h.byId('toggle-filmstrip').fire('click');
+  const staleLoad = strip.onload!;
+  h.byId('protection-button').fire('click');
+  assert.equal(strip.src, '');
+  assert.equal(h.byId('filmstrip-panel').hidden, true);
+  assert.equal(h.byId('toggle-filmstrip').disabled, true);
+  staleLoad();
+  assert.equal(strip.hidden, true);
+  pending.resolve({ status: 'ready', autoLockMinutes: 5 }); await settle();
+  assert.equal(h.byId('details-notes').value, 'Changed private notes');
+  assert.equal(h.byId('tag-draft').value, 'Pending private tag');
+  assert.equal(h.saves.length, 0);
+  assert.equal(h.byId('toggle-filmstrip').disabled, false);
+  assert.equal(strip.src, '', 'Finishing a protection request does not silently reopen previews');
+});
+
+test('filmstrip viewing makes room when clean but restores Save and Discard for drafts, saves and conflicts', async () => {
+  for (const kind of ['notes', 'pending-tag', 'removed-tag']) {
+    const pending = deferred();
+    const h = harness({ save: async () => pending.promise });
+    await selectFirst(h);
+    assert.equal(h.byId('edit-footer').hidden, false);
+    h.byId('toggle-filmstrip').fire('click');
+    h.byId('detail-filmstrip').onload!();
+    assert.equal(h.byId('edit-footer').hidden, true, 'Clean filmstrip viewing leaves space for the preview frames');
+    if (kind === 'notes') { draftNotes(h); }
+    if (kind === 'pending-tag') { draftTag(h, 'Unsaved tag'); }
+    if (kind === 'removed-tag') { h.byId('details-tags').children[0].children[1].fire('click'); }
+    assert.equal(h.byId('edit-footer').hidden, false, kind);
+    assert.equal(h.byId('save-details').disabled, false, kind);
+    assert.equal(h.byId('discard-details').disabled, false, kind);
+    assert.equal(h.byId('filmstrip-panel').hidden, false, 'Typing does not discard the filmstrip or its draft');
+    if (kind === 'notes') {
+      h.byId('save-details').fire('click');
+      assert.equal(h.byId('edit-footer').hidden, false, 'Save progress remains visible');
+      pending.resolve({ status: 'conflict' }); await settle();
+      draftNotes(h, 'Private notes');
+      assert.equal(h.byId('edit-footer').hidden, false, 'A conflict remains actionable even after the draft text matches the old value');
+      assert.equal(h.byId('discard-details').disabled, false);
+      assert.equal(h.byId('save-details').disabled, true);
+    }
+  }
+});
+
+test('closing details, locking and retiring the page clear decoded filmstrips before any lock dispatch', async () => {
+  for (const ending of ['close', 'lock', 'pagehide']) {
+    const h = harness({ lock: () => {
+      assert.equal(h.byId('detail-filmstrip').src, '');
+      assert.equal(h.byId('filmstrip-panel').hidden, true);
+    } });
+    await selectFirst(h); h.byId('toggle-filmstrip').fire('click');
+    const strip = h.byId('detail-filmstrip');
+    strip.onload!();
+    h.byId('filmstrip-viewport').scrollLeft = 400;
+    if (ending === 'pagehide') { h.window.fire('pagehide'); }
+    else { h.byId(ending === 'lock' ? 'lock-hub' : 'close-details').fire('click'); }
+    assert.equal(strip.src, '', ending);
+    assert.equal(strip.hidden, true, ending);
+    assert.equal(h.byId('filmstrip-panel').hidden, true, ending);
+    assert.equal(h.byId('filmstrip-viewport').scrollLeft, 0, ending);
+    assert.equal(h.byId('filmstrip-status').textContent, '', ending);
+  }
+});
+
+test('filmstrips reject external, unrelated and malformed media routes before requesting an image', async () => {
+  for (const filmstripUrl of ['https://example.test/private.jpg', 'file:///private.jpg',
+    'theatrum://app/media/thumbnails/0.jpg', 'theatrum://app/media/filmstrips/0.mp4',
+    'theatrum://app/media/filmstrips/0.jpg?source=/private',
+    'theatrum://app/media/filmstrips/0.jpg\n']) {
+    const h = harness({ detail: async () => detail(item(), { filmstripUrl }) });
+    await selectFirst(h);
+    assert.equal(h.byId('toggle-filmstrip').disabled, true, filmstripUrl);
+    h.byId('toggle-filmstrip').fire('click');
+    assert.equal(h.byId('detail-filmstrip').starts.length, 0);
+    assert.equal(h.byId('filmstrip-panel').hidden, true);
+  }
+});
+
+test('credential changes retire a reopened filmstrip before dispatch and cannot restore it after failure', async () => {
+  for (const operation of ['password', 'copy', 'touch-id-enable', 'touch-id-disable']) {
+    const pending = deferred();
+    const dispatched = () => {
+      assert.equal(h.byId('detail-filmstrip').src, '', operation);
+      assert.equal(h.byId('detail-filmstrip').hidden, true, operation);
+      assert.equal(h.byId('filmstrip-panel').hidden, true, operation);
+      return pending.promise;
+    };
+    const h = harness({ changePassword: dispatched, createUnprotectedCopy: dispatched,
+      enableTouchId: dispatched, disableTouchId: dispatched,
+      touchIdStatus: async () => ({ outcome: 'available', state: operation === 'touch-id-disable' ? 'enabled' : 'disabled' }) });
+    await selectFirst(h);
+    if (operation === 'password') { await openPasswordForm(h); fillPasswords(h); }
+    if (operation === 'copy') { await openCopyForm(h); fillCopy(h); }
+    if (operation === 'touch-id-enable') { await openTouchId(h); h.byId('touch-id-password').value = 'Synthetic password'; }
+    if (operation === 'touch-id-disable') { h.byId('protection-button').fire('click'); await settle(); }
+    h.byId('toggle-filmstrip').fire('click');
+    const strip = h.byId('detail-filmstrip');
+    const staleLoad = strip.onload!;
+    if (operation === 'password') { h.byId('change-password-form').fire('submit'); }
+    if (operation === 'copy') { h.byId('unprotected-copy-form').fire('submit'); }
+    if (operation === 'touch-id-enable') { h.byId('touch-id-form').fire('submit'); }
+    if (operation === 'touch-id-disable') { h.byId('touch-id-disable').fire('click'); }
+    assert.equal(h.passwordChanges.length + h.unprotectedCopies.length + h.touchIdEnrollments.length + h.touchIdDisables, 1, operation);
+    assert.equal(h.byId('toggle-filmstrip').disabled, true, operation);
+    staleLoad();
+    assert.equal(strip.hidden, true, operation);
+    pending.resolve({ status: 'incorrect-password', outcome: 'unavailable' }); await settle();
+    assert.equal(strip.src, '', operation);
+    assert.equal(h.byId('filmstrip-panel').hidden, true, operation);
+    assert.equal(h.byId('toggle-filmstrip').disabled, false, operation);
+  }
 });
 
 test('changing pages removes decoded and loading preview sources and ignores their late events', async () => {
@@ -811,6 +1041,8 @@ test('regeneration sends only selection authority and refreshes retired media wi
     assert.equal(h.byId('detail-poster').src, '', 'The old decoded image must retire before the asynchronous operation');
     assert.equal(h.byId('detail-poster').onload, null);
     assert.equal(h.byId('detail-poster').hidden, true);
+    assert.equal(h.byId('detail-filmstrip').src, '', 'Regeneration retires the old filmstrip before the asynchronous operation');
+    assert.equal(h.byId('detail-filmstrip').hidden, true);
     return pending.promise;
   } });
   await selectFirst(h);
@@ -818,6 +1050,9 @@ test('regeneration sends only selection authority and refreshes retired media wi
   oldThumbnail.onload!();
   const poster = h.byId('detail-poster');
   poster.onload!();
+  h.byId('toggle-filmstrip').fire('click');
+  const strip = h.byId('detail-filmstrip');
+  const staleStripLoad = strip.onload!;
   h.byId('play-preview').fire('click'); await settle();
   const video = h.byId('preview-video');
   h.byId('regenerate-previews').fire('click');
@@ -827,7 +1062,8 @@ test('regeneration sends only selection authority and refreshes retired media wi
   assert.equal(poster.src, '');
   assert.equal(poster.hidden, true);
   assert.equal(h.byId('play-preview').disabled, true);
-  pending.resolve({ status: 'generated', item: detail(item(), { revision: 'b'.repeat(32) }).item });
+  const freshStripUrl = `theatrum://app/media/filmstrips/0.jpg?v=${'b'.repeat(32)}`;
+  pending.resolve({ status: 'generated', item: detail(item(), { revision: 'b'.repeat(32), filmstripUrl: freshStripUrl }).item });
   await settle();
   assert.equal(oldThumbnail.src, '');
   assert.equal(oldThumbnail.isConnected, false);
@@ -839,6 +1075,15 @@ test('regeneration sends only selection authority and refreshes retired media wi
   assert.equal(h.byId('regenerate-previews').disabled, false);
   assert.equal(h.byId('details-panel').hidden, false);
   assert.equal(h.byId('details-notes').value, 'Private notes');
+  assert.equal(strip.src, '', 'Regeneration does not automatically reload a filmstrip');
+  h.byId('toggle-filmstrip').fire('click');
+  assert.equal(strip.src, freshStripUrl);
+  const freshStripLoad = strip.onload!;
+  staleStripLoad();
+  assert.equal(strip.hidden, true);
+  assert.equal(strip.onload, freshStripLoad);
+  freshStripLoad();
+  assert.equal(strip.hidden, false);
 });
 
 test('a retired poster cannot finish during regeneration and recoverable failure reloads its original route', async () => {

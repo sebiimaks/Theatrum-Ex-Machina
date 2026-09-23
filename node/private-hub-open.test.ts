@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import {
   PrivateHubOpenCoordinator, type PrivateHubOpenBrowser, type PrivateHubOpenDependencies,
-  type PrivateHubOpenLifetime, type PrivateHubOpenSession,
+  type PrivateHubOpenLifetime, type PrivateHubOpenSession, type PrivateHubPreparedOpen,
 } from './private-hub-open';
 
 function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason: unknown) => void } {
@@ -99,6 +99,143 @@ test('opens only the isolated browser and returns no password, path, or catalogu
   assert.equal(await f.coordinator.open(f.options), 'busy');
   await f.coordinator.cancel();
   assert.deepEqual(f.coordinator.status, { state: 'idle', cleanupFailed: false });
+});
+
+test('preparation owns admission and must finish before destination activation without another prompt or Touch ID', async () => {
+  const prepared = deferred<PrivateHubPreparedOpen | undefined>();
+  let preparationLifetime: PrivateHubOpenLifetime | undefined;
+  let source = '';
+  let constructed = 0;
+  let passwordPrompts = 0;
+  let biometricQueries = 0;
+  let biometricUnlocks = 0;
+  const f = fixture({
+    prepareHub: (directory, lifetime) => { source = directory; preparationLifetime = lifetime; return prepared.promise; },
+    createSession: () => { constructed++; return f.session; },
+    requestPassword: async () => { passwordPrompts++; return 'unused secret'; },
+    touchIdAvailable: async () => { biometricQueries++; return true; },
+  });
+  Object.assign(f.session, { unlockWithTouchId: async () => { biometricUnlocks++; return { generation: 7 }; } });
+  const opening = f.coordinator.open(f.options);
+  assert.equal(source, f.options.directory);
+  assert.ok(Object.isFrozen(preparationLifetime));
+  assert.equal(constructed, 0);
+  assert.equal(f.browser.showCalls, 0);
+  assert.deepEqual(f.session.unlockCalls, []);
+  const other = fixture();
+  assert.equal(await other.coordinator.open(other.options), 'busy');
+  prepared.resolve(Object.freeze({ directory: '/main-owned/new-private-hub', password: ' new é secret ' }));
+  assert.equal(await opening, 'opened');
+  assert.equal(constructed, 1);
+  assert.deepEqual(f.session.unlockCalls, [['/main-owned/new-private-hub', ' new é secret ']]);
+  assert.equal(preparationLifetime!.signal, f.browserLifetimes[0].signal);
+  assert.equal(passwordPrompts, 0);
+  assert.equal(biometricQueries, 0);
+  assert.equal(biometricUnlocks, 0);
+  assert.equal(other.promptLifetimes.length, 0);
+  await f.coordinator.cancel();
+});
+
+test('late preparation cannot activate a destination after cancellation and holds all admission until drained', async () => {
+  const prepared = deferred<PrivateHubPreparedOpen | undefined>();
+  let preparationLifetime: PrivateHubOpenLifetime | undefined;
+  let constructed = 0;
+  const f = fixture({
+    prepareHub: (_directory, lifetime) => { preparationLifetime = lifetime; return prepared.promise; },
+    createSession: () => { constructed++; return f.session; },
+  });
+  const opening = f.coordinator.open(f.options);
+  const settled = f.coordinator.settled;
+  let finished = false;
+  void settled.then(() => { finished = true; });
+  const cancelling = f.coordinator.cancel();
+  assert.equal(cancelling, settled);
+  assert.equal(preparationLifetime!.signal.aborted, true);
+  assert.equal(preparationLifetime!.isCurrent(), false);
+  const other = fixture();
+  assert.equal(await other.coordinator.open(other.options), 'busy');
+  assert.equal(await f.coordinator.open(f.options), 'busy');
+  assert.equal(finished, false);
+  prepared.resolve({ directory: '/main-owned/late-private-hub', password: 'late secret' });
+  assert.equal(await opening, 'cancelled');
+  await cancelling;
+  assert.equal(finished, true);
+  assert.equal(constructed, 0);
+  assert.deepEqual(f.session.unlockCalls, []);
+  assert.equal(f.browser.showCalls, 0);
+  assert.equal(f.coordinator.status.state, 'idle');
+  assert.equal(await other.coordinator.open(other.options), 'opened');
+  await other.coordinator.cancel();
+});
+
+test('cancelled or invalid prepared destinations never reach session construction', async () => {
+  let getterCalls = 0;
+  const accessor = { get directory(): string { getterCalls++; return '/synthetic'; }, password: 'secret' };
+  const inherited = Object.create({ directory: '/synthetic', password: 'secret' }) as unknown;
+  const values: unknown[] = [undefined, null, 42, 'secret', [], {}, inherited, accessor,
+    { directory: '/synthetic', password: 'secret', extra: true },
+    { directory: '/synthetic', method: 'touch-id' },
+    ...['relative', '/a\0b', '/a/../b', '/a/./b', '/a//b', '/a/', '/' + 'a'.repeat(4096), '/' + 'é'.repeat(2048)]
+      .map(directory => ({ directory, password: 'secret' })),
+    ...['', 'a'.repeat(1025), 'é'.repeat(513), '\ud800', '\udc00', null, 123, { method: 'touch-id' }]
+      .map(password => ({ directory: '/synthetic', password })),
+  ];
+  for (const value of values) {
+    let constructed = 0;
+    const f = fixture({
+      prepareHub: async () => value as PrivateHubPreparedOpen | undefined,
+      createSession: () => { constructed++; return f.session; },
+    });
+    assert.equal(await f.coordinator.open(f.options), value === undefined ? 'cancelled' : 'unavailable');
+    assert.equal(constructed, 0);
+    assert.equal(f.promptLifetimes.length, 0);
+    assert.deepEqual(f.session.unlockCalls, []);
+    assert.equal(f.coordinator.status.state, 'idle');
+  }
+  assert.equal(getterCalls, 0);
+});
+
+test('prepared destination and credentials are snapshotted before a reentrant session factory', async () => {
+  const prepared = { directory: '/main-owned/prepared-hub', password: 'original secret' };
+  const f = fixture({
+    prepareHub: async () => prepared,
+    createSession: () => {
+      prepared.directory = '/main-owned/replacement';
+      prepared.password = 'replacement secret';
+      return f.session;
+    },
+  });
+  assert.equal(await f.coordinator.open(f.options), 'opened');
+  assert.deepEqual(f.session.unlockCalls, [['/main-owned/prepared-hub', 'original secret']]);
+  await f.coordinator.cancel();
+});
+
+test('authority lost during preparation prevents destination activation', async () => {
+  const prepared = deferred<PrivateHubPreparedOpen | undefined>();
+  let constructed = 0;
+  const f = fixture({ prepareHub: () => prepared.promise, createSession: () => { constructed++; return f.session; } });
+  const opening = f.coordinator.open(f.options);
+  f.setAuthority(false);
+  prepared.resolve({ directory: '/main-owned/prepared-hub', password: 'secret' });
+  assert.equal(await opening, 'cancelled');
+  assert.equal(constructed, 0);
+  assert.equal(f.coordinator.status.state, 'idle');
+});
+
+test('proven preparation failures remain generic and release admission after their own drainage', async () => {
+  for (const cancel of [false, true]) {
+    const prepared = deferred<PrivateHubPreparedOpen | undefined>();
+    const failure = new Error('PRIVATE-PREPARATION-PATH-AND-SECRET');
+    const controller = new AbortController();
+    const f = fixture({ prepareHub: () => prepared.promise, isDisposedFailure: error => error === failure });
+    const opening = f.coordinator.open({ ...f.options, signal: controller.signal });
+    if (cancel) { controller.abort(); }
+    prepared.reject(failure);
+    assert.equal(await opening, cancel ? 'cancelled' : 'unavailable');
+    assert.deepEqual(f.coordinator.status, { state: 'idle', cleanupFailed: false });
+    assert.equal(f.promptLifetimes.length, 0);
+    assert.deepEqual(f.session.unlockCalls, []);
+  }
 });
 
 test('settled is available before the prompt completes and remains pending throughout a live attempt', async () => {
@@ -436,7 +573,7 @@ test('unlock and browser failures remain generic and release admission after saf
 test('unproven factory rejection, a throwing predicate, or a truthy non-boolean quarantines admission', () => {
   // Each failed cleanup intentionally blocks its entire process. Exercise
   // these independent cases in child processes, with no production reset hook.
-  for (const kind of ['prompt', 'browser', 'predicate-throws', 'predicate-truthy', 'cancelled-prompt']) {
+  for (const kind of ['prompt', 'browser', 'predicate-throws', 'predicate-truthy', 'cancelled-prompt', 'preparation', 'cancelled-preparation']) {
     const result = spawnSync(process.execPath, ['-r', 'ts-node/register', '-e', `
       const assert = require('node:assert/strict');
       const { PrivateHubOpenCoordinator } = require('./node/private-hub-open.ts');
@@ -459,6 +596,10 @@ test('unproven factory rejection, a throwing predicate, or a truthy non-boolean 
           return 'secret';
         },
         createBrowser: async () => { throw error; }
+      };
+      if (kind === 'preparation' || kind === 'cancelled-preparation') dependencies.prepareHub = async () => {
+        if (kind === 'cancelled-preparation') cancellation.abort();
+        throw error;
       };
       if (kind === 'predicate-throws') dependencies.isDisposedFailure = () => { throw error; };
       if (kind === 'predicate-truthy') dependencies.isDisposedFailure = () => 'true';

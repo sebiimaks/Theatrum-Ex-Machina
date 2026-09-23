@@ -1,4 +1,8 @@
 import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { NewImageElement, type FinalObject } from '../interfaces/final-object.interface';
+import { buildCatalogueMediaLocationAuthority } from './catalogue-media-authority';
 import { EventEmitter } from 'node:events';
 import { test, type TestContext } from 'node:test';
 import type { BrowserWindow } from 'electron';
@@ -15,12 +19,14 @@ const powerMonitor = new EventEmitter();
 const ipcMain = new EventEmitter();
 let pick: (...args: unknown[]) => Promise<{ canceled: boolean; filePaths: string[] }>;
 let makeWorkspace: (options: unknown) => TransitionPrivateWorkspace;
+let makeConversionWorkspace: (options: unknown) => TransitionPrivateWorkspace;
 const NodeModule = require('node:module');
 const originalLoad = NodeModule._load;
 let createPrivateApplicationWorkspace: (options: PrivateApplicationWorkspaceOptions) => PrivateApplicationWorkspace;
 try {
   NodeModule._load = function(request: string, ...args: unknown[]) {
     if (request === 'electron') { return { app, powerMonitor, ipcMain, dialog: { showOpenDialog: (...values: unknown[]) => pick(...values) } }; }
+    if (request === './private-conversion-workspace') { return { createPrivateConversionWorkspace: (options: unknown) => makeConversionWorkspace(options) }; }
     if (request === './private-hub-workspace') { return { createPrivateHubWorkspace: (options: unknown) => makeWorkspace(options) }; }
     return originalLoad.call(this, request, ...args);
   };
@@ -35,7 +41,10 @@ function deferred<T = void>() {
 }
 const turn = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 async function until(predicate: () => boolean): Promise<void> {
-  for (let index = 0; index < 100; index++) { if (predicate()) { return; } await turn(); }
+  for (let index = 0; index < 5000; index++) {
+    if (predicate()) { return; }
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
   assert.fail('Native transition did not reach its expected stage.');
 }
 
@@ -91,6 +100,7 @@ function fixture(t: TestContext) {
   let privateFailed = false;
   let canStart = true;
   let factoryCalls = 0;
+  let conversionFactoryCalls = 0;
   let pickerCalls = 0;
   let nativeOptions: PrivateHubOpenOptions | undefined;
   let afterResumes = 0;
@@ -135,6 +145,7 @@ function fixture(t: TestContext) {
     assert.equal(window.visible, false);
     return native;
   };
+  makeConversionWorkspace = options => { conversionFactoryCalls++; return makeWorkspace(options); };
   const workspace = createPrivateApplicationWorkspace({
     appDirectory: '/Users/sm/Workspace/synthetic-private-ui', normal, operations, state,
     getNormalWindow: () => window as unknown as BrowserWindow,
@@ -143,12 +154,12 @@ function fixture(t: TestContext) {
     afterResume: () => { afterResumes++; resumedCurrent = operations.isCurrent(); },
   });
   const request = (): unknown[] | undefined => window.webContents.mainFrame.messages.find(message => message[0] === channels.request);
-  const snapshot = (changes: { sender?: unknown; senderFrame?: unknown; id?: unknown } = {}): void => {
+  const snapshot = (changes: { sender?: unknown; senderFrame?: unknown; id?: unknown; document?: FinalObject } = {}): void => {
     assert.ok(request());
     ipcMain.emit(channels.snapshot, {
       sender: changes.sender ?? window.webContents,
       senderFrame: changes.senderFrame ?? window.webContents.mainFrame,
-    }, changes.id ?? request()![1], { status: 'snapshot', document: null });
+    }, changes.id ?? request()![1], { status: 'snapshot', document: changes.document ?? null });
   };
   const select = (): void => picker.resolve({ canceled: false, filePaths: ['/Users/sm/Workspace/synthetic-private-hub'] });
   t.after(async () => {
@@ -166,7 +177,7 @@ function fixture(t: TestContext) {
   return { workspace, operations, normal, window, state, picker, mediaDrain, privateDrain, opening, select, snapshot, request, retire,
     holdMedia: () => { holdMedia = true; }, holdPrivate: () => { holdPrivate = true; }, holdOpening: () => { holdOpening = true; },
     failPrivate: () => { privateFailed = true; }, denyStart: () => { canStart = false; },
-    factoryCalls: () => factoryCalls, pickerCalls: () => pickerCalls, nativeOptions: () => nativeOptions,
+    conversionFactoryCalls: () => conversionFactoryCalls, factoryCalls: () => factoryCalls, pickerCalls: () => pickerCalls, nativeOptions: () => nativeOptions,
     afterResumes: () => afterResumes, resumedCurrent: () => resumedCurrent };
 }
 
@@ -419,4 +430,75 @@ test('a failed renderer release reseals main admission and cannot be retried by 
   await f.workspace.cancel();
   assert.equal(releases, 1, 'an attempted release must not survive for later retry');
   assert.equal(app.quits, 0);
+});
+
+
+async function conversionSource(t: TestContext, f: ReturnType<typeof fixture>) {
+  const temporary = path.resolve(__dirname, '..', 'tmp');
+  await fs.mkdir(temporary, { recursive: true });
+  const root = await fs.mkdtemp(path.join(temporary, 'private-conversion-handoff-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const cataloguePath = path.join(root, 'Synthetic.scaena');
+  const sourcePath = path.join(root, 'unopened-originals');
+  const images = [{ ...NewImageElement(), hash: 'synthetic-video', fileName: 'synthetic.mp4', cleanName: 'synthetic', inputSource: 0, notes: 'original notes' }];
+  const catalogue: FinalObject = { hubName: 'Synthetic', images, inputDirs: { 0: { path: sourcePath, watch: false } },
+    addTags: [], removeTags: [], numOfFolders: 1, version: 3,
+    screenshotSettings: { n: 5, height: 144, fixed: true, clipHeight: 144, clipSnippetLength: 1, clipSnippets: 0 } };
+  await fs.writeFile(cataloguePath, JSON.stringify(catalogue));
+  Object.assign(f.state, { currentlyOpenVhaFile: cataloguePath, selectedOutputFolder: root, hubName: 'Synthetic',
+    catalogueAccessMode: 'read-write', vhaFileVersion: 3,
+    selectedSourceFolders: structuredClone(catalogue.inputDirs), screenshotSettings: structuredClone(catalogue.screenshotSettings),
+    authorizedCataloguePaths: new Set([cataloguePath]), authorizedCatalogueImageHashes: new Set(['synthetic-video']),
+    authorizedCatalogueMediaLocations: buildCatalogueMediaLocationAuthority(images),
+    authorizedSourceFolderPaths: new Set([sourcePath]), authorizedSourceFolderRealPaths: new Map([[sourcePath, sourcePath]]),
+    authorizedSourceWatchPaths: new Set(),
+  });
+  return { root, cataloguePath, catalogue };
+}
+
+test('conversion refuses an absent, read-only or unowned normal catalogue before pausing', async t => {
+  const f = fixture(t);
+  assert.equal(await f.workspace.convert(), 'unavailable');
+  const source = await conversionSource(t, f);
+  f.state.catalogueAccessMode = 'read-only';
+  assert.equal(await f.workspace.convert(), 'unavailable');
+  f.state.catalogueAccessMode = 'read-write'; f.state.authorizedCataloguePaths = new Set();
+  assert.equal(await f.workspace.convert(), 'unavailable');
+  assert.equal(f.state.currentlyOpenVhaFile, source.cataloguePath);
+  assert.equal(f.pickerCalls(), 0); assert.equal(f.factoryCalls(), 0); assert.equal(f.operations.accepting, true);
+});
+
+test('conversion captures main-owned source and saves drafts before creating its isolated workspace', async t => {
+  const f = fixture(t);
+  const source = await conversionSource(t, f);
+  const opening = f.workspace.convert();
+  assert.equal(await f.workspace.open(), 'busy');
+  await until(() => !!f.request());
+  assert.equal(f.operations.accepting, false); assert.equal(f.factoryCalls(), 0); assert.equal(f.pickerCalls(), 0);
+  source.catalogue.images[0].notes = 'Saved before private copy';
+  f.snapshot({ document: source.catalogue });
+  assert.equal(await opening, 'opened');
+  assert.equal(f.conversionFactoryCalls(), 1); assert.equal(f.window.visible, false);
+  assert.equal(f.nativeOptions()!.directory, source.cataloguePath);
+  assert.equal(f.nativeOptions()!.isAuthorized(), true);
+  assert.equal(JSON.parse(await fs.readFile(source.cataloguePath, 'utf8')).images[0].notes, 'Saved before private copy');
+  assert.equal(JSON.stringify(f.window.webContents.mainFrame.messages).includes(source.cataloguePath), false);
+  await f.workspace.cancel(); await f.workspace.settled;
+  assert.equal(f.window.visible, true); assert.equal(f.operations.accepting, true);
+  assert.equal(f.nativeOptions()!.isAuthorized(), false);
+});
+
+test('conversion cancellation holds the source freeze until pending preparation is drained', async t => {
+  const f = fixture(t); const source = await conversionSource(t, f);
+  f.holdOpening(); f.holdPrivate();
+  const opening = f.workspace.convert();
+  await until(() => !!f.request()); f.snapshot({ document: source.catalogue });
+  await until(() => f.factoryCalls() === 1);
+  const cancelling = f.workspace.cancel();
+  assert.equal(f.operations.accepting, false); assert.equal(f.window.visible, false);
+  assert.equal(f.nativeOptions()!.signal!.aborted, true);
+  f.opening.resolve('cancelled'); await turn();
+  assert.equal(f.operations.accepting, false);
+  f.retire(); await cancelling;
+  assert.equal(await opening, 'cancelled'); assert.equal(f.operations.accepting, true);
 });

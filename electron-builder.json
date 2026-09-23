@@ -2,6 +2,21 @@
   "productName": "Theatrum Ex Machina",
   "appId": "com.github.sebiimaks.theatrumexmachina",
   "copyright": "Copyright © 2022 Boris Yakubchik; fork modifications © 2026 sebiimaks",
+  "beforePack": "./bin/prepare-privacy-package.cjs",
+  "asarUnpack": [
+    "private-password-preload.cjs",
+    "private-conversion-preload.cjs",
+    "private-gallery-preload.cjs",
+    "private-unlock/index.html",
+    "private-unlock/unlock.css",
+    "private-unlock/unlock.js",
+    "private-conversion/index.html",
+    "private-conversion/conversion.css",
+    "private-conversion/conversion.js",
+    "private-gallery/index.html",
+    "private-gallery/gallery.css",
+    "private-gallery/gallery.js"
+  ],
   "directories": {
     "output": "release/"
   },
@@ -9,6 +24,18 @@
     "dist/**/*",
     "main.js",
     "preload.js",
+    "private-password-preload.cjs",
+    "private-conversion-preload.cjs",
+    "private-gallery-preload.cjs",
+    "private-unlock/index.html",
+    "private-unlock/unlock.css",
+    "private-unlock/unlock.js",
+    "private-conversion/index.html",
+    "private-conversion/conversion.css",
+    "private-conversion/conversion.js",
+    "private-gallery/index.html",
+    "private-gallery/gallery.css",
+    "private-gallery/gallery.js",
     "node/**/*.js",
     "interfaces/**/*.js",
     "!node/server.js",
@@ -64,6 +91,11 @@
     ]
   },
   "mac": {
+    "extraResources": [{
+      "from": "build/privacy-tools",
+      "to": "privacy-tools",
+      "filter": ["private-hub-lock", "private-touch-id.node"]
+    }],
     "category": "public.app-category.video",
     "artifactName": "theatrum-ex-machina-v${version}-${arch}.${ext}",
     "target": {
@@ -76,6 +108,11 @@
     "asar": true
   },
   "linux": {
+    "extraResources": [{
+      "from": "build/privacy-tools",
+      "to": "privacy-tools",
+      "filter": ["private-hub-lock"]
+    }],
     "artifactName": "theatrum-ex-machina-v${version}-linux-${arch}.${ext}",
     "icon": "src/assets/icons/png",
     "category": "AudioVideo;Video",

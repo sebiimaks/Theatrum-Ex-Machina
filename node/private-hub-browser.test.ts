@@ -5,6 +5,7 @@ import { NewImageElement } from '../interfaces/final-object.interface';
 import { test, type TestContext } from 'node:test';
 import type { PrivateHubSession } from './private-hub-session';
 import type { PrivateHubBrowser as PrivateHubBrowserInstance, PrivateHubLifecycle } from './private-hub-browser';
+import * as conversionDestination from './private-conversion-destination';
 
 const app = Object.assign(new EventEmitter(), { isReady: () => true, quits: 0, quit() { this.quits++; } });
 const powerMonitor = new EventEmitter();
@@ -922,4 +923,112 @@ test('late external storage cleanup failure quarantines rather than restores the
   assert.equal(windows[0].destroyed, true); assert.equal(f.menu.releases, 0);
   fail(new Error('Synthetic external storage failure')); await Promise.all([locking, browser.closed]);
   assert.equal(browser.status.cleanupFailed, true); assert.equal(f.menu.releases, 0); assert.equal(f.menu.quarantines, 1);
+});
+
+
+const conversionReview = { videos: 2, availablePreviews: 4, previewBytes: 2048,
+  missingPreviews: { thumbnail: 0, filmstrip: 0, 'clip-poster': 0, clip: 0 } };
+
+async function conversionPrompt(options: Partial<import('./private-hub-browser').PrivateConversionPromptOptions> = {}) {
+  const controller = new AbortController();
+  let retirements = 0;
+  const pending = PrivateHubBrowser.requestConversion({
+    review: conversionReview, signal: controller.signal, isCurrent: () => true,
+    onRetire: () => { retirements++; }, start: async () => undefined, ...options,
+  });
+  for (let turn = 0; !windows[0]?.shown && turn < 100; turn++) { await new Promise(resolve => setImmediate(resolve)); }
+  assert.equal(windows[0]?.shown, true);
+  const window = windows[0];
+  const contents = window.webContents;
+  return { pending, window, controller, event: { sender: contents, senderFrame: contents.mainFrame }, retirements: () => retirements };
+}
+
+test('creation uses isolated form-only routes and returns credentials only after browser cleanup', async t => {
+  const f = fixture(t);
+  const prepared = { directory: '/Users/sm/Workspace/synthetic-created-hub', password: 'synthetic creation password' };
+  let pickerCalls = 0;
+  t.mock.method(dialog, 'showOpenDialog', async (window, options) => {
+    pickerCalls++;
+    assert.equal(window, windows[0]);
+    assert.deepEqual(options, { title: 'Create private copy',
+      message: 'Choose a folder to contain the encrypted copy. A new “Private hub” subfolder will be created; existing files will not be replaced.',
+      buttonLabel: 'Create private copy here',
+      properties: ['openDirectory', 'createDirectory', 'dontAddToRecent'], securityScopedBookmarks: false });
+    return { canceled: false, filePaths: ['/Users/sm/Workspace/selected-parent'] };
+  });
+  t.mock.method(conversionDestination, 'privateConversionDestination', async parent => {
+    assert.equal(parent, '/Users/sm/Workspace/selected-parent'); return prepared.directory;
+  });
+  const prompt = await conversionPrompt({ start: async (password, allowMissing, progress, select) => {
+    assert.equal(password, prepared.password); assert.equal(allowMissing, false);
+    assert.equal(await select(), prepared.directory);
+    progress({ stage: 'verifying', completed: 4, total: 5 });
+    return prepared;
+  } });
+  assert.equal(f.menu.callbacks.kind, 'conversion');
+  assert.match(prompt.window.options.webPreferences.preload, /private-conversion-preload.cjs$/);
+  assert.deepEqual([...invokeHandlers.keys()].sort(), ['private-conversion-state', 'private-conversion-submit']);
+  assert.deepEqual((invokeHandlers.get('private-conversion-state')!(prompt.event) as import('../interfaces/private-conversion').PrivateConversionState).review, conversionReview);
+  assert.equal((await sessions[0].handler(new Request('theatrum://app/unlock.js'))).status, 404);
+  assert.equal((await sessions[0].handler(new Request('theatrum://app/conversion.js'))).status, 200);
+  let release!: () => void;
+  sessions[0].clearData = () => new Promise(resolve => { release = resolve; });
+  let handedBack = false;
+  void prompt.pending.then(() => { handedBack = true; });
+  const submit = invokeHandlers.get('private-conversion-submit')!(prompt.event, prepared.password, false, true);
+  await submit;
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(prompt.window.destroyed, true); assert.equal(prompt.retirements(), 1);
+  assert.equal(pickerCalls, 1); assert.equal(handedBack, false); assert.equal(f.menu.releases, 0);
+  release();
+  assert.deepEqual(await prompt.pending, prepared);
+  assert.equal(f.menu.releases, 1);
+});
+
+test('cancelling creation destroys its form immediately but drains a pending destination dialog', async t => {
+  const f = fixture(t);
+  let release!: (value: { canceled: boolean; filePaths: string[] }) => void;
+  let selected = false;
+  t.mock.method(dialog, 'showOpenDialog', () => { selected = true; return new Promise(resolve => { release = resolve; }); });
+  t.mock.method(conversionDestination, 'privateConversionDestination', async () => { assert.fail('Retired pickers cannot choose a new destination.'); });
+  const prompt = await conversionPrompt({ start: async (password, _missing, _progress, select) => {
+    const directory = await select();
+    return directory ? { directory, password } : undefined;
+  } });
+  const submit = invokeHandlers.get('private-conversion-submit')!(prompt.event, 'synthetic creation password', false, true);
+  while (!selected) { await new Promise(resolve => setImmediate(resolve)); }
+  let settled = false;
+  void prompt.pending.then(() => { settled = true; });
+  ipcMain.emit('private-conversion-cancel', prompt.event);
+  assert.equal(prompt.window.destroyed, true); assert.equal(prompt.retirements(), 1);
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(settled, false); assert.equal(f.menu.releases, 0);
+  release({ canceled: false, filePaths: ['/Users/sm/Workspace/late-destination'] });
+  await submit;
+  assert.equal(await prompt.pending, undefined); assert.equal(f.menu.releases, 1);
+});
+
+test('ordinary copy failure retains a generic close-only form and refuses another submission', async t => {
+  fixture(t);
+  let starts = 0;
+  const prompt = await conversionPrompt({ start: async () => { starts++; throw new Error('Sensitive synthetic path diagnostics'); } });
+  const submit = invokeHandlers.get('private-conversion-submit')!;
+  assert.equal(await submit(prompt.event, 'synthetic creation password', false, true), false);
+  const state = invokeHandlers.get('private-conversion-state')!(prompt.event) as import('../interfaces/private-conversion').PrivateConversionState;
+  assert.equal(state.phase, 'failed'); assert.equal(JSON.stringify(state).includes('Sensitive'), false);
+  assert.equal(prompt.window.destroyed, false);
+  assert.equal(await submit(prompt.event, 'synthetic creation password', false, true), false);
+  assert.equal(starts, 1);
+  ipcMain.emit('private-conversion-cancel', prompt.event);
+  assert.equal(await prompt.pending, undefined);
+});
+
+test('failed creation browser cleanup never releases prepared credentials', async t => {
+  fixture(t);
+  const prompt = await conversionPrompt({ start: async () => ({ directory: '/Users/sm/Workspace/synthetic-created-hub', password: 'synthetic password' }) });
+  const rejection = assert.rejects(prompt.pending, error => !isPrivateBrowserDisposedFailure(error));
+  cleanupError = true;
+  await invokeHandlers.get('private-conversion-submit')!(prompt.event, 'synthetic password', false, true);
+  await rejection;
+  assert.equal(prompt.window.destroyed, true);
 });

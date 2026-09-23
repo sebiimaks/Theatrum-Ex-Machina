@@ -142,7 +142,7 @@ import {
   normalizeScanFoldersOnAddition,
 } from '../common/app-state';
 import { Filters, filterKeyToIndex, FilterKeyNames } from '../common/filters';
-import { GLOBALS } from '../../../node/main-globals';
+import { APP_VERSION } from '../../../interfaces/app-metadata';
 import { LanguageLookup } from '../common/languages';
 import type { SettingsButtonKey, SettingsButtonsType } from '../common/settings-buttons';
 import { SettingsButtons, SettingsButtonsGroups } from '../common/settings-buttons';
@@ -330,8 +330,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   // App state to save -- so it can be exported and saved when closing the app
   appState = AppState;
 
-  macVersion = GLOBALS.macVersion;
-  versionNumber = GLOBALS.version;
+  macVersion = false;
+  versionNumber = APP_VERSION;
 
   vhaFileHistory: HistoryItem[] = [];
 
@@ -681,7 +681,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     public wordFrequencyService: WordFrequencyService,
     public zone: NgZone,
   ) {
-    this.macVersion = this.electronService.platform === 'darwin' || GLOBALS.macVersion;
+    this.macVersion = this.electronService.platform === 'darwin';
   }
 
   ngOnInit() {

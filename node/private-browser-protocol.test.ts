@@ -5,7 +5,7 @@ import { test, type TestContext } from 'node:test';
 import type { PrivateHubSession, PrivateHubPreviewResponseOptions } from './private-hub-session';
 import type { PrivateHubPreviewKind } from './private-hub-catalogue';
 import { createPrivateBrowserProtocolHandler, createPrivateUnlockProtocolHandler, isPrivateBrowserRequestAllowed,
-  isPrivateUnlockRequestAllowed, PRIVATE_BROWSER_ENTRY_URL } from './private-browser-protocol';
+  isPrivateUnlockRequestAllowed, createPrivateConversionProtocolHandler, isPrivateConversionRequestAllowed, PRIVATE_BROWSER_ENTRY_URL } from './private-browser-protocol';
 
 function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve: (value: T) => void;
@@ -273,4 +273,29 @@ test('capsule callback revocation, request aborts and unsupported methods fail c
   assert.equal(aborted.status, 404); assertPrivate(aborted);
   const unsupported = await handler(request('/index.html', { method: 'POST' }));
   assert.equal(unsupported.status, 405); assert.equal(unsupported.headers.get('Allow'), 'GET, HEAD'); assertPrivate(unsupported);
+});
+
+
+test('conversion protocol serves only its bundled form assets and never media or other private documents', async t => {
+  const f = await fixture(t);
+  for (const name of ['conversion.js', 'conversion.css', 'unlock.js', 'gallery.js']) {
+    await fs.promises.writeFile(path.join(f.app, name), 'synthetic bundled asset');
+  }
+  let current = true;
+  const handler = createPrivateConversionProtocolHandler({ appDirectory: f.app, isCurrent: () => current });
+  for (const name of ['index.html', 'conversion.js', 'conversion.css']) {
+    const url = 'theatrum://app/' + name;
+    assert.equal(isPrivateConversionRequestAllowed(url, 'GET'), true);
+    const response = await handler(new Request(url));
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('cache-control')!, /no-store/);
+  }
+  for (const name of ['unlock.js', 'gallery.js', 'media/thumbnails/video.jpg', 'private-hub.json', '../conversion.js', '%63onversion.js']) {
+    const url = 'theatrum://app/' + name;
+    assert.equal(isPrivateConversionRequestAllowed(url, 'GET'), false);
+    if (!name.includes('..')) { assert.equal((await handler(new Request(url))).status, 404); }
+  }
+  assert.equal(isPrivateConversionRequestAllowed('theatrum://app/conversion.js', 'POST'), false);
+  current = false;
+  assert.equal((await handler(new Request(PRIVATE_BROWSER_ENTRY_URL))).status, 404);
 });

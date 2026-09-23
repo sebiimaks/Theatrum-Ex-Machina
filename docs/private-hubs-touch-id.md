@@ -1,10 +1,12 @@
 # Touch ID for private hubs
 
-Touch ID is part of the private-hub implementation. It is a user-selectable unlock method on compatible Macs; the hub password remains available. Private hubs are still disabled in the main application while integration and acceptance checks continue.
+Touch ID work is deferred while the first password-based private-hub build is reviewed. The macOS development build offers **File → Create private copy…** and **File → Open private hub…** with password unlock. Follow the [first-build guide](./private-hubs-first-build.md) for that workflow. The retained Touch ID implementation and the signed-app verification still required for it are described below.
 
-## Controls
+## Controls for a future signed build
 
-In the development private gallery, open **Protection**, then **Touch ID on this Mac**. Enter the current hub password and choose **Enable Touch ID**. In a correctly signed build, macOS authenticates access to the new Keychain item before enrollment is accepted. The app does not save the password in Keychain.
+The unsigned first build reports Touch ID as unavailable. These directions describe the retained implementation for later signed-app verification.
+
+In the private gallery, open **Protection**, then **Touch ID on this Mac**. Enter the current hub password and choose **Enable Touch ID**. In a correctly signed build, macOS authenticates access to the new Keychain item before enrollment is accepted. The app does not save the password in Keychain.
 
 An enrolled hub offers **Unlock with Touch ID** on its unlock screen. The password field remains available. Touch ID enrollment belongs to this Mac and this app identity; the saved key is not copied with the hub and does not synchronize through iCloud. An unchanged copy on the same Mac shares its existing enrollment, so removing that enrollment affects those copies too. Keep the hub password for another Mac, unavailable hardware, biometric lockout, or changes to enrolled fingerprints.
 
@@ -28,9 +30,9 @@ The current development build is unsigned. It reports Touch ID as unavailable an
 
 For a local interactive test, prepare a provisioned app identity with Keychain access for `com.github.sebiimaks.theatrumexmachina`, sign the app and its native code consistently, and use a build without the debugging entitlement. Apple's capability table lists Keychain Sharing for a free Apple Developer account as well as paid development and Developer ID distribution. A distributable Developer ID build requires the appropriate distribution identity and profile. No account, certificate or provisioning profile is created by the test suite.
 
-The native module compiles with `npm run privacy:build` to `build/privacy-tools/private-touch-id.node`. This is a development artifact; it is not yet added to application release packages. Do not copy it into an installed application as a substitute for signing and packaging verification.
+The native module compiles with `npm run privacy:build` to `build/privacy-tools/private-touch-id.node`. The macOS packaging hook rebuilds it for the native target architecture and includes it in `Resources/privacy-tools`; the main process loads that fixed packaged path. The local unsigned test package passed the standard package verifier and ordinary application startup. A separate fixture using its exact packaged modules and native resources also loaded the addon with `app.isPackaged` true and exercised the availability check. This verifies packaged resource resolution and native-module compatibility; signed biometric acceptance remains outstanding. Do not copy the development artifact into an installed application as a substitute for signing and packaging verification.
 
-Automated tests exercise encrypted-store and session integration, UI controls, restricted bridges, cancellation, stale headers, password fallback and failed-cleanup quarantine. The Electron UI fixture uses an explicitly synthetic in-memory credential provider. The compiled addon is tested only for argument validation and refusal of an unsigned/unentitled host. Those tests do not authenticate a real fingerprint or read, add or delete a real Keychain item.
+Automated tests exercise encrypted-store and session integration, UI controls, restricted bridges, cancellation, stale headers, password fallback and failed-cleanup quarantine. The development Electron UI fixture uses an explicitly synthetic in-memory credential provider. Native tests cover addon argument validation, refusal of an unsigned/unentitled host, and packaged loading with an availability check. These tests do not authenticate a real fingerprint or read, add or delete a real Keychain item. Run `npm run test:private-package:native` against the local test package for the packaged-resource fixture; its separate launcher does not establish signed-app acceptance. Commands, results and boundaries are recorded in [the validation log](./private-hubs-validation.md).
 
 Interactive acceptance still needs a signed app and a person using Touch ID: enroll and retrieve, cancel, biometric lockout, fingerprint enrollment changes, disable while biometric authentication is unavailable, system lock during a pending prompt, relaunch, signed-app updates and changed signing identity. Confirm new enrollment rollback and persistent-reference deletion on the supported macOS versions before enabling the feature in the main application.
 

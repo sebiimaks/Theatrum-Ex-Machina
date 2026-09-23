@@ -1,7 +1,11 @@
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { builtinModules } from 'node:module';
+import { dirname, join, relative, resolve } from 'node:path';
 import { test } from 'node:test';
+import { runInNewContext } from 'node:vm';
+import * as ts from 'typescript';
+import { APP_VERSION } from '../interfaces/app-metadata';
 
 import {
   MAIN_TO_RENDERER_CHANNELS,
@@ -62,6 +66,56 @@ test('renderer code has no direct Electron or Node escape hatch', () => {
   assert.match(source('preload.ts'), /contextBridge\.exposeInMainWorld\('theatrum'/);
   assert.match(source('interfaces/electron-bridge.ts'), /RENDERER_TO_MAIN_CHANNELS/);
   assert.match(source('src/app/components/views/file-path.service.ts'), /createTheatrumMediaUrl/);
+});
+
+test('the renderer runtime dependency graph excludes main-process storage and privileged Node modules', () => {
+  const visited = new Set<string>();
+  const sharedNodeUtilities = new Set(['node/thumbnail-count.ts', 'node/utility.ts']);
+  const inspect = (fileName: string): void => {
+    if (visited.has(fileName) || fileName.endsWith('.json')) { return; }
+    visited.add(fileName);
+    const name = relative(repositoryRoot, fileName).replace(/\\/g, '/');
+    assert.ok(!name.startsWith('node/') || sharedNodeUtilities.has(name), `Main-process module reached the renderer: ${name}`);
+    const compiled = ts.transpileModule(readFileSync(fileName, 'utf8'), {
+      compilerOptions: { experimentalDecorators: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    for (const [, dependency] of compiled.matchAll(/require\(["']([^"']+)["']\)/g)) {
+      assert.notEqual(dependency, 'electron', `${name} imports Electron directly`);
+      assert.ok(!dependency.startsWith('node:') && (!builtinModules.includes(dependency) || dependency === 'path'),
+        `${name} imports privileged Node module ${dependency}`);
+      if (!dependency.startsWith('.')) { continue; }
+      const base = resolve(dirname(fileName), dependency);
+      const resolved = [base + '.ts', base + '.json', join(base, 'index.ts'), base].find(candidate => existsSync(candidate));
+      assert.ok(resolved, `Unresolved renderer dependency ${dependency} from ${name}`);
+      inspect(resolved);
+    }
+  };
+  inspect(join(repositoryRoot, 'src/main.ts'));
+  inspect(join(repositoryRoot, 'src/app/components/tags-auto/tags.worker.ts'));
+  assert.ok(visited.has(join(repositoryRoot, 'src/app/components/home.component.ts')));
+  assert.ok(visited.has(join(repositoryRoot, 'src/app/pipes/file-size.pipe.ts')));
+  assert.equal(APP_VERSION, JSON.parse(source('package.json')).version);
+});
+
+test('file size presentation uses only the public preload platform metadata', () => {
+  const compiled = ts.transpileModule(source('src/app/pipes/file-size.pipe.ts'), {
+    compilerOptions: { experimentalDecorators: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  for (const platform of ['darwin', 'win32', 'linux', undefined]) {
+    const exports: { FileSizePipe?: new () => { transform(bytes: number, excludeParen?: boolean): string } } = {};
+    runInNewContext(compiled, {
+      exports,
+      ...(platform ? { theatrum: Object.freeze({ platform }) } : {}),
+      require: (dependency: string) => {
+        assert.equal(dependency, '@angular/core');
+        return { Pipe: () => () => undefined };
+      },
+    });
+    assert.ok(exports.FileSizePipe);
+    const pipe = new exports.FileSizePipe();
+    assert.equal(pipe.transform(1_000_000_000, true), platform === 'darwin' ? '1.0 GB' : '954 MB');
+    assert.equal(pipe.transform(0), '(0 MB)');
+  }
 });
 
 test('the renderer has a restrictive CSP and no inline event handlers', () => {

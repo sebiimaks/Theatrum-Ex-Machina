@@ -1,8 +1,8 @@
-# Private-hub development validation — 22 September 2026
+# Private-hub development validation — updated 23 September 2026
 
-This record covers experimental storage, generation, browser isolation, the dedicated password/opening workflow, the normal-application pause boundary, the saved-document/application transition adapters, the connected ordinary renderer safeguards, the main host lifecycle integration, and the private gallery with encrypted notes/tag editing, native source selection, per-video encrypted preview regeneration, encrypted automatic-lock settings, authenticated password changes, verified unprotected copies, and native menu/clipboard controls. It is not an application release. Private hubs remain unavailable through the normal app interface. All catalogue, password, and media fixtures were synthetic; no existing user hub was converted.
+This record covers experimental storage, generation, browser isolation, the dedicated password/opening and private-copy workflows, the normal-application pause boundary, the saved-document/application transition adapters, the connected ordinary renderer safeguards, the main host lifecycle integration, and the private gallery with encrypted notes/tag editing, native source selection, per-video encrypted preview regeneration, encrypted automatic-lock settings, authenticated password changes, verified unprotected copies, and native menu/clipboard controls. It is not an application release. The latest macOS development build enables native File menu entry for the password workflow; earlier milestones below describe its previously disabled state. All published verification results below use synthetic catalogue and media fixtures. Touch ID work is deferred at the user's request.
 
-## Checkout and native helper build
+## Earlier checkout and native helper build
 
 | Field | Value |
 | --- | --- |
@@ -18,9 +18,370 @@ This record covers experimental storage, generation, browser isolation, the dedi
 
 The native advisory-lock helper was rebuilt by `npm test` for the native-controls milestone. No application package was built or installed. Linux native execution, helper packaging, and code signing remain unverified.
 
+The table above records the earlier integration milestones before commit `0bfe180d953875654d72354796770d648623e2ea`. Later milestones identify their own checkout state below.
+
 ## Checks
 
 Run commands from the repository root above, with `TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp` for filesystem tests.
+
+### Catalogue metadata false positive — 23 September 2026
+
+A catalogue metadata update can advance the filesystem change timestamp (`ctime`) without changing the contents or modification timestamp (`mtime`). The previous validation treated that metadata change as a catalogue edit and refused conversion.
+
+A three-second delay in the synthetic packaged picker, without deliberate metadata changes, passed. Reapplying the synthetic catalogue's existing permissions after review then reproduced the exact `source-changed` error in the previous package, while its bytes, size, modification time, inode and permissions remained unchanged. The failure was recorded in `tmp/private-picker-ctime-red-host.log` and `tmp/private-picker-ctime-red-diagnostic.json`. Three headless metadata-only success cases also failed before the fix.
+
+Catalogue comparison now uses its exact SHA-256 content digest together with path, device/inode, size and modification time. A metadata-only `ctime` difference during validation triggers a fresh read through the existing descriptor/identity checks and requires the original content digest to match. The digest remains available after plaintext buffers are wiped. Preview-file and directory checks are unchanged. Same-size content edits with restored modification times remain rejected; cancellation, uncertain descriptor closure and buffer wiping retain their existing handling.
+
+All **60 focused conversion tests** passed: 30 review tests, including seven new metadata/content/cancellation/cleanup cases, and 30 converter tests. Main/renderer/worker and persistence TypeScript checks, application lint, targeted converter/test lint, native-driver syntax and `git diff --check` passed. Logs include `tmp/private-catalogue-metadata-red.log`, `tmp/private-catalogue-metadata-green.log`, `tmp/private-metadata-conversion.log`, `tmp/private-metadata-check.log` and `tmp/private-metadata-persistence-types.log`.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `codex/private-hubs` |
+| HEAD | `0bfe180d953875654d72354796770d648623e2ea` |
+| Worktree state | Dirty; preceding work preserved and changes uncommitted |
+| Release designation | `vha.releaseWorktree=false`; unsigned local test package |
+| Application artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-metadata-check/mac-arm64/Theatrum Ex Machina.app` |
+| Corresponding media source | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-metadata-check/theatrum-ex-machina-media-source-v2.0.0.tar.xz` |
+
+Exact successful build command:
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-metadata-check TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-metadata-build.log 2>&1
+```
+
+The package startup, media and licensing verifier passed. No commit, push, installation or production release was performed; previous review apps remain available. Broader real-world conversion acceptance remains outstanding.
+
+The exact packaged failure case passed after the fix with:
+
+```sh
+THEATRUM_PRIVATE_PICKER_DELAY_MS=3000 THEATRUM_PRIVATE_PICKER_TOUCH_CTIME=1 THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-metadata-check TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm run test:private-package:host > tmp/private-picker-ctime-green-host.log 2>&1
+```
+
+Both packages saw `ctimeChanged:true`, `mtimeChanged:false`, `identityChanged:false` and `contentEqual:true`. The previous package reported `sourceChangedFailure:true`; the new package reported `false` and passed all five normal/private checkpoints: conversion, decoded preview, encrypted note save, lock/restore, password reopen and clean close. Six scans covered 215 profile, 35 encrypted-hub and 62 ordinary-tree file checks, without the tested private markers in UTF-8/UTF-16LE form. Eighteen unpacked files and the package were verified unchanged. Archive SHA-256: `ad26d9939828cc3de7c895e539b2d4f6b836c03e6cd10d8acc81317c9ed2e7b0`. This controlled metadata-only reproduction validates the fix; it does not substitute for broader real-world conversion and filesystem-permission acceptance.
+
+### Destination validation and failure diagnostics — 23 September 2026
+
+A path defect was reproduced on a case-insensitive filesystem: native `realpath` returned the stored capitalization, while the selected path used another spelling of the same physical folder. The helper rejected the difference. The JavaScript implementation of `realpathSync` could preserve the supplied capitalization, so validation now uses the native canonical path.
+
+Selection now resolves the stored path before passing it to the strict storage layer. Every selected ancestor is checked for symbolic links and retained device/inode identity; the canonical leaf must identify the same directory. Existing destination entries are still skipped, and exclusive creation is unchanged. Seven destination tests pass, including the two case-alias regressions that failed before the fix and refusal of a symlink ancestor whose leaf is a normal directory. The packaged-host fixture now submits a case-variant selected path where the filesystem supports it.
+
+Conversion failures now identify source inspection, changed source data, storage initialization, catalogue encryption, preview copying, verification or completion receipt publication. Fixed error categories cross IPC, with static user-facing messages. Existing errno categories and branded failures take precedence; original error identity, cancellation and cleanup handling are retained. No exception messages, paths, stacks or credentials cross this boundary or get written to diagnostic logs.
+
+**209 focused tests passed:** seven destination, 66 private-browser, 34 conversion-request, 23 conversion-review, nine conversion-workspace, 30 conversion, four failure-category, 16 conversion-preload and 20 conversion-UI tests. Both capitalization regressions ran on the case-insensitive test volume; none were skipped. Main/renderer/worker and persistence TypeScript checks, lint, JavaScript syntax checks and `git diff --check` passed.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `codex/private-hubs` |
+| HEAD | `0bfe180d953875654d72354796770d648623e2ea` |
+| Worktree state | Dirty; preceding work preserved and changes uncommitted |
+| Release designation | `vha.releaseWorktree=false`; unsigned local test package |
+| Runtime | macOS arm64, Node.js `22.23.2`, Electron `42.11.1` |
+| Application artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-path-check/mac-arm64/Theatrum Ex Machina.app` |
+| Corresponding media source | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-path-check/theatrum-ex-machina-media-source-v2.0.0.tar.xz` |
+
+Exact successful build command:
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-path-check TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-path-build.log 2>&1
+```
+
+The standard package verifier passed application startup, media and licensing checks. The preceding app and installed application were preserved. No commit, push, installation or production release was performed.
+
+The packaged-host test passed all five checkpoints with:
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-path-check TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm run test:private-package:host > tmp/private-path-packaged-host.log 2>&1
+```
+
+Its synthetic picker returned a case-variant parent, with retained existing files and an occupied **Private hub** name. The packaged main created **Private hub 2**, decoded its preview, saved an encrypted note, locked, reopened by password with the note intact, restored the ordinary workspace and closed cleanly. Six scans covered 215 profile, 35 encrypted-hub and 62 ordinary-tree file checks; synthetic private-note/password markers were absent in the tested encodings. Eighteen unpacked files and the original package remained unchanged. Archive SHA-256: `952b142212fa7f1761ef7aa50fb16c1535a9f4b5c912d741b3b63149a286b399`. Native picker responses were automated, so this remains a synthetic packaged-application result, not acceptance of real macOS permission prompts.
+
+### Folder-selection correction after first user review — 23 September 2026
+
+The first user review reached conversion counts but failed immediately after selecting a destination on the Mac's internal drive. The user tried creating a folder and selecting that folder again. The old Save dialog could return an existing directory, while encrypted storage intentionally requires an exclusive new directory. A separate regression also showed that creating a sibling folder or `.DS_Store` after review incorrectly invalidated the source-parent fingerprint, even when every catalogue and preview file was unchanged.
+
+The native picker now selects an existing parent folder, with **New Folder** available. Main chooses an unused child named **Private hub**, **Private hub 2**, and so on; the store still creates it exclusively and never adopts or overwrites existing content. Canonical parent identity remains checked. Conversion review now compares the source parent's device/inode rather than unrelated directory timestamps/size, while retaining strict catalogue, preview-file and preview-directory checks. Failure states expose only fixed categories for unavailable/existing destinations, access denial, full storage, missing files or a generic failure; passwords, paths and native diagnostics never enter these messages.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `codex/private-hubs` |
+| HEAD | `0bfe180d953875654d72354796770d648623e2ea` |
+| Worktree state | Dirty; preceding work preserved and changes uncommitted |
+| Release designation | `vha.releaseWorktree=false`; unsigned local test package |
+| Application artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-folder-fix/mac-arm64/Theatrum Ex Machina.app` |
+| Corresponding media source | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-folder-fix/theatrum-ex-machina-media-source-v2.0.0.tar.xz` |
+
+Exact successful build command:
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-folder-fix TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-folder-build.log 2>&1
+```
+
+The standard package verifier passed startup, media tools and licensing checks. The prior review app and installed application were preserved. The build used macOS arm64, Node.js `22.23.2` and Electron `42.11.1`; it was not committed, pushed, installed or released.
+
+The corrected native packaged-host regression passed all five checkpoints with:
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-folder-fix TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm run test:private-package:host > tmp/private-folder-packaged-host.log 2>&1
+```
+
+The actual packaged main/menu ran in the existing disposable exact-material fixture. Its picker created a new folder beside the source catalogue **after review**, populated it with retained files and an existing **Private hub** folder, then selected that parent. Conversion successfully created **Private hub 2**, preserved the existing contents, displayed the encrypted preview, saved a private note, locked, password reopened with the note intact, restored the ordinary workspace and closed with settings saved. The native picker response is automated; no user catalogue or original video was accessed by this verification.
+
+Six scans completed, with 215 profile, 35 encrypted-hub and 62 ordinary-tree file checks across repeated stages. The encrypted destination is nested in the synthetic ordinary tree for this regression, so its encrypted files are also included in ordinary-tree scans. Synthetic password/private-note markers were absent in UTF-8/UTF-16LE form. Eighteen unpacked files and the original package were verified unchanged; archive SHA-256 was `4c438a32bafcaa76b32e3ee8eaa5d9407154dbafaadf9267f975a86e005dd4b4`. Marker scans retain the earlier memory, transformed-media and OS-trace limitations.
+
+**200 focused tests passed:** 23 conversion-review, 22 conversion, four destination-selection, 66 private-browser, three failure-category, 34 conversion-request, 16 conversion-preload, 20 conversion-UI and twelve package tests. Main/renderer/worker and persistence TypeScript checks, lint, native-driver syntax checks and `git diff --check` passed. Root-run logs include `tmp/private-folder-destination.log`, `tmp/private-folder-browser.log`, `tmp/private-folder-check.log`, `tmp/private-folder-types.log`, `tmp/private-folder-packaging.log`, `tmp/private-folder-root-lint.log`, `tmp/private-conversion-parent-review.log` and `tmp/private-conversion-parent-copy.log`.
+
+This fixes the reproduced selection and source-parent defects. Broader real-world conversion acceptance remains outstanding. Quit the earlier test app before opening the corrected app to avoid launch forwarding to the previous running instance. Touch ID remains deferred.
+
+### First working password-based macOS test build — 23 September 2026
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `codex/private-hubs` |
+| HEAD | `0bfe180d953875654d72354796770d648623e2ea` |
+| Worktree state | Dirty; existing work and this milestone remain uncommitted |
+| Release designation | `vha.releaseWorktree=false`; unsigned local test package |
+| Application artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private/mac-arm64/Theatrum Ex Machina.app` |
+| Corresponding media source | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private/theatrum-ex-machina-media-source-v2.0.0.tar.xz` |
+
+The macOS File menu now offers **Create private copy…** and **Open private hub…** through main-owned callbacks. No ordinary renderer capability was added. Duplicate clicks share a pending-operation reservation; missing writable catalogues, unavailable operations and password/folder failures receive generic native feedback. Entry remains unavailable on other platforms. Touch ID signing and biometric acceptance are deferred; this review build uses passwords. The [first-build guide](./private-hubs-first-build.md) describes supported operations and the retained unencrypted originals.
+
+The exact build command was:
+
+```sh
+TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-first-build.log 2>&1
+```
+
+The new test script uses a separate output directory, preserves the earlier test app, explicitly disables publishing and runs the standard package verifier. Ordinary startup, runtime/media payloads and licensing verification passed. No installed app, commit, branch, remote or release was changed. Node.js `22.23.2` and Electron `42.11.1` were used on macOS arm64.
+
+The complete packaged-host acceptance command passed all **five checkpoints**:
+
+```sh
+TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm run test:private-package:host > tmp/private-first-packaged-host.log 2>&1
+```
+
+- Loaded the untouched packaged `main.js`, ordinary Angular UI and synthetic catalogue, with the real native File menu registered.
+- Invoked **Create private copy…**, completed the actual password/consent form, converted the hub, displayed its encrypted JPEG and saved an encrypted note while the ordinary window was hidden and inert.
+- Locked the private gallery, destroyed its isolated session window and restored the ordinary window/menu without changing its files during private use.
+- Invoked **Open private hub…**, entered the password in a fresh isolated prompt and verified the saved private note and preview after reopening.
+- Locked again, restored the ordinary workspace, closed normally and verified its settings save. No private path was passed to the OS recent-document adapter.
+
+The exact packaged archive, physical UI assets and native resources run in a disposable copied bundle through a test launcher. Unlike the earlier module-level fixture, host mode loads the unmodified production main and invokes its registered MenuItem callbacks; it does not rewrite readiness, inject host exports or bypass the transition. Native pickers select only fixture paths, and recent-document/single-instance adapters are intercepted to avoid touching system state. The original package is checked unchanged before reporting success. Eighteen unpacked files were verified; archive SHA-256 was `3b44826499377c890f90d953d5ece7c5bfc6816ccc5cf3fdbec9da30bdfa78ff`.
+
+Six persistent-storage scans completed: **215 profile-file checks, 35 encrypted-hub-file checks and 17 ordinary-hub-file checks**, including repeated checks between stages. Synthetic password and private-note markers were absent as UTF-8/UTF-16LE bytes. The ordinary directory was hashed before each private period and remained unchanged during those periods. The second ordinary save legitimately rotates its previous catalogue into `.scaena.bak`; the fixture verifies that exact change separately. These scans do not establish secure memory erasure or absence of every OS/transformed-media trace.
+
+**43 focused tests** passed: five native menu, 16 application-host, ten instrumentation and twelve package tests. Main/renderer/worker and persistence TypeScript checks, lint, syntax checks and `git diff --check` passed. The existing host instrumentation now preserves the real platform gate and menu registrations instead of enabling them for a test. Logs are `tmp/private-first-menu.log`, `tmp/private-first-host.log`, `tmp/private-first-instrumentation.log`, `tmp/private-first-packaging.log`, `tmp/private-first-check.log`, `tmp/private-first-types.log` and `tmp/private-first-lint.log`.
+
+This first working test build covers the password-based create/edit/lock/reopen path. Original-video playback/import/relocation in the private gallery, broader platform/OS failure acceptance and performance work remain follow-up items. Real native picker history, hardware input, sleep/lock behavior and signed Touch ID were not established by this run.
+
+### Local macOS test package and packaged private windows — 23 September 2026
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `codex/private-hubs` |
+| HEAD | `0bfe180d953875654d72354796770d648623e2ea` |
+| Worktree state | Dirty: preceding privacy work and this milestone remain uncommitted |
+| Release designation | `vha.releaseWorktree=false`; local unsigned test packaging only |
+| Runtime | macOS arm64, Node.js `22.23.2`, Electron `42.11.1` |
+| Application artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test/mac-arm64/Theatrum Ex Machina.app` |
+| Corresponding media source | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test/theatrum-ex-machina-media-source-v2.0.0.tar.xz` |
+
+The exact successful build command was:
+
+```sh
+TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:test > tmp/private-mac-package-build.log 2>&1
+```
+
+The test script explicitly disables publishing and uses the installed Electron distribution. It reuses verified media tools and rebuilds the two native privacy helpers before packaging. Existing runtime/media links resolve only to the other authorized worktree beneath `/Users/sm/Workspace`; those targets were not modified. The full package verifier passed, including ordinary startup of the untouched test app, media tools, architectures and licensing payload. Existing Angular unused-file/CommonJS optimization warnings were nonfatal. No installed application, branch, commit, remote or release was changed.
+
+Actual packaging exposed two defects that source-only checks missed. The main/preload compiler now explicitly emits CommonJS; the previous output mixed ES imports with CommonJS runtime assumptions and failed at packaged startup. The strict private file reader also correctly rejected ASAR virtual file identities. The twelve public private-interface assets and standalone preloads now ship as physical `app.asar.unpacked` files, selected by a fixed main-process resolver. Encrypted catalogue/media records do not use that directory. File identity, link refusal, bounded reads and no-store protocol checks remain intact; no generic archive extraction fallback was added. The package verifier checks unpacked flags, physical files and exact source bytes. Explicit package smoke tests now redirect their profiles, diagnostics, temporary files and downloads into their disposable workspace directory.
+
+The packaged acceptance command passed all **five stages**:
+
+```sh
+TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm run test:private-package:native > tmp/private-packaged-native.log 2>&1
+```
+
+1. **Packaged material:** real packaged Electron loaded compiled private modules, the native Touch ID addon and fixed Resources helper paths; an encrypted synthetic hub used the actual native lease.
+2. **Static protocols:** all three documents served their HTML/CSS/JavaScript with no-store headers; HEAD requests, forbidden routes and external URLs behaved as expected.
+3. **Credential windows:** unlock and conversion screens loaded their narrow bridges in separate nonpersistent sandboxed sessions. Cancellation destroyed each window, drained cleanup and restored the ordinary menu.
+4. **Private gallery:** an encrypted JPEG decoded and the synthetic video notes appeared in the isolated gallery. Its disk-cache size remained zero.
+5. **Closure:** the gallery was destroyed, the store locked and the menu restored, with zero default-session requests or recent-document writes.
+
+The runner copies the test bundle, verifies its material hashes, and substitutes a launcher only in that disposable copy. It imports the unchanged compiled modules from the original archive renamed `payload.asar`, with identical physical UI companions and native resources. The executable, framework, archive and **18 unpacked files** are checked, and the original test package is reverified before reporting success. It neither changes fuses nor bypasses embedded ASAR integrity; it refuses this fixture method when that integrity fuse is enabled. The archive SHA-256 was `10f77718f9e4e646fd36aca891fc15e008a4cf5e4b264eabbd8323d8df50d0b7`.
+
+Six mandatory persistent-storage scans completed, totaling **93 profile-file checks and 30 encrypted-hub-file checks** across repeated scans. Neither synthetic password nor synthetic note/JPEG-comment markers appeared as UTF-8 or UTF-16LE bytes. Both roots must exist as physical directories and contain scanned files at every checkpoint. These are bounded marker observations, not evidence of secure memory erasure, all transformed media copies, or OS-wide trace absence. Successful synthetic fixtures are removed; failed diagnostic fixtures remain beneath this worktree's `tmp/` directory.
+
+**132 focused tests** passed: 12 package/configuration, 15 UI-path/protocol composition, 13 static protocol, 66 browser lifecycle, 10 Electron security and 16 application-host tests. Main/renderer/worker and persistence TypeScript checks, lint, script syntax checks and `git diff --check` passed. Logs are `tmp/private-packaged-build-config.log`, `tmp/private-ui-paths-tests.log`, `tmp/private-packaged-protocol.log`, `tmp/private-packaged-browser.log`, `tmp/private-packaged-security.log`, `tmp/private-packaged-host.log`, `tmp/private-packaged-check.log`, `tmp/private-ui-paths-types.log` and `tmp/private-packaged-final-lint.log`.
+
+This establishes loading and basic private-window behavior from actual macOS package material, not the untouched app's private entry or full packaged host handoff. The fixture seeds an encrypted hub; it does not submit the conversion form. Touch ID testing loaded the real addon and queried availability only, without Keychain changes or a biometric prompt. Provisioned signed enrollment/unlock/removal, full packaged transitions, native Linux execution and broader fault/OS lifecycle acceptance remain outstanding. `PRIVATE_HUB_UI_READY` remains false and both native entries remain unregistered.
+
+### Private package payload and native-helper paths — 23 September 2026
+
+This milestone uses the same private worktree, branch and commit recorded below, with existing dirty changes preserved and `vha.releaseWorktree=false`. No native helper or application was built, installed or released. Packaging tests created only disposable synthetic ASAR fixtures beneath the worktree's `tmp/` directory.
+
+The package audit found that the builder omitted all private document assets, standalone preloads and native privacy helpers. It also found a development-only lock-helper path and a Git ignore rule hiding the new conversion script. The manifest now lists the three isolated documents and preloads explicitly, includes fixed platform-specific helpers outside ASAR, and retains the conversion script in source control. A builder `beforePack` hook rebuilds helpers before resource copying and checks their binary format, role and architecture. macOS and Linux packaging must run on the native target OS/architecture; Windows packaging includes no unsupported privacy helpers. Existing release-preflight commands and the disabled feature gate are unchanged.
+
+Both lease and Touch ID use one fixed-name resolver: development uses `build/privacy-tools`, packaged main uses `Resources/privacy-tools`. Unknown names, renderer/utility processes, incomplete Electron runtimes, malformed resource roots and paths inside ASAR are refused without a PATH or environment fallback. Package verifiers check the actual archive for exact document/preload bytes and required main modules, reject native acceptance drivers/embedded helper binaries, and check the separate native resources. The unsigned Touch ID gate remains intact.
+
+**64 focused tests** passed: nine package/ASAR tests, nine helper-resolution tests, 14 lease tests, 31 Touch ID tests and the existing Linux packaging configuration test. They cover omitted/tampered assets, missing modules, wrongly embedded binaries, wrong native formats/architectures, symlinked or nonexecutable helpers, compilation failure, cross-target refusal and packaged helper routing. Resolver tests use controlled runtime objects; their lease test runs the existing development helper after asserting the packaged spawn path. Synthetic native headers do not establish that a packaged executable loads. The existing real macOS helper headers were also checked without rebuilding or running a packaged app.
+
+Main/renderer/worker and persistence TypeScript checks, lint, syntax checks and `git diff --check` passed. Logs are `tmp/private-packaging-tests.log`, `tmp/private-helper-paths-current.log`, `tmp/private-helper-lock-current.log`, `tmp/private-helper-touch-id-current.log`, `tmp/private-packaging-linux-config.log`, `tmp/private-packaging-check.log`, `tmp/private-helper-types-current.log` and `tmp/private-packaging-lint.log`. The actual-host native run below passed again after the resolver change. A real test package and packaged private-window/native-helper smoke run, native Linux execution and signed biometric acceptance remain outstanding.
+
+### Private-copy creation through the actual main host — 23 September 2026
+
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The worktree remains intentionally dirty with preceding privacy work. The existing compiled Angular assets in `tmp/private-transition-angular`, native helper and media tools were reused unchanged. No browser/helper build, application package, install, commit, push or release was performed.
+
+The extended native command passed all **12 stages**, including five new creation stages through actual `main.ts`, its transition singleton, ordinary source monitor/watcher and compiled Angular editor:
+
+```sh
+TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm run test:private-host:native
+```
+
+- **Saved review:** pending notes and a row-tag draft were saved before the isolated count-only review appeared. The ordinary window was hidden and inert, its watcher stopped and ordinary admission closed. Concurrent native open/create requests were refused.
+- **Late picker cancellation:** the fixture held an admitted destination picker, cancelled the form and confirmed its destruction. Ordinary admission, editing and watching remained paused until the held picker returned a successful selection. That late result created no output. Clean settlement restored the same ordinary catalogue, window, menu and watcher without changing the saved source tree.
+- **Creation and activation:** the new destination was created through the real converter, then independently activated through the session. The form was destroyed before the separate private gallery appeared; the saved notes/tag draft and decrypted thumbnail were visible. The ordinary catalogue, previews and original video remained unchanged during private use.
+- **Lock and receipt readback:** Lock restored the ordinary workspace and watcher. Reopening the encrypted store independently verified the completion receipt, missing-filmstrip inventory, saved metadata and authenticated activation marker. This destination received no test-injected receipt or activation record.
+- **Password reopen and editing:** the normal native opening path reopened the converted hub with its creation password. A new private note was saved and survived encrypted readback after Lock. Full ordinary-tree fingerprints were unchanged, and recorded recent-document requests still contained only the original ordinary catalogue.
+
+The seven earlier stages also passed again, covering ordinary unlock, legacy IPC refusal, real watcher recovery/discovery, close-save failure and Keep Working, deferred ordinary opens during a failed quit, reopening and final catalogue/settings save.
+
+Thirteen scans inspected 456 profile files, 146 encrypted files (including 68 converted-hub files) and 77 ordinary-hub files cumulatively. No private canary or either password appeared in the scanned UTF-8/UTF-16 forms. Converted-hub scans additionally rejected the known plaintext source notes/tag and the complete source JPEG bytes; those values are intentionally allowed in the ordinary profile and source hub. The converted directory and at least one scanned file are required at every checkpoint from creation onward. Private cache size was zero at the review and gallery checkpoints. Results are in `tmp/private-host-creation-native.log`. The final run includes the strengthened plaintext scanning and full-tree preservation checks identified during independent review, and the packaged-helper resolver change.
+
+The eight host-instrumentation tests passed, JavaScript syntax and scoped lint checks passed, and `git diff --check` passed. Logs are `tmp/private-host-creation-instrumentation.log` and `tmp/private-host-creation-lint.log`; lint reported only the existing ESLint configuration deprecation notice. No defect was found in the reviewed host conversion lifecycle; the separate packaging audit and fixes are recorded above.
+
+The main host is compiled in memory with the existing test-only readiness substitution; production entry remains disabled and unregistered. Native dialog answers, recent-document APIs and OS single-instance arbitration remain controlled by the fixture. This verifies the actual application composition with synthetic data, not real permission/picker history, OS sleep/lock, forced crashes, signed Touch ID, other platforms or native cleanup-fault acceptance. Raw scans do not establish memory/OS cache erasure or the absence of transformed copies. Broader failure/reconnection and protected source-operation coverage remain acceptance gates.
+
+### Isolated private-copy creation and verified activation — 23 September 2026
+
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The worktree remains intentionally dirty with preceding work and these changes. Existing native helpers and media tools were reused; no browser/helper build, application package, install, commit, push or release was performed.
+
+The isolated **Create private copy** screen displays only inventory counts, takes a confirmed password and separate acknowledgements for retained originals and missing previews, and reports bounded progress. Its standalone preload exposes only state, one submission and cancellation. The main-owned native dialog chooses a new destination. Retirement aborts admitted work before draining the request, picker, conversion and browser cleanup; uncertain cleanup retains quarantine. First activation reopens and verifies the completed encrypted receipt and content through the existing session before showing the private gallery. The application adapter captures the authorized writable source, pauses normal work and saves ordinary drafts before review. Opening and creation share admission and the same ordinary restoration path.
+
+The affected headless suites passed **357 tests**, with no failures or skips: 32 conversion-request, 15 conversion-preload, 19 conversion-UI, nine conversion-workspace, 66 browser, 33 opening, 23 application-transition, 20 application-workspace, 16 application-host, eight host-instrumentation, 13 browser-protocol, 30 native-menu, 27 password-request, nine hub-workspace, 27 main-IPC/close and ten Electron-security tests. The preload suite passed again after promptly clearing its submitted argument reference. Main/renderer/worker TypeScript checks, persistence TypeScript checking, lint, JavaScript syntax checks and `git diff --check` passed. Logs are `tmp/private-conversion-integration-final.log`, `tmp/private-conversion-boundaries-final.log`, `tmp/private-conversion-preload-final.log`, `tmp/private-conversion-check-final.log` and `tmp/private-conversion-types-final.log`.
+
+The native command was:
+
+```sh
+TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm run test:private-conversion:native
+```
+
+All four stages passed using the actual conversion document, preload, browser, workspace, converter, store, session and gallery:
+
+- **Review:** the isolated window had no ordinary bridge, exposed only counts, displayed missing filmstrips, and started with empty credentials. Controls remained reachable by scrolling at the compact size.
+- **Picker cancellation:** both required acknowledgements were enforced. Cancelling the automated native picker destroyed the form, created no destination, preserved the source and restored the ordinary menu.
+- **Creation and gallery handoff:** a fresh form session was destroyed before the separate private gallery opened. The encrypted thumbnail decoded, notes were preserved and the ordinary source remained unchanged.
+- **Lock and readback:** the gallery was destroyed, the encrypted receipt and content were verified again, the missing-preview inventory and notes were preserved, and the authenticated activation marker was present. The ordinary menu was restored.
+
+Five scans inspected 88 profile files and 18 encrypted files cumulatively, without finding the synthetic private markers or passwords in the scanned UTF-8/UTF-16 forms. Each stage reported zero private cache bytes, default-session requests and recent-document writes. The original plaintext fixture was deliberately outside these scan targets and was independently checked for unchanged content. Results are in `tmp/private-conversion-native.log`. Empty/count-only screenshots `tmp/private-conversion-review.png` and `tmp/private-conversion-small-review.png` were visually inspected; the regular form fits and the compact form scrolls without horizontal overflow.
+
+This standalone harness calls the actual conversion workspace directly with a synthetic source-exclusion guard. Creation through the actual main/Angular save-and-pause transition is covered by the later main-host milestone above. Dialog answers select only owned fixture paths, and recent-document calls are recorded without forwarding to macOS. Real native picker history and permissions, OS sleep/lock, crash cleanup, hardware input, signed Touch ID and supported-platform helper packaging remain unverified. Bounded raw-pattern scans do not prove memory/cache erasure or absence of transformed copies. `PRIVATE_HUB_UI_READY` remains false, and both native opening and creation functions remain unregistered.
+
+### Storage cleanup and conversion inventory review — 23 September 2026
+
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The worktree remains intentionally dirty with the preceding work and these changes. No application package, browser build, install, commit, push or release was performed.
+
+The store now confirms closure of its read/write/directory-sync descriptors and both streamed directory handles. Failed or timed-out closure immediately revokes keys and new work, remains identity-branded through static create/open and session disposal, and retains a process-local directory quarantine after late settlement. Lease acquisition/release preserves unconfirmed helper or descriptor cleanup separately from safely rejected acquisition. Touch ID availability can no longer hide a storage cleanup failure behind an unavailable result. Repeated session close/unlock cannot reset the failure.
+
+Review found and fixed a startup race: initial header publication and verification now participate in the store queue, so helper loss cannot release the lease or process reservation before startup handles drain. A real-helper-death regression holds that header close and verifies both reservations remain held. Conversion's outer store drain now allows thirty seconds instead of five, accommodating queued file cleanup and the lease's sequential graceful shutdown, forced-termination confirmation and descriptor close. Individual descriptor/iterator deadlines remain five seconds. Fault tests simulate rejected closure and deadline expiry; they do not establish OS cache or memory erasure.
+
+The new `reviewCatalogueForPrivateConversion` API returns frozen counts for referenced videos, available preview files, preview bytes and missing counts by kind. Tests reject source-video metadata access, preview payload reads and filesystem writes during review, and verify owned catalogue buffer wiping. Conversion consumes the exact issued review once and rechecks source content/identities plus writer-exclusion callback and cancellation signal. Missing-preview consent without that proof, forged/cloned reviews, stale inventories, changed lifetimes and replays fail before destination creation. Existing complete-hub foundation callers remain compatible.
+
+The affected suites passed **375 tests**, with no failures or skips: 20 review, 22 conversion, 14 lease, 35 store, 53 session, 27 password-request, 21 media, five catalogue, 37 password-change/session/verification, 39 Touch ID store/session, 37 plaintext export/session, 27 opening, 23 transition and 15 host tests. The conversion suite was rerun after the startup-drain fix and the separate outer timeout change. Main/renderer/worker TypeScript checks, persistence TypeScript checking, lint and `git diff --check` passed. Five existing test-only warnings remain in the broader scoped lint output. Root-run logs are `tmp/private-store-integration-current.log`, `tmp/private-review-conversion-final.log`, `tmp/private-conversion-store-startup-final.log`, `tmp/private-store-check-final.log`, `tmp/private-store-types-final.log` and `tmp/private-store-lint-final.log`. The final lint-only run supersedes a transient test-style failure recorded in the earlier combined check log; it does not bypass any rule.
+
+Run the new review suite separately with:
+
+```sh
+TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm run test:private-hub-conversion-review
+```
+
+At this earlier milestone, the isolated conversion interface, native destination selection and main conversion/activation controller were outstanding; the later private-copy milestone above connects and tests them. `PRIVATE_HUB_UI_READY` remains false and the native entries remain unregistered. Signed Touch ID acceptance, broader native failure/reconnection cases and helper packaging remain required before entry is enabled.
+
+### Actual main-host lifecycle and conversion cleanup — 23 September 2026
+
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The checkout remains intentionally dirty with the preceding uncommitted work and this milestone. The successful production Angular assets at `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-transition-angular` were reused unchanged. No additional browser build, application package, install, commit, push or release was performed.
+
+The native command was:
+
+```sh
+TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm run test:private-host:native
+```
+
+Seven stages passed against actual `main.ts`, its private-workspace singleton, startup/catalogue authority, ordinary source monitor and watchers, scan/extraction queues, trusted IPC and close/save handlers. A test-only TypeScript AST compiler changes exactly the literal-false readiness initializer, ordinary preload path and app-assets path in memory, then appends a frozen main-process driver. It rejects a changed gate, registered entry, unexpected path expressions or noncanonical fixture paths. The production source remains disabled and unregistered; the fixture does not add a shipping test flag or renderer capability.
+
+The run verified:
+
+- Actual startup loaded the synthetic normal catalogue and source grants into the compiled Angular application.
+- Normal notes/tag drafts were saved before private opening; the normal window was hidden, private data stayed in a separate nonpersistent session and the normal watcher was stopped. An actual legacy minimize IPC request from the ordinary preload was denied while the private window was focused.
+- A real synthetic source video added while private did not restart normal work. After Lock, the real monitor/watcher and scan path resumed and exposed the new video in the ordinary gallery.
+- Temporarily making the owned normal-hub directory nonwritable caused the actual catalogue-close failure. Choosing **Keep Working** preserved the draft and restored ordinary use.
+- A private quit reached the actual settings-write failure handler. While the fixture held its **OK** acknowledgement, a requested second catalogue remained deferred and unauthorized. The trusted close-failure acknowledgement released that request, which then opened normally.
+- Another private open/cancel cycle restored normal use, and closing the real normal window persisted the final ordinary catalogue and settings.
+
+Eight scans inspected 287 profile files, 48 encrypted-hub files and 48 ordinary-hub files cumulatively. No private canary/password patterns were found in the scanned UTF-8/UTF-16 forms; private browser cache size was zero at the open checkpoint. Normal Angular asset caching is expected. Results are in `tmp/private-host-native.log`. The synthetic restored-view capture `tmp/private-host-restored-review.png` was inspected for layout; it retained an earlier input frame, so draft/save evidence comes from DOM assertions and the persisted catalogue, not the capture. Review screenshots are excluded from scans. These observations do not establish memory erasure, absence of transformed copies or operating-system cache/metadata privacy.
+
+Native dialog responses select only owned fixture paths. Recent-document APIs are recorded without forwarding to macOS. Single-instance APIs are substituted because the native macOS socket ignores the redirected fixture temporary directory; cross-process arbitration is not tested. The private hub uses a direct synthetic activation marker, so this run does not verify conversion UI or initial receipt acceptance. Real OS permission prompts, sleep/lock events, crashes, hardware IME, platform clipboard behavior and signed Touch ID remain outside this fixture. The tests do not establish release readiness.
+
+Conversion cleanup now confirms owned source descriptors, source/verification iterator returns and `store.lock()` settlement with a five-second deadline per cleanup operation. Identity-branded failures remain sticky through late closure, suppress the completion event, and survive first activation's generic unlock rejection. Session disposal and the outer transition remain failed and ordinary admission stays sealed. The focused regressions passed **169 tests** with no failures or skips: seven instrumentation, 20 conversion, 50 session, 27 opening, 23 transition, 15 host and 27 main-IPC/close tests. `npm run check`, persistence TypeScript checking, scoped lint, JavaScript syntax checks and `git diff --check` also passed. Scoped lint reported no errors and one existing session-test import-type warning. Logs are `tmp/private-host-regressions.log`, `tmp/private-host-check.log`, `tmp/private-host-types.log` and `tmp/private-host-lint.log`.
+
+At this earlier milestone, store-internal descriptor-close failures were not yet fully surfaced by `store.lock()`; the later storage cleanup milestone addresses that propagation. The cleanup deadline still applies only after cleanup is entered, and a stalled read/iterator advance can delay reaching cleanup. Successful promise settlement must not be described as universal descriptor cleanup. `PRIVATE_HUB_UI_READY` remains false and the native entry remains unregistered.
+
+### Actual Angular/native composition — 23 September 2026
+
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The checkout is intentionally dirty: the earlier filmstrip changes and this integration work are uncommitted. No commit, push, release package or installed-application change is part of this milestone.
+
+The actual Angular browser assets were compiled with:
+
+```sh
+TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp node_modules/.bin/ng build --configuration production --base-href ./ --output-path tmp/private-transition-angular
+```
+
+The build passed with production AOT, the existing CSP and normal licence extraction settings. Its artifact directory is `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-transition-angular`; these are test-only browser assets, not an application package. The log is `tmp/private-transition-angular-build.log`. The build exposed renderer imports of main-process `GLOBALS` through Home and the file-size pipe. Those imports now use the public `APP_VERSION` constant and preload platform metadata; a runtime import-graph test rejects privileged Node and main-storage dependencies from the renderer entry points.
+
+The focused regressions passed **108 tests**: 10 Electron-security, 19 Home-handoff, 22 editor-handoff, 17 application-workspace, 15 application-host and 25 normal-snapshot tests, with no failures or skips. `npm run check`, persistence TypeScript checking, JavaScript syntax checks, scoped lint and `git diff --check` passed. Scoped lint has no errors; the existing Home import/type warnings remain. Logs are `tmp/private-application-security.log`, `tmp/private-application-regressions.log`, `tmp/private-application-check.log`, `tmp/private-application-types.log` and `tmp/private-application-lint.log`.
+
+Run the native check after compiling these assets:
+
+```sh
+TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp npm run test:private-application:native
+```
+
+Eight stages passed using the compiled Angular Home/catalogue editor, production normal preload, production application-workspace factory and saved-document writer, ordinary media protocol, isolated password screen and private gallery. The run verified:
+
+- Normal notes and a row-tag draft were saved through the atomic normal writer before unlock; an outstanding ordinary operation drained before snapshot capture.
+- Normal input was inert, the normal window was hidden, and the ordinary media protocol denied previews while private. The private window used a distinct nonpersistent session and exposed neither the normal bridge nor Node.
+- Encrypted notes were edited through the actual private form and saved; Lock destroyed the private window and restored the normal window, exact menu and editable normal notes.
+- Cancelling unlock restored normal mode after saving the pending ordinary draft.
+- Synthetic composition events and invalid tag hierarchy drafts refused entry, retained drafts and left normal editing usable.
+- Making the owned synthetic normal-hub directory temporarily nonwritable caused the real atomic writer to refuse the handoff. The previously saved notes and corrected live draft remained intact; after permissions were restored, the subsequent quit/recovery cycle saved that draft.
+- An intercepted quit request drained the private prompt, restored normal mode and retried quit once. A main-owned cancellation acknowledgement permitted another open/cancel cycle. Seven pause/resume cycles completed.
+
+Nine scans inspected 304 profile files, 62 encrypted-hub files and 26 ordinary-hub files cumulatively. No private canary or password patterns were found in their UTF-8/UTF-16 forms. Private-session cache size was zero at open and after Lock. Ordinary Angular asset caching is expected; synthetic review screenshots are excluded. These scans do not establish memory erasure, absence of transformed/compressed copies, crash cleanup or OS metadata privacy. Results are in `tmp/private-application-native.log`. The restored ordinary editor screenshot `tmp/private-application-restored-review.png` was visually reviewed.
+
+This harness uses synthetic startup, source pause/resume and media-queue callbacks, native directory selection and an ordinary menu. It does not launch `main.ts`, real watchers or extraction queues, the actual ordinary quit/save dialogue, hardware IME, real OS sleep/lock events, conversion activation or signed Touch ID. Source callback assertions are not evidence of watcher drainage. `PRIVATE_HUB_UI_READY` remains false and the native entry remains unregistered; this is a bounded integration milestone, not complete native application acceptance.
+
+### Encrypted filmstrip viewing — 23 September 2026
+
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. Preflight found a clean checkout; the filmstrip changes are uncommitted. No native helper or application package was built, and no application was installed or released during this milestone.
+
+The targeted gallery suites passed **260 tests**: 91 request tests, 39 preload tests and 130 UI tests. They cover detail-only filmstrip projection, exact preview URLs, shared image admission, finite retries, cancellation and stale callbacks, draft preservation, credential-operation cleanup, regenerated URLs and editing controls during clean, dirty, saving and conflicting states. `npm run check`, persistence TypeScript checking, scoped JavaScript/TypeScript lint and `git diff --check` passed. Scoped lint has zero errors and the existing test-file `any`/import warnings. The full 1,643-test checkpoint below was not repeated for this change. Logs are `tmp/private-filmstrip-request.log`, `tmp/private-filmstrip-preload.log`, `tmp/private-filmstrip-ui-tests.log`, `tmp/private-filmstrip-check.log` and `tmp/private-filmstrip-types.log`.
+
+`npm run test:private-browser:native` passed in two Electron processes. The actual private gallery decoded a legacy encrypted 96 × 18 synthetic strip only after Show filmstrip, cleared it on hide and selection changes, reported a missing strip, preserved notes drafts and retired the old image before regeneration. Explicit viewing after regeneration decoded the new 768 × 144 strip through a fresh opaque URL. Reopening the gallery left the filmstrip collapsed. The existing lock, encrypted saves, password change, unprotected-copy and synthetic Touch ID flows also passed.
+
+The first native run exposed root scrolling and sticky-footer occlusion in a 600 × 400 window. The details panel now uses its own scroll viewport with fixed navigation and close controls; clean filmstrip viewing hides disabled editing controls, while drafts restore them. The final compact check measured 114 CSS pixels of visible filmstrip and verified the app header, Lock hub, Protection, Hide filmstrip and close controls were visible and reachable. A separate draft check restored an enabled, reachable Save button. The regular and compact screenshots `tmp/private-filmstrip-review.png` and `tmp/private-filmstrip-small-review.png` were visually reviewed. They contain synthetic colours, not user media.
+
+Thirteen scans inspected 241 profile files and 636 encrypted files cumulatively. They found no synthetic text/password markers or registered plaintext preview-byte patterns; reported browser cache sizes and owned TCP/HTTP/WebSocket/UDP probe connections were zero. Original and regenerated filmstrip bytes were included among the scan patterns. The intentionally plaintext source/export fixtures and screenshots were excluded. Results are in `tmp/private-filmstrip-native.log`. These bounded observations do not prove OS/GPU memory erasure, absence of transformed copies or forced-crash cleanup. Converted legacy JPEGs still have no decoded-pixel limit beyond the encoded-byte cap.
+
+`PRIVATE_HUB_UI_READY` remains false and the native entry remains unregistered. Full application transitions, conversion controls, signed real-device Touch ID acceptance, source import/relocation and platform packaging remain outstanding.
 
 ### Touch ID integration milestone
 
@@ -275,13 +636,13 @@ These are bounded fixture results. Raw marker scans do not detect every encoding
 - Normal source access callbacks, crawlers, native media work, and watcher closure are retained through completion. Old callbacks cannot report a connection or start a watcher for a replaced source or catalogue.
 - Ordinary media delivery checks its captured authority before publishing headers or chunks. Drain observes JavaScript fetch/read/cancel settlement, including rejected cancellation; it does not prove native Chromium file-handle closure or browser/OS cache erasure. Native ordinary-protocol cancellation passed the bounded fixture above; complete application transition verification remains outstanding.
 - The shared ordinary renderer lifetime blocks persisted service edits, invalidates confirmation epochs, commits row-tag drafts, and records repeated dirty writes. Pending native invokes retain admission through their immediate result consumers. Frozen incoming callbacks are replayed in order; failed callbacks quarantine the editor without retrying partial changes.
-- The DOM handoff refuses unfinished composition, blocks the entire body and overlay inputs, pauses ordinary previews and suppresses delayed clip playback. The synthetic native renderer fixture verifies browser input/media behavior; hardware IME, native edit menus and the complete application transition still require acceptance tests.
+- The DOM handoff refuses unfinished composition, blocks the entire body and overlay inputs, pauses ordinary previews and suppresses delayed clip playback. The synthetic native renderer fixture verifies browser input/media behavior, and the compiled Angular fixture verifies real Home composition/draft refusal and private-window restoration. Hardware IME, full-host native edit menus and the complete application lifecycle still require acceptance tests.
 - The saved-document exchange accepts only one nonce-bound response from the original live main frame. Cancellation waits for a pending write. An issued proof remains held across later private cancellation until the transition explicitly releases it. Renderer revision checks preserve late unsaved edits.
 - The concrete snapshot writer captures the normal destination and authority after pause, validates the entire writable document, and never substitutes a new target on failure. Changed source/media authority or a replaced catalogue prevents late authority publication.
 - Renderer release now follows successful main admission. A failed release send re-seals normal work and prevents a quit retry or another private opening; window-restore failure never sends the release.
 - External private lifecycle mode requires a revocation signal and suppresses autonomous browser/workspace quit retries. The parent transition observes system/window events before native selection and retains its observers and normal freeze when private disposal fails.
 - Normal restoration rechecks the original window/frame and pause proof after the native show operation. Quit retries only after clean disposal and normal restoration; a main-owned acknowledgement of Keep Working may restore future private admission without replaying an older quit request.
 
-The normal close guard, trusted close-cancel acknowledgement, deferred catalogue opens, ordinary progress/source restoration, private notes/tag editing, per-video regeneration with session-only folder grants, encrypted automatic-lock settings, authenticated password changes and verified unprotected copies are connected behind the disabled readiness gate. Their regression and compilation checks are recorded above. The full native application transition, real OS permission prompts, source import/relocation and other protected preview operations, complete conversion activation and real Touch ID authentication in a provisioned signed build, broader native cache/crash verification, and native-helper packaging remain integration gates. Native picker history, the complete application menu handoff, real OS paste and other platforms' selection/clipboard behavior still need review. The tests do not establish that the complete application is ready to handle private hubs.
+The normal close guard, trusted close-cancel acknowledgement, deferred catalogue opens, ordinary progress/source restoration, private-copy creation and verified activation, private notes/tag editing, per-video regeneration with session-only folder grants, encrypted automatic-lock settings, authenticated password changes and verified unprotected copies are connected behind the disabled readiness gate. Their regression and compilation checks are recorded above. The compiled Angular/private-window composition and actual main host now have bounded native coverage, including private-copy creation, late-picker cancellation, real watcher recovery and close/save handlers, with test-only entry admission and controlled OS adapters. Broader main-host failure/reconnection and native cleanup-fault coverage, real OS permission prompts, source import/relocation and other protected preview operations, real Touch ID authentication in a provisioned signed build, broader native cache/crash verification, and native-helper packaging remain integration gates. Native picker history, the complete application menu handoff, real OS paste and other platforms' selection/clipboard behavior still need review. The tests do not establish that the complete application is ready to handle private hubs.
 
 At the end of the Touch ID milestone, the production checkout `/Users/sm/Workspace/Theatrum-Ex-Machina` was confirmed clean on `main` at the same HEAD and origin, with `vha.releaseWorktree=true`. Current work remains in the development checkout; no commits, pushes, releases or installed-application changes are part of this milestone. See [the design](./private-hubs.md) and [live renderer integration checklist](./private-hubs-renderer-integration.md) for the work required before enabling private hubs.

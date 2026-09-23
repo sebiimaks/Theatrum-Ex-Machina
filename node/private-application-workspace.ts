@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { app, dialog, ipcMain, powerMonitor, type BrowserWindow, type Event, type IpcMainEvent, type WebContents,
   type WebFrameMain } from 'electron';
 import { SAVED_NORMAL_DOCUMENT_CHANNELS } from '../interfaces/saved-normal-document';
@@ -7,6 +9,7 @@ import { type NormalApplicationPause } from './normal-application-pause';
 import { normalOperationScope, type NormalOperationScope } from './normal-operation-scope';
 import { PrivateApplicationTransition } from './private-application-transition';
 import { createPrivateHubWorkspace } from './private-hub-workspace';
+import { createPrivateConversionWorkspace } from './private-conversion-workspace';
 import { SavedNormalDocumentRequest, type SavedNormalDocumentOwner, type SavedNormalDocumentProof } from './saved-normal-document-request';
 import type { PrivateHubOpenOutcome } from './private-hub-open';
 
@@ -28,6 +31,7 @@ interface Owner extends SavedNormalDocumentOwner {
   readonly contents: WebContents;
   readonly frame: WebFrameMain;
   readonly wasVisible: boolean;
+  readonly cataloguePath?: string;
 }
 
 /** Construction is allocation-free. No listeners, picker or private session exist until open(). */
@@ -51,6 +55,7 @@ export class PrivateApplicationWorkspace {
   #snapshot?: NormalDocumentSnapshot;
   #snapshotListener?: (event: IpcMainEvent, ...args: unknown[]) => void;
   #active = false;
+  #operation: 'open' | 'convert' = 'open';
   #releaseRenderer?: () => void;
 
   constructor(options: PrivateApplicationWorkspaceOptions) {
@@ -62,6 +67,9 @@ export class PrivateApplicationWorkspace {
       captureNormal: () => this.captureNormal(),
       normal,
       selectDirectory: async (owner, lifetime) => {
+        // Conversion captures the already-open catalogue in main. Inventory
+        // review and native destination selection occur only after save/freeze.
+        if (this.#operation === 'convert') { return owner.cataloguePath; }
         // The app does not retain this path in history. Native dialogs/the OS
         // may still remember the location; dontAddToRecent is platform-specific.
         const result = await dialog.showOpenDialog(owner.window, {
@@ -120,7 +128,9 @@ export class PrivateApplicationWorkspace {
           this.#snapshot = undefined;
         },
       },
-      createWorkspace: () => createPrivateHubWorkspace({ appDirectory: this.#options.appDirectory, lifecycle: 'external' }),
+      createWorkspace: () => (this.#operation === 'convert' ? createPrivateConversionWorkspace : createPrivateHubWorkspace)({
+        appDirectory: this.#options.appDirectory, lifecycle: 'external',
+      }),
       hideNormal: owner => owner.window.hide(),
       restoreNormal: owner => { if (owner.wasVisible) { owner.window.show(); } },
       releaseRenderer: () => {
@@ -137,11 +147,17 @@ export class PrivateApplicationWorkspace {
   get settled(): Promise<void> { return this.#transition.settled; }
   get isActive(): boolean { return this.#active; }
 
-  open(): Promise<PrivateHubOpenOutcome> {
+  open(): Promise<PrivateHubOpenOutcome> { return this.start('open'); }
+
+  /** Native-only action on the current ordinary catalogue; never accepts renderer paths. */
+  convert(): Promise<PrivateHubOpenOutcome> { return this.start('convert'); }
+
+  private start(operation: 'open' | 'convert'): Promise<PrivateHubOpenOutcome> {
     if (this.#active) { return Promise.resolve(this.status.cleanupFailed ? 'unavailable' : 'busy'); }
     if (!app.isReady() || this.#operations.inOperation || !this.#operations.isCurrent() || this.status.quitRequested) {
       return Promise.resolve('unavailable');
     }
+    this.#operation = operation;
     this.#active = true;
     this.observeSystem();
     const opening = this.#transition.open();
@@ -168,6 +184,18 @@ export class PrivateApplicationWorkspace {
     const storage = this.#state.catalogueStorage;
     const catalogue = this.#state.currentlyOpenVhaFile;
     const generation = this.#state.catalogueSessionGeneration;
+    let cataloguePath: string | undefined;
+    if (this.#operation === 'convert') {
+      try {
+        // Do not resolve or probe any renderer-provided source. Only the current
+        // main-owned, explicitly authorized writable catalogue may be converted.
+        if (this.#state.catalogueAccessMode !== 'read-write' || !catalogue || !path.isAbsolute(catalogue)
+          || !this.#state.authorizedCataloguePaths.has(catalogue)) { return undefined; }
+        const stats = fs.lstatSync(catalogue);
+        if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1 || fs.realpathSync.native(catalogue) !== catalogue) { return undefined; }
+        cataloguePath = catalogue;
+      } catch { return undefined; }
+    }
     let navigationChanged = false;
     const isFrameCurrent = (): boolean => {
       try {
@@ -195,7 +223,7 @@ export class PrivateApplicationWorkspace {
       window.removeListener('closed', invalidate);
       window.removeListener('close', close);
     });
-    return Object.freeze({ window, contents, frame, wasVisible: window.isVisible(), isFrameCurrent,
+    return Object.freeze({ window, contents, frame, cataloguePath, wasVisible: window.isVisible(), isFrameCurrent,
       isCurrent: () => isFrameCurrent() && this.#state.catalogueStorage === storage &&
         this.#state.currentlyOpenVhaFile === catalogue && this.#state.catalogueSessionGeneration === generation,
     });

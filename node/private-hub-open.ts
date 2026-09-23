@@ -30,10 +30,22 @@ export interface PrivateHubOpenLifetime {
   readonly isCurrent: () => boolean;
 }
 
+/** Main-only, one-use credentials for a prepared destination; never renderer input. */
+export interface PrivateHubPreparedOpen {
+  readonly directory: string;
+  readonly password: string;
+}
+
 export interface PrivateHubOpenDependencies<Hub extends PrivateHubOpenSession = PrivateHubSession> {
   readonly createSession: () => Hub;
   /** Settle only after prompt destruction and cleanup. Reject on cleanup failure. */
   readonly requestPassword: (lifetime: PrivateHubOpenLifetime & { touchIdAvailable?: () => Promise<boolean> }) => Promise<PrivateHubUnlockChoice | undefined>;
+  /**
+   * Replaces the unlock prompt for main-owned conversion. Settle only after all
+   * preparation resources drain; cancellation must retain late preparation.
+   * The returned destination is activated through the ordinary session unlock.
+   */
+  readonly prepareHub?: (directory: string, lifetime: PrivateHubOpenLifetime) => Promise<PrivateHubPreparedOpen | undefined>;
   /** Read-only native capability/enrollment query; never a biometric prompt. */
   readonly touchIdAvailable?: (directory: string, lifetime: PrivateHubOpenLifetime) => Promise<boolean>;
   /** Resolve only with a hidden isolated browser; retain and enforce the lifetime. */
@@ -90,6 +102,18 @@ function validPassword(password: unknown): password is string {
     } else if (code >= 0xdc00 && code <= 0xdfff) { return false; }
   }
   return true;
+}
+
+function preparedOpen(value: unknown): PrivateHubPreparedOpen | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Reflect.ownKeys(value).length !== 2) { return undefined; }
+  // Snapshot data properties only; a mutable result cannot change the selected
+  // destination or credentials after this validation and before unlock.
+  const directory: unknown = Object.getOwnPropertyDescriptor(value, 'directory')?.value;
+  const password: unknown = Object.getOwnPropertyDescriptor(value, 'password')?.value;
+  if (typeof directory !== 'string' || directory.length > 4096 || Buffer.byteLength(directory) > 4096
+    || !path.isAbsolute(directory) || path.resolve(directory) !== directory || directory.includes('\0')
+    || !validPassword(password)) { return undefined; }
+  return { directory, password };
 }
 
 /**
@@ -185,22 +209,36 @@ export class PrivateHubOpenCoordinator<Hub extends PrivateHubOpenSession = Priva
 
   private async run(attempt: Attempt<Hub>, directory: string): Promise<PrivateHubOpenOutcome> {
     let password: PrivateHubUnlockChoice | undefined;
+    let prepared: PrivateHubPreparedOpen | undefined;
     try {
       if (!this.current(attempt)) { return 'cancelled'; }
       const lifetime = Object.freeze({ signal: attempt.controller.signal, isCurrent: () => this.current(attempt) });
-      try { password = await this.#dependencies.requestPassword(Object.freeze({ ...lifetime,
-        touchIdAvailable: this.#dependencies.touchIdAvailable ? async () => {
-          if (!this.current(attempt)) { return false; }
-          const available = await this.#dependencies.touchIdAvailable(directory, lifetime);
-          return this.current(attempt) && available === true;
-        } : undefined,
-      })); }
-      catch (error) { this.factoryFailed(attempt, error); return 'unavailable'; }
+      let touchId = false;
+      if (this.#dependencies.prepareHub) {
+        try { prepared = await this.#dependencies.prepareHub(directory, lifetime); }
+        catch (error) { this.factoryFailed(attempt, error); return 'unavailable'; }
+        if (!this.current(attempt)) { return 'cancelled'; }
+        if (prepared === undefined) { this.invalidate(attempt, true); return 'cancelled'; }
+        prepared = preparedOpen(prepared);
+        if (!prepared) { return 'unavailable'; }
+        directory = prepared.directory;
+        password = prepared.password;
+      } else {
+        try { password = await this.#dependencies.requestPassword(Object.freeze({ ...lifetime,
+          touchIdAvailable: this.#dependencies.touchIdAvailable ? async () => {
+            if (!this.current(attempt)) { return false; }
+            const available = await this.#dependencies.touchIdAvailable(directory, lifetime);
+            return this.current(attempt) && available === true;
+          } : undefined,
+        })); }
+        catch (error) { this.factoryFailed(attempt, error); return 'unavailable'; }
+        if (!this.current(attempt)) { return 'cancelled'; }
+        if (password === undefined) { this.invalidate(attempt, true); return 'cancelled'; }
+        touchId = typeof password === 'object' && password !== null && Reflect.ownKeys(password).length === 1
+          && Object.getOwnPropertyDescriptor(password, 'method')?.value === 'touch-id';
+        if (!touchId && !validPassword(password)) { return 'unavailable'; }
+      }
       if (!this.current(attempt)) { return 'cancelled'; }
-      if (password === undefined) { this.invalidate(attempt, true); return 'cancelled'; }
-      const touchId = typeof password === 'object' && password !== null && Reflect.ownKeys(password).length === 1
-        && Object.getOwnPropertyDescriptor(password, 'method')?.value === 'touch-id';
-      if (!touchId && !validPassword(password)) { return 'unavailable'; }
       attempt.hub = this.#dependencies.createSession();
       if (!this.current(attempt)) { return 'cancelled'; }
       let unlocking: Promise<{ generation: number }> | undefined;
@@ -210,7 +248,7 @@ export class PrivateHubOpenCoordinator<Hub extends PrivateHubOpenSession = Priva
           unlocking = attempt.hub.unlockWithTouchId(directory);
         } else { unlocking = attempt.hub.unlock(directory, password as string); }
       }
-      finally { password = undefined; directory = ''; }
+      finally { password = undefined; prepared = undefined; directory = ''; }
       const generation = (await unlocking).generation;
       unlocking = undefined;
       attempt.generation = generation;
@@ -241,7 +279,7 @@ export class PrivateHubOpenCoordinator<Hub extends PrivateHubOpenSession = Priva
       this.#state = 'open';
       return 'opened';
     } catch { return attempt.cancelled ? 'cancelled' : 'unavailable'; }
-    finally { password = undefined; directory = ''; }
+    finally { password = undefined; prepared = undefined; directory = ''; }
   }
 
   private factoryFailed(attempt: Attempt<Hub>, error: unknown): void {

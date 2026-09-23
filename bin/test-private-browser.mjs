@@ -65,7 +65,7 @@ const checkpointFields = {
   unlocked: 'preview storage gates downloads persistent cacheBytes defaultRequests',
   locked: 'destroyed locked originalMenuRestored menuHeldUntilCleanup externalStorageDrainHeldMenu cleanupFailed cacheBytes',
   reopened: 'fresh newPartition persistent cacheBytes',
-  'workspace-opened': 'opened surface clipboard metadataPasteDenied restrictedApplicationMenu pageSize pagination search notes encryptedImageDecoded encryptedClipPlayed encryptedMetadataSaved tagNormalized dirtyCloseGuard discardReloaded sourcePickerCancelledThenGranted encryptedPreviewsRegenerated refreshedPreviewWidth sourceUnchanged noRegenerationAutoplay encryptedProtectionSaved protectionMinimumWindowFits cacheBytes',
+  'workspace-opened': 'opened surface clipboard metadataPasteDenied restrictedApplicationMenu pageSize pagination search notes encryptedImageDecoded encryptedClipPlayed encryptedMetadataSaved tagNormalized dirtyCloseGuard discardReloaded sourcePickerCancelledThenGranted encryptedPreviewsRegenerated refreshedPreviewWidth sourceUnchanged noRegenerationAutoplay encryptedProtectionSaved filmstripOnlyOnRequest encryptedFilmstripDecoded filmstripMinimumWindowFits filmstripCloseClearedSource filmstripSelectionRetired missingFilmstripHandled filmstripDraftPreserved filmstripRegenerationRetired regeneratedFilmstripWidth protectionMinimumWindowFits cacheBytes',
   'unprotected-copy-created': 'passwordBeforePicker cancelledPickerNoOutput copyCredentialsCleared catalogueByteIdentical generatedPreviewsIdentical encryptedSourceUnchanged sourceRemainsUnlocked restrictedMenuRetained intentionalPlaintextDestination',
   'workspace-closed': 'uiLock synchronousRevocation drained freshGalleryPartition savedMetadataReopened generatedSetReopened generatedMediaMarkersStripped nativeInputRenewsDeadline syntheticDomDoesNotRenew automaticLockDrained deadlineClock passwordChangeFormCleared passwordMismatchRejected incorrectCurrentRetryable passwordChangeLocked oldPasswordRejected newPasswordReopened systemLockDrained originalMenuRestored privateMenuObservations restoredMenuObservations credentialPasteAllowed wrongPassword retryAvailable',
   'touch-id-synthetic': 'touchIdControlsSyntheticProvider wrongPasswordBeforeEnrollment credentialCleared enrollmentDisableAndReenable passwordFallbackVisible promptDrainedBeforeUnlock reopenedCatalogue temporarySecretsWiped compactEnrollmentFits credentialPasteAllowed originalMenuRestored',
@@ -157,8 +157,9 @@ async function run(phase) {
       } else if (message?.type === 'checkpoint') {
         assert.ok(['password-entry', 'password-submitted', 'password-cancelled', 'unlocked', 'locked', 'reopened', 'workspace-opened', 'unprotected-copy-created', 'workspace-closed', 'touch-id-synthetic', 'restarted'].includes(message.stage), 'Invalid native-test stage.');
         if (message.previewPatterns !== undefined) {
-          assert.ok(['workspace-closed', 'unprotected-copy-created'].includes(message.stage));
-          assert.ok(Array.isArray(message.previewPatterns) && message.previewPatterns.length === 4);
+          assert.ok(['workspace-opened', 'workspace-closed', 'unprotected-copy-created'].includes(message.stage));
+          const expectedPatterns = message.stage === 'workspace-opened' ? 1 : 4;
+          assert.ok(Array.isArray(message.previewPatterns) && message.previewPatterns.length === expectedPatterns);
           for (const pattern of message.previewPatterns) {
             assert.ok(typeof pattern === 'string' && pattern.length < 1_500_000);
             const bytes = Buffer.from(pattern, 'base64');

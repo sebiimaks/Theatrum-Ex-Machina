@@ -1,9 +1,9 @@
 import type { PipeTransform } from '@angular/core';
 import { Pipe } from '@angular/core';
 
-import { GLOBALS } from '../../../node/main-globals';
+import type { TheatrumElectronBridge } from '../../../interfaces/electron-bridge';
 
-const isMac = GLOBALS.macVersion;
+const isMac = (globalThis as typeof globalThis & { theatrum?: TheatrumElectronBridge }).theatrum?.platform === 'darwin';
 
 @Pipe({
   standalone: false,
@@ -14,7 +14,7 @@ export class FileSizePipe implements PipeTransform {
   /**
    * Return size of file formatted as ### MB or ### GB
    *
-   * (!) base 10 vs base 2 depends on `GLOBALS.macVersion`
+   * (!) base 10 vs base 2 depends on the preload's platform metadata
    *     Mac uses base 10
    *     Win uses base  2
    *

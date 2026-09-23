@@ -1,7 +1,7 @@
 import { Menu, type MenuItemConstructorOptions } from 'electron';
 
 export interface PrivateNativeMenuOptions {
-  readonly kind: 'password' | 'hub';
+  readonly kind: 'password' | 'conversion' | 'hub';
   readonly onClose: () => void;
   readonly onPaste: () => void;
   readonly onSelectAll: () => void;
@@ -89,7 +89,7 @@ function release(owner: Owner): void {
 /** App-global restriction: per-window menus do not protect macOS menu actions. */
 export function acquirePrivateNativeMenu(options: PrivateNativeMenuOptions): PrivateNativeMenuLease {
   if (active?.state === 'poisoned') { reassertRestricted(active); throw cleanupFailure(); }
-  if (active || !options || !['password', 'hub'].includes(options.kind)
+  if (active || !options || !['password', 'conversion', 'hub'].includes(options.kind)
     || typeof options.onClose !== 'function' || typeof options.onPaste !== 'function'
     || typeof options.onSelectAll !== 'function') { throw unavailable(); }
   const { kind, onClose, onPaste, onSelectAll } = options;
@@ -100,7 +100,7 @@ export function acquirePrivateNativeMenu(options: PrivateNativeMenuOptions): Pri
     owner.original = Menu.getApplicationMenu();
     const template: MenuItemConstructorOptions[] = [
       { label: 'Theatrum Ex Machina', submenu: [
-        { id: 'private-native-close', label: kind === 'password' ? 'Cancel unlock' : 'Lock hub', click: () => invoke(owner, onClose) },
+        { id: 'private-native-close', label: kind === 'password' ? 'Cancel unlock' : kind === 'conversion' ? 'Cancel private copy' : 'Lock hub', click: () => invoke(owner, onClose) },
         { type: 'separator' }, { role: 'hide' }, { role: 'quit' },
       ] },
       { label: 'Edit', submenu: [

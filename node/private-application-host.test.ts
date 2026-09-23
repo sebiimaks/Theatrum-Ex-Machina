@@ -13,7 +13,7 @@ import { normalizeAbsolutePath } from './local-operation-safety';
 const root = path.resolve(__dirname, '..');
 const source = readFileSync(path.join(root, 'main.ts'), 'utf8');
 const syntax = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true);
-const functions = new Set(['openPrivateHubFromNative', 'resumeNormalAfterPrivateHub',
+const functions = new Set(['openPrivateHubFromNative', 'createPrivateCopyFromNative', 'transitionToPrivateHub', 'resumeNormalAfterPrivateHub',
   'acknowledgePrivateQuitCancelled', 'getAngularToShutDown', 'requestCatalogueOpenFromSystem',
   'dispatchNextCatalogueOpenRequest', 'sourceConnectionSessionIsCurrent', 'beginCatalogueOpenOperation']);
 const variables = new Set(['privateApplicationWorkspace', 'normalApplicationPause', 'PRIVATE_HUB_UI_READY', 'normalPrivateResumePending']);
@@ -57,6 +57,7 @@ function fixture() {
   let afterIdle = Promise.resolve();
   let quitRequests = 0;
   let opens = 0;
+  let conversions = 0;
   let acknowledged = false;
   let refreshes = 0;
   let factoryOptions: any;
@@ -69,6 +70,11 @@ function fixture() {
       afterIdle = new Promise<void>(resolve => { resolveSettled = resolve; });
       return Promise.resolve('opened');
     },
+    convert: () => {
+      conversions++; workspace.isActive = true;
+      afterIdle = new Promise<void>(resolve => { resolveSettled = resolve; });
+      return Promise.resolve('opened');
+    },
     requestQuit: () => { quitRequests++; workspace.status.quitRequested = true; return Promise.resolve(); },
     acknowledgeQuitCancelled: () => {
       if (!acknowledged || workspace.isActive) { return false; }
@@ -78,7 +84,7 @@ function fixture() {
     },
   };
   const context: any = {
-    exports: {}, path, __dirname: root, Promise, console: { warn: () => undefined },
+    exports: {}, path, __dirname: root, Promise, process: { platform: 'darwin' }, console: { warn: () => undefined },
     GLOBALS: globals, normalOperationScope: operations, NormalApplicationPause,
     rendererStartupComplete: true, rendererCanReceiveCatalogueOpenRequests: true, catalogueOpenOperationActive: false,
     activeCatalogueOpenGeneration: undefined,
@@ -95,9 +101,9 @@ function fixture() {
     beginNormalMediaDrain: async () => undefined, resetAllQueues: () => undefined,
     win: { webContents: sender, isDestroyed: () => false, isVisible: () => true },
   };
-  runInNewContext(compiled + '\nglobalThis.host = { openPrivateHubFromNative, resumeNormalAfterPrivateHub, acknowledgePrivateQuitCancelled, getAngularToShutDown, requestCatalogueOpenFromSystem, dispatchNextCatalogueOpenRequest, normalApplicationPause, captureSourceSession, sourceConnectionSessionIsCurrent, beginCatalogueOpenOperation };', context);
+  runInNewContext(compiled + '\nglobalThis.host = { openPrivateHubFromNative, createPrivateCopyFromNative, resumeNormalAfterPrivateHub, acknowledgePrivateQuitCancelled, getAngularToShutDown, requestCatalogueOpenFromSystem, dispatchNextCatalogueOpenRequest, normalApplicationPause, captureSourceSession, sourceConnectionSessionIsCurrent, beginCatalogueOpenOperation };', context);
   return { context, host: context.host, operations, globals, workspace, queue, messages, authorities, pending,
-    factoryOptions: () => factoryOptions, opens: () => opens, quits: () => quitRequests, refreshes: () => refreshes,
+    factoryOptions: () => factoryOptions, opens: () => opens, conversions: () => conversions, quits: () => quitRequests, refreshes: () => refreshes,
     allowAcknowledgement: () => { acknowledged = true; },
     settle: (paused = true) => {
       workspace.isActive = false;
@@ -109,9 +115,9 @@ function fixture() {
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 const catalogue = (name: string) => path.join(root, 'tmp', `${name}.scaena`);
 
-test('host installs one dormant factory with a closed readiness gate and no normal IPC opening action', () => {
+test('macOS host installs one native-entry factory without a normal IPC opening action', () => {
   const f = fixture();
-  assert.equal(f.factoryOptions().canStart(), false);
+  assert.equal(f.factoryOptions().canStart(), true);
   assert.equal(f.factoryOptions().getNormalWindow(), f.context.win);
   assert.equal(f.factoryOptions().appDirectory, path.join(root, 'private-gallery'));
   assert.equal(f.opens(), 0);
@@ -300,4 +306,24 @@ test('restoration refuses a replaced renderer and sealed ordinary admission', as
     assert.deepEqual(f.messages, []);
     assert.equal(f.refreshes(), 0);
   }
+});
+
+
+test('native private-copy action shares opening admission and resumes queued normal work only after settlement', async () => {
+  const f = fixture();
+  await f.operations.run(async () => {
+    assert.equal(await f.host.createPrivateCopyFromNative(), 'unavailable');
+  });
+  assert.equal(await f.host.createPrivateCopyFromNative(), 'opened');
+  assert.equal(f.conversions(), 1); assert.equal(f.opens(), 0);
+  assert.equal(await f.host.openPrivateHubFromNative(), 'busy');
+  assert.equal(await f.host.createPrivateCopyFromNative(), 'busy');
+  const target = catalogue('conversion-deferred');
+  f.host.requestCatalogueOpenFromSystem(target);
+  assert.deepEqual(f.authorities, []);
+  f.settle(); await turn(); await turn();
+  assert.deepEqual(f.authorities, [target]);
+  assert.equal(f.refreshes(), 0, 'Queued catalogue selection takes precedence over old-source refresh.');
+  assert.deepEqual(f.messages, [['normal-workspace-resumed'], ['open-catalogue-from-system', target]]);
+  assert.doesNotMatch(source, /trustedIpcOn\(['"](?:create-private-copy|private-convert)/);
 });

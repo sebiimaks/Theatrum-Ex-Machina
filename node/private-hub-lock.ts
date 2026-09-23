@@ -1,10 +1,35 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { getPrivateHelperPath } from './private-helper-paths';
 
 export const PRIVATE_HUB_LOCK_FILE = '.private-hub.lock';
-const HELPER = path.resolve(__dirname, '..', 'build', 'privacy-tools', 'private-hub-lock');
 const HANDSHAKE_TIMEOUT_MS = 5_000;
+const CLEANUP_TIMEOUT_MS = 5_000;
+const cleanupFailures = new WeakSet<Error>();
+
+/** Main-only identity evidence; messages and error codes cannot forge it. */
+export function isPrivateHubLeaseCleanupFailure(error: unknown): error is Error {
+  return error instanceof Error && cleanupFailures.has(error);
+}
+
+function cleanupFailure(): Error {
+  const error = new Error('Private hub storage lease cleanup could not be confirmed.');
+  cleanupFailures.add(error);
+  return error;
+}
+
+async function confirmCleanup(operation: () => Promise<void>, timeout = CLEANUP_TIMEOUT_MS): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(cleanupFailure()), timeout); }),
+    ]);
+  } catch (error) {
+    throw isPrivateHubLeaseCleanupFailure(error) ? error : cleanupFailure();
+  } finally { clearTimeout(timer); }
+}
 
 export class PrivateHubLeaseError extends Error {
   readonly code = 'PRIVATE_HUB_LEASE_EXISTS';
@@ -68,6 +93,7 @@ export class PrivateHubLease {
     if (!['darwin', 'linux'].includes(process.platform)) {
       throw new Error('Private hub storage currently requires macOS or Linux advisory locks.');
     }
+    const helper = getPrivateHelperPath('private-hub-lock');
     const root = await canonicalDirectory(directory);
     const handle = await fs.promises.open(path.join(directory, PRIVATE_HUB_LOCK_FILE),
       fs.constants.O_RDWR | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0), 0o600);
@@ -81,12 +107,12 @@ export class PrivateHubLease {
       }
       // FD 3 is a duplicate of this same open-file description. Keep the parent
       // FileHandle alive until release; helper death must not unlock pending IO.
-      child = spawn(HELPER, [directory, String(root.dev), String(root.ino)], {
+      child = spawn(helper, [directory, String(root.dev), String(root.ino)], {
         cwd: directory,
         stdio: ['pipe', 'pipe', 'pipe', handle.fd],
       }) as ChildProcessWithoutNullStreams;
     } catch (error) {
-      await handle.close();
+      await confirmCleanup(() => handle.close());
       throw error;
     }
     const lease = new PrivateHubLease(directory, root, child, handle);
@@ -192,23 +218,31 @@ export class PrivateHubLease {
   /** Called after queued IO drains. Concurrent releases share one completion. */
   release(): Promise<void> {
     if (!this.#releaseCompletion) {
-      this.#releaseCompletion = (async () => {
-        const timer = setTimeout(() => this.#child.kill('SIGKILL'), HANDSHAKE_TIMEOUT_MS);
+      // Install the shared result before invoking external callbacks. A rejected
+      // confirmation stays rejected even after the original work settles late.
+      this.#releaseCompletion = Promise.resolve().then(async () => {
+        let failure: Error | undefined;
+        const stop = (): void => {
+          try { this.#child.kill('SIGKILL'); } catch { /* Await close evidence below. */ }
+        };
+        const timer = setTimeout(stop, HANDSHAKE_TIMEOUT_MS);
         try {
-          try {
-            this.#child.stdin.end();
-          } catch {
-            this.#child.kill('SIGKILL');
-          }
-          await this.#closed;
-        } finally {
-          clearTimeout(timer);
+          try { this.#child.stdin.end(); } catch { stop(); }
+          // Allow graceful exit, then a bounded interval to confirm the kill.
+          await confirmCleanup(() => this.#closed, HANDSHAKE_TIMEOUT_MS + CLEANUP_TIMEOUT_MS);
+        } catch (error) {
+          failure = isPrivateHubLeaseCleanupFailure(error) ? error : cleanupFailure();
+        } finally { clearTimeout(timer); }
+        try {
           // Never use LOCK_UN: the two duplicated descriptors share one flock.
-          // This final parent close follows the owning store's queue drain.
-          await this.#handle.close();
-          this.lose();
-        }
-      })();
+          // Attempt our final close even when the helper's close is unconfirmed.
+          await confirmCleanup(() => this.#handle.close());
+        } catch (error) {
+          failure ??= isPrivateHubLeaseCleanupFailure(error) ? error : cleanupFailure();
+        } finally { this.lose(); }
+        if (failure) { throw failure; }
+      });
+      void this.#releaseCompletion.catch(() => undefined);
     }
     return this.#releaseCompletion;
   }

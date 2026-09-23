@@ -11,12 +11,16 @@ import type { FinalObject } from '../interfaces/final-object.interface';
 import { readPrivateHubCatalogue, readPrivateHubPreview, privateHubClipMediaId } from './private-hub-catalogue';
 import {
   convertCatalogueToPrivateHub,
+  isPrivateHubConversionCleanupFailure,
   readPrivateHubConversionReceipt,
+  reviewCatalogueForPrivateConversion,
   verifyPrivateHubConversion,
 } from './private-hub-conversion';
 import type { PrivateHubConversionOptions } from './private-hub-conversion';
 import { openPrivateHubMedia, PRIVATE_HUB_MEDIA_CHUNK_BYTES } from './private-hub-media';
-import { PrivateHubStore } from './private-hub-store';
+import * as media from './private-hub-media';
+import { privateConversionFailure, privateConversionFailureCode } from './private-conversion-errors';
+import { PrivateHubStore, isPrivateHubStoreCleanupFailure } from './private-hub-store';
 
 const marker = 'PRIVATE-CONVERSION-CANARY';
 const password = 'Private conversion test passphrase 2026!';
@@ -114,7 +118,8 @@ test('missing expected previews require explicit consent and their state is reco
   await assert.rejects(convertCatalogueToPrivateHub(f.options), /Expected previews are missing/);
   await assert.rejects(fs.stat(f.destination), { code: 'ENOENT' });
   const original = await fingerprint(f.source);
-  const receipt = await convertCatalogueToPrivateHub({ ...f.options, allowMissingPreviews: true });
+  const review = await reviewCatalogueForPrivateConversion(f.options);
+  const receipt = await convertCatalogueToPrivateHub({ ...f.options, review, allowMissingPreviews: true });
   assert.deepEqual(receipt.missingPreviews, [{ kind: 'filmstrip', hash }]);
   const store = await PrivateHubStore.open(f.destination, password);
   try { assert.deepEqual(await verifyPrivateHubConversion(store), receipt); } finally { await store.lock(); }
@@ -258,4 +263,339 @@ test('oversized images and pre-cancelled operations are refused before a destina
   await fs.truncate(path.join(f.assets, 'thumbnails', hash + '.jpg'), 32 * 1024 * 1024 + 1);
   await assert.rejects(convertCatalogueToPrivateHub(f.options), /oversized/);
   await assert.rejects(fs.stat(f.destination), { code: 'ENOENT' });
+});
+
+test('source descriptor close failures are branded without exposing their diagnostics', async t => {
+  const f = await fixture(t);
+  const original = await fingerprint(f.source);
+  const open = fs.open;
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (String(args[0]) === f.cataloguePath) {
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => { await close(); throw new Error(marker + ' close failed'); });
+    }
+    return handle;
+  });
+  await assert.rejects(convertCatalogueToPrivateHub(f.options), error => {
+    assert.ok(isPrivateHubConversionCleanupFailure(error));
+    assert.equal(error.message.includes(marker), false);
+    assert.equal(isPrivateHubConversionCleanupFailure(new Error(error.message)), false);
+    return true;
+  });
+  assert.deepEqual(await fingerprint(f.source), original);
+  await assert.rejects(fs.stat(f.destination), { code: 'ENOENT' });
+});
+
+test('a media write failure waits for source closure and cleanup uncertainty takes precedence', async t => {
+  const f = await fixture(t);
+  const open = fs.open;
+  let entered!: () => void;
+  const closing = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  let retained: Buffer | undefined;
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (String(args[0]) === path.join(f.assets, 'clips', hash + '.mp4')) {
+      const read = handle.read.bind(handle);
+      t.mock.method(handle, 'read', async (...args: Parameters<typeof read>) => {
+        const result = await read(...args); retained = result.buffer as Buffer; return result;
+      });
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => {
+        await close(); entered(); await hold; throw new Error('Synthetic ambiguous source close');
+      });
+    }
+    return handle;
+  });
+  const write = PrivateHubStore.prototype.writeNewRecord;
+  t.mock.method(PrivateHubStore.prototype, 'writeNewRecord', async function (this: PrivateHubStore, id: string, bytes: Buffer) {
+    if (id.startsWith('media-chunk:')) { throw new Error('Synthetic media write failure'); }
+    return write.call(this, id, bytes);
+  });
+  let finished = false;
+  const conversion = convertCatalogueToPrivateHub(f.options).finally(() => { finished = true; });
+  const rejection = assert.rejects(conversion, isPrivateHubConversionCleanupFailure);
+  try {
+    await closing;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(finished, false, 'A requested producer return must actually settle before conversion finishes');
+    assert.ok(retained?.every(byte => byte === 0));
+  } finally { release(); }
+  await rejection;
+  const store = await PrivateHubStore.open(f.destination, password);
+  try { await assert.rejects(readPrivateHubConversionReceipt(store), /does not exist/); }
+  finally { await store.lock(); }
+});
+
+test('a media write failure stays an ordinary copy error when cleanup is confirmed', async t => {
+  const f = await fixture(t);
+  const failure = new Error('Synthetic rejected media write');
+  const write = PrivateHubStore.prototype.writeNewRecord;
+  t.mock.method(PrivateHubStore.prototype, 'writeNewRecord', async function (this: PrivateHubStore, id: string, bytes: Buffer) {
+    if (id.startsWith('media-chunk:')) { throw failure; }
+    return write.call(this, id, bytes);
+  });
+  await assert.rejects(convertCatalogueToPrivateHub(f.options), error => {
+    assert.equal(error, failure);
+    assert.equal(isPrivateHubConversionCleanupFailure(error), false);
+    return true;
+  });
+  const store = await PrivateHubStore.open(f.destination, password);
+  try { await assert.rejects(readPrivateHubConversionReceipt(store), /does not exist/); }
+  finally { await store.lock(); }
+});
+
+test('failed verification iterator closure overrides cancellation and wipes its yielded bytes', async t => {
+  const f = await fixture(t);
+  const controller = new AbortController();
+  const open = media.openPrivateHubMedia;
+  const retained = Buffer.from('Synthetic cancelled verification chunk');
+  let returned = 0;
+  t.mock.method(media, 'openPrivateHubMedia', async (...args: Parameters<typeof open>) => {
+    const reader = await open(...args);
+    return { byteLength: reader.byteLength, readRange: () => ({
+      [Symbol.asyncIterator]() { return this; },
+      async next() { controller.abort(); return { done: false, value: retained }; },
+      async return() { returned++; throw new Error('Synthetic incomplete iterator teardown'); },
+    }) };
+  });
+  await assert.rejects(convertCatalogueToPrivateHub({ ...f.options, signal: controller.signal }), isPrivateHubConversionCleanupFailure);
+  assert.equal(returned, 1);
+  assert.ok(retained.every(byte => byte === 0));
+  const store = await PrivateHubStore.open(f.destination, password);
+  try { await assert.rejects(readPrivateHubConversionReceipt(store), /does not exist/); }
+  finally { await store.lock(); }
+});
+
+test('store closure uncertainty cannot report completion even after receipt publication', async t => {
+  const f = await fixture(t);
+  const events: string[] = [];
+  const lock = PrivateHubStore.prototype.lock;
+  let initialClosures = 0;
+  const mock = t.mock.method(PrivateHubStore.prototype, 'lock', async function (this: PrivateHubStore) {
+    if (this.locked) { return lock.call(this); }
+    initialClosures++;
+    await lock.call(this); throw new Error('Synthetic ambiguous store closure');
+  });
+  await assert.rejects(convertCatalogueToPrivateHub({ ...f.options, onProgress: event => { events.push(event.stage); } }),
+    isPrivateHubConversionCleanupFailure);
+  assert.equal(events.includes('complete'), false);
+  assert.equal(initialClosures, 1);
+  mock.mock.restore();
+  const store = await PrivateHubStore.open(f.destination, password);
+  try { assert.equal((await verifyPrivateHubConversion(store)).previews.length, 4); }
+  finally { await store.lock(); }
+});
+
+test('a stalled source close has a bounded branded outcome that late success cannot undo', async t => {
+  const f = await fixture(t);
+  let deadline!: () => void;
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback, milliseconds, ...args) => {
+    if (milliseconds === 5000) { deadline = () => callback(...args); }
+    return schedule(callback, milliseconds, ...args);
+  });
+  const open = fs.open;
+  let entered!: () => void;
+  const closing = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (String(args[0]) === f.cataloguePath) {
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => { await close(); entered(); await hold; });
+    }
+    return handle;
+  });
+  let classified: unknown;
+  const rejected = assert.rejects(convertCatalogueToPrivateHub(f.options), error => {
+    classified = error; return isPrivateHubConversionCleanupFailure(error);
+  });
+  try { await closing; deadline(); await rejected; }
+  finally { release(); }
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(isPrivateHubConversionCleanupFailure(classified), true);
+  await assert.rejects(fs.stat(f.destination), { code: 'ENOENT' });
+});
+
+test('a stalled store drain is bounded and never reports a completed copy', async t => {
+  const f = await fixture(t);
+  const events: string[] = [];
+  let deadline!: () => void;
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback, milliseconds, ...args) => {
+    if (milliseconds === 30_000) { deadline = () => callback(...args); }
+    return schedule(callback, milliseconds, ...args);
+  });
+  let entered!: () => void;
+  const closing = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  let expireStoreDrain!: () => void;
+  const lock = PrivateHubStore.prototype.lock;
+  t.mock.method(PrivateHubStore.prototype, 'lock', async function (this: PrivateHubStore) {
+    if (this.locked) { return lock.call(this); }
+    expireStoreDrain = deadline;
+    await lock.call(this); entered(); await hold;
+  });
+  const rejected = assert.rejects(convertCatalogueToPrivateHub({ ...f.options, onProgress: event => { events.push(event.stage); } }),
+    isPrivateHubConversionCleanupFailure);
+  try { await closing; expireStoreDrain(); await rejected; }
+  finally { release(); }
+  assert.equal(events.includes('complete'), false);
+});
+
+test('reopened verification brands a range iterator that refuses to finish after revocation', async t => {
+  const f = await fixture(t);
+  await convertCatalogueToPrivateHub(f.options);
+  const store = await PrivateHubStore.open(f.destination, password);
+  const open = media.openPrivateHubMedia;
+  const retained = Buffer.from('Synthetic revoked verification chunk');
+  let returned = 0;
+  t.mock.method(media, 'openPrivateHubMedia', async (...args: Parameters<typeof open>) => {
+    const reader = await open(...args);
+    return { byteLength: reader.byteLength, readRange: () => ({
+      [Symbol.asyncIterator]() { return this; },
+      async next() { await store.lock(); return { done: false, value: retained }; },
+      async return() { returned++; return { done: false, value: Buffer.alloc(0) }; },
+    }) };
+  });
+  try { await assert.rejects(verifyPrivateHubConversion(store), isPrivateHubConversionCleanupFailure); }
+  finally { await store.lock(); }
+  assert.equal(returned, 1);
+  assert.ok(retained.every(byte => byte === 0));
+});
+
+
+test('destination creation cleanup failures remain classified before a store can be adopted', async t => {
+  const f = await fixture(t);
+  const events: string[] = [];
+  const open = fs.open;
+  let faulted = false;
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args);
+    if (!faulted && String(args[0]).startsWith(f.destination + path.sep)
+      && String(args[0]).endsWith('.pending')) {
+      faulted = true;
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => {
+        await close();
+        throw new Error('Synthetic unconfirmed destination descriptor close');
+      });
+    }
+    return handle;
+  });
+  await assert.rejects(convertCatalogueToPrivateHub({ ...f.options, onProgress: event => { events.push(event.stage); } }), error => {
+    assert.equal(isPrivateHubStoreCleanupFailure(error), true);
+    assert.equal(isPrivateHubConversionCleanupFailure(error), true);
+    return true;
+  });
+  assert.equal(faulted, true);
+  assert.equal(events.includes('complete'), false);
+  await assert.rejects(PrivateHubStore.open(f.destination, password), isPrivateHubStoreCleanupFailure);
+});
+
+
+test('conversion gives store drainage time for the lease shutdown sequence before claiming completion', async t => {
+  const f = await fixture(t);
+  const active = new Map<ReturnType<typeof setTimeout>, number>();
+  const schedule = globalThis.setTimeout;
+  const cancel = globalThis.clearTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback, milliseconds, ...args) => {
+    const timer = schedule(callback, milliseconds, ...args);
+    active.set(timer, milliseconds);
+    return timer;
+  });
+  t.mock.method(globalThis, 'clearTimeout', timer => {
+    active.delete(timer as ReturnType<typeof setTimeout>);
+    return cancel(timer);
+  });
+  let entered!: () => void;
+  const closing = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const lock = PrivateHubStore.prototype.lock;
+  t.mock.method(PrivateHubStore.prototype, 'lock', async function (this: PrivateHubStore) {
+    if (this.locked) { return lock.call(this); }
+    await lock.call(this);
+    entered();
+    await hold;
+  });
+  const events: string[] = [];
+  const converting = convertCatalogueToPrivateHub({ ...f.options, onProgress: event => { events.push(event.stage); } });
+  try {
+    await closing;
+    assert.deepEqual([...active.values()], [30_000], 'only the longer outer store deadline remains');
+    assert.equal(events.includes('complete'), false);
+  } finally { release(); }
+  assert.equal((await converting).state, 'complete');
+  assert.equal(events.includes('complete'), true);
+  assert.equal(active.size, 0);
+});
+
+test('conversion reports the exact failing step without replacing the original error', async t => {
+  for (const stage of ['storage-initialization-failed', 'catalogue-encryption-failed', 'preview-copy-failed',
+    'verification-failed', 'receipt-failed'] as const) {
+    await t.test(stage, async step => {
+      const f = await fixture(step);
+      const original = await fingerprint(f.source);
+      const failure = new Error('SECRET /PRIVATE/PATH');
+      if (stage === 'storage-initialization-failed') {
+        step.mock.method(PrivateHubStore, 'create', async () => { throw failure; });
+      } else if (stage === 'verification-failed') {
+        const read = PrivateHubStore.prototype.readRecord;
+        step.mock.method(PrivateHubStore.prototype, 'readRecord', async function (this: PrivateHubStore, id: string, maximum?: number) {
+          if (id === 'catalogue') { throw failure; }
+          return read.call(this, id, maximum);
+        });
+      } else {
+        const write = PrivateHubStore.prototype.writeRecord;
+        step.mock.method(PrivateHubStore.prototype, 'writeRecord', async function (this: PrivateHubStore, id: string, bytes: Buffer) {
+          if ((stage === 'catalogue-encryption-failed' && id === 'catalogue')
+            || (stage === 'receipt-failed' && id === 'conversion:receipt')
+            || (stage === 'preview-copy-failed' && id.startsWith('preview:'))) { throw failure; }
+          return write.call(this, id, bytes);
+        });
+      }
+      await assert.rejects(convertCatalogueToPrivateHub(f.options), error => {
+        assert.equal(error, failure);
+        assert.equal(privateConversionFailureCode(error), stage);
+        assert.equal(isPrivateHubConversionCleanupFailure(error), false);
+        return true;
+      });
+      assert.deepEqual(await fingerprint(f.source), original);
+    });
+  }
+});
+
+test('source review changes and unreadable catalogue format have separate failure categories', async t => {
+  const f = await fixture(t);
+  const review = await reviewCatalogueForPrivateConversion(f.options);
+  await fs.appendFile(f.cataloguePath, '\n');
+  await assert.rejects(convertCatalogueToPrivateHub({ ...f.options, review }), error => {
+    assert.equal(privateConversionFailureCode(error), 'source-changed'); return true;
+  });
+  await fs.writeFile(f.cataloguePath, 'invalid json');
+  await assert.rejects(convertCatalogueToPrivateHub(f.options), error => {
+    assert.equal(privateConversionFailureCode(error), 'source-inspection-failed'); return true;
+  });
+  await assert.rejects(fs.stat(f.destination), { code: 'ENOENT' });
+});
+
+test('converter preserves native errors and branded categories across storage setup', async t => {
+  const f = await fixture(t);
+  const cases = [
+    { failure: Object.assign(new Error('SECRET /PRIVATE/PATH'), { code: 'EPERM' }), code: 'permission-denied' },
+    { failure: privateConversionFailure('files-unavailable'), code: 'files-unavailable' },
+  ];
+  for (const { failure, code } of cases) {
+    const mock = t.mock.method(PrivateHubStore, 'create', async () => { throw failure; });
+    await assert.rejects(convertCatalogueToPrivateHub(f.options), error => {
+      assert.equal(error, failure); assert.equal(privateConversionFailureCode(error), code); return true;
+    });
+    mock.mock.restore();
+  }
 });

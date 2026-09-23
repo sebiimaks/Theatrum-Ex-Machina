@@ -9,7 +9,8 @@ const source = readFileSync(path.resolve(__dirname, '../private-gallery-preload.
 const item = () => ({ id: 'a'.repeat(32), title: 'Private video', duration: 12, width: 1920, height: 1080,
   rating: 4, favourite: false, tags: ['Birds'], thumbnailUrl: 'theatrum://app/media/thumbnails/hash-1.jpg',
   notes: 'Private notes', clipUrl: 'theatrum://app/media/clips/hash-1.mp4',
-  posterUrl: 'theatrum://app/media/clips/hash-1.jpg', truncated: false, editable: true, regenerable: true, revision: 'b'.repeat(32) });
+  posterUrl: 'theatrum://app/media/clips/hash-1.jpg', filmstripUrl: 'theatrum://app/media/filmstrips/hash-1.jpg',
+  truncated: false, editable: true, regenerable: true, revision: 'b'.repeat(32) });
 const page = () => ({ status: 'ready', total: 1, offset: 0, items: [item()] });
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 function fixture(...results: unknown[]) {
@@ -49,7 +50,7 @@ test('list sends only validated query/offset and strips unknown native fields an
   const value = await f.bridge.list({ query: 'Birds', offset: 0 });
   assert.deepEqual(plain(f.invoked), [[channels.list, { query: 'Birds', offset: 0 }]]);
   assert.equal(value.status, 'ready');
-  assert.doesNotMatch(JSON.stringify(value), /secret|source|sender|locations|notes|posterUrl|clipUrl/);
+  assert.doesNotMatch(JSON.stringify(value), /secret|source|sender|locations|notes|posterUrl|clipUrl|filmstripUrl/);
   assert.equal(value.items[0].title, 'Private video');
 });
 
@@ -66,6 +67,7 @@ test('fixed media URLs accept an optional exact opaque refresh token in every re
   versioned.thumbnailUrl += version;
   versioned.posterUrl += version;
   versioned.clipUrl += version;
+  versioned.filmstripUrl += version;
   const listing = fixture({ ...page(), items: [versioned] });
   assert.equal((await listing.bridge.list({ query: '', offset: 0 })).items[0].thumbnailUrl, versioned.thumbnailUrl);
   for (const [mode, status] of [['detail', 'ready'], ['save', 'saved'], ['regenerate', 'generated']]) {
@@ -85,7 +87,7 @@ test('refresh URLs reject extra queries, encoding, fragments, malformed tokens a
     '?v=' + token + '?v=' + token, '?%76=' + token, '?v=%61' + 'a'.repeat(31), '%3Fv=' + token,
     '?v=' + token + '#fragment', '#v=' + token, '?v=' + token + '/', '?v=' + token + '\0',
     '?v=' + token + '\n', '?v=' + token + '\r\n', '?v=' + token + '\u2028', '\n'];
-  for (const key of ['thumbnailUrl', 'posterUrl', 'clipUrl'] as const) {
+  for (const key of ['thumbnailUrl', 'posterUrl', 'clipUrl', 'filmstripUrl'] as const) {
     for (const suffix of suffixes) {
       const malformed = { ...item(), [key]: item()[key] + suffix };
       const f = fixture({ status: 'ready', item: malformed });
@@ -139,7 +141,11 @@ test('malformed metadata and external preview URLs are never returned to the pag
     assert.deepEqual(plain(await f.bridge.list({ query: '', offset: 0 })), { status: 'unavailable' });
   }
   for (const patch of [{ notes: 'x'.repeat(65_537) }, { truncated: 'true' }, { clipUrl: 'https://private/video.mp4' },
-    { posterUrl: 'theatrum://app/media/clips/../private.jpg' }, { editable: 'true' }, { revision: 'bad' }]) {
+    { posterUrl: 'theatrum://app/media/clips/../private.jpg' }, { editable: 'true' }, { revision: 'bad' },
+    { filmstripUrl: undefined }, { filmstripUrl: 'file:///private/strip.jpg' },
+    { filmstripUrl: 'https://app/media/filmstrips/hash-1.jpg' }, { filmstripUrl: 'theatrum://other/media/filmstrips/hash-1.jpg' },
+    { filmstripUrl: 'theatrum://app/media/clips/hash-1.jpg' }, { filmstripUrl: 'theatrum://app/media/filmstrips/hash-1.mp4' },
+    { filmstripUrl: 'theatrum://app/media/filmstrips/../private.jpg' }]) {
     const f = fixture({ status: 'ready', item: { ...item(), ...patch } });
     assert.deepEqual(plain(await f.bridge.detail('a'.repeat(32))), { status: 'unavailable' });
   }

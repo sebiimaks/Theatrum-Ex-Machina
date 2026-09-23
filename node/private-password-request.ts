@@ -1,6 +1,7 @@
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
 
 import { isPrivateTouchIdCleanupFailure } from './private-touch-id';
+import { isPrivateHubStoreCleanupFailure } from './private-hub-store';
 
 const ENTRY_URL = 'theatrum://app/index.html';
 const SUBMIT_CHANNEL = 'private-password-submit';
@@ -97,7 +98,7 @@ export function registerPrivatePasswordRequest(options: PrivatePasswordRequestOp
     touchIdQuery = true;
     try {
       const work = Promise.resolve().then(() => trusted(event) ? touchIdAvailable() : false).catch(error => {
-        if (isPrivateTouchIdCleanupFailure(error)) { cleanupFailure = error; invalidate(); }
+        if (isPrivateTouchIdCleanupFailure(error) || isPrivateHubStoreCleanupFailure(error)) { cleanupFailure = error; invalidate(); }
         throw error;
       });
       touchIdDrain = work.then(() => undefined, () => undefined);

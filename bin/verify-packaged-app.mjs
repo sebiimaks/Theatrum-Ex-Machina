@@ -21,6 +21,7 @@ const packageLock = JSON.parse(
 );
 const require = createRequire(import.meta.url);
 const asar = require('@electron/asar');
+const { verifyPrivacyPayload } = require('./privacy-package.cjs');
 
 if (!appPath) {
   throw new Error('Usage: node bin/verify-packaged-app.mjs <macOS .app> [corresponding-source archive]');
@@ -220,6 +221,7 @@ assert.ok(
 );
 
 const applicationArchive = path.join(resourcesPath, 'app.asar');
+verifyPrivacyPayload({ resourcesPath, projectDirectory, platform: 'darwin', arch: 'arm64', asar });
 const archivedFiles = asar.listPackage(applicationArchive);
 const archivedFileSet = new Set(archivedFiles);
 assert.equal(

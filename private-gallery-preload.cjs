@@ -71,9 +71,10 @@ function item(value, details) {
     rating: value.rating, favourite: value.favourite, tags: value.tags.slice(), thumbnailUrl: value.thumbnailUrl };
   if (details) {
     if (!string(value.notes, 65_536) || !url(value.clipUrl, 'clips', 'mp4') || !url(value.posterUrl, 'clips', 'jpg')
+      || !url(value.filmstripUrl, 'filmstrips', 'jpg')
       || typeof value.truncated !== 'boolean' || typeof value.editable !== 'boolean' || typeof value.regenerable !== 'boolean'
       || !validId(value.revision)) { return; }
-    Object.assign(result, { notes: value.notes, clipUrl: value.clipUrl, posterUrl: value.posterUrl, truncated: value.truncated,
+    Object.assign(result, { notes: value.notes, clipUrl: value.clipUrl, posterUrl: value.posterUrl, filmstripUrl: value.filmstripUrl, truncated: value.truncated,
       editable: value.editable, regenerable: value.regenerable, revision: value.revision });
   }
   return result;

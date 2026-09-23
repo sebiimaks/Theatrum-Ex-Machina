@@ -35,6 +35,7 @@ import { THEATRUM_APP_HOST, THEATRUM_APP_PROTOCOL } from './interfaces/theatrum-
 import { normalOperationScope } from './node/normal-operation-scope';
 import { NormalApplicationPause } from './node/normal-application-pause';
 import { createPrivateApplicationWorkspace } from './node/private-application-workspace';
+import { createPrivateHubMenu } from './node/private-hub-menu';
 import type { PrivateHubOpenOutcome } from './node/private-hub-open';
 
 // Interfaces
@@ -87,9 +88,16 @@ if (packagedSmokeTest) {
   if (!pathToPortableApp) {
     throw new Error('Packaged smoke testing requires an isolated PORTABLE_EXECUTABLE_DIR.');
   }
-  const smokeUserDataPath = path.join(pathToPortableApp, 'user-data');
-  fs.mkdirSync(smokeUserDataPath, { recursive: true });
-  app.setPath('userData', smokeUserDataPath);
+  // Keep the explicit package smoke run's profiles, downloads and diagnostics
+  // beside its disposable settings rather than the installed app's defaults.
+  for (const [name, folder] of [
+    ['appData', 'app-data'], ['userData', 'user-data'], ['sessionData', 'session-data'],
+    ['temp', 'temporary'], ['crashDumps', 'crash-dumps'], ['logs', 'logs'], ['downloads', 'downloads'],
+  ] as const) {
+    const smokePath = path.join(pathToPortableApp, folder);
+    fs.mkdirSync(smokePath, { recursive: true });
+    app.setPath(name, smokePath);
+  }
 }
 GLOBALS.settingsPath = pathToPortableApp ? pathToPortableApp : path.join(pathToAppData, 'theatrum-ex-machina');
 loadAuthorizedCataloguePaths(GLOBALS.settingsPath).forEach((cataloguePath: string) => {
@@ -126,8 +134,8 @@ const catalogueOpenQueue = new CatalogueOpenQueue();
 // They acquire filesystem authority only after returning to the normal hub.
 const deferredNormalCatalogueOpens: string[] = [];
 const MAX_DEFERRED_NORMAL_OPENS = 128;
-// Enable only after private gallery, platform policy and native acceptance work.
-const PRIVATE_HUB_UI_READY = false;
+// Password-based private hubs are available in the macOS test build first.
+const PRIVATE_HUB_UI_READY = process.platform === 'darwin';
 let normalPrivateResumePending = false;
 
 type CatalogueOpenIntent = CatalogueAccessMode | 'duplicate-scaena';
@@ -622,15 +630,20 @@ const privateApplicationWorkspace = createPrivateApplicationWorkspace({
   afterResume: () => { normalPrivateResumePending = true; },
 });
 
-/** Reserved for a future native menu action. Never register this on ordinary IPC. */
-function openPrivateHubFromNative(): Promise<PrivateHubOpenOutcome> {
+/** Native menu action. Never register this on ordinary IPC. */
+function openPrivateHubFromNative(): Promise<PrivateHubOpenOutcome> { return transitionToPrivateHub('open'); }
+
+/** Native creation action; source/destination paths never come from ordinary IPC. */
+function createPrivateCopyFromNative(): Promise<PrivateHubOpenOutcome> { return transitionToPrivateHub('convert'); }
+
+function transitionToPrivateHub(operation: 'open' | 'convert'): Promise<PrivateHubOpenOutcome> {
   if (normalOperationScope.inOperation || !normalOperationScope.isCurrent()) {
     return Promise.resolve('unavailable');
   }
   if (privateApplicationWorkspace.isActive) {
     return Promise.resolve(privateApplicationWorkspace.status.cleanupFailed ? 'unavailable' : 'busy');
   }
-  const opening = privateApplicationWorkspace.open();
+  const opening = operation === 'convert' ? privateApplicationWorkspace.convert() : privateApplicationWorkspace.open();
   void privateApplicationWorkspace.settled.then(() => {
     // Factory observers retire before this callback, including picker cancellation.
     if (privateApplicationWorkspace.status.cleanupFailed) { return; }
@@ -1136,6 +1149,29 @@ function createWindow() {
           { role: 'quit' },
           { role: 'hide' },
         ]
+      },
+      {
+        ...createPrivateHubMenu({
+          open: openPrivateHubFromNative,
+          create: createPrivateCopyFromNative,
+          canCreate: () => !!GLOBALS.currentlyOpenVhaFile && GLOBALS.catalogueAccessMode === 'read-write',
+          report: async (problem, operation) => {
+            if (GLOBALS.readyToQuit || privateApplicationWorkspace.status.quitRequested) { return; }
+            const cleanupFailed = privateApplicationWorkspace.status.cleanupFailed;
+            const message = cleanupFailed ? 'Restart the app before continuing.'
+              : problem === 'no-catalogue' ? 'Open a writable hub before creating a private copy.'
+                : problem === 'busy' ? 'A private hub operation is already in progress.'
+                  : operation === 'open' ? 'The private hub could not be opened.' : 'The private copy could not be created.';
+            const detail = cleanupFailed ? 'Private cleanup could not be confirmed. Your saved hubs have been retained.'
+              : problem === 'no-catalogue' ? 'Open a .scaena hub, then choose File → Create private copy…'
+                : problem === 'busy' ? 'Finish or cancel the current operation, then try again.'
+                  : operation === 'open' ? 'Check the password and choose a complete private hub folder on a connected local drive.'
+                    : 'Finish any pending edits or media operations, then try again. The original hub is retained.';
+            const options: Electron.MessageBoxOptions = { type: 'info', title: 'Private hub', message, detail, buttons: ['OK'] };
+            if (win && !win.isDestroyed() && win.isVisible()) { await dialog.showMessageBox(win, options); }
+            else { await dialog.showMessageBox(options); }
+          },
+        }),
       },
       {
         label: 'Edit',

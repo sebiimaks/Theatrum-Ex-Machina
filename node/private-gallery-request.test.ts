@@ -219,7 +219,7 @@ test('regeneration grants the native-selected saved source and rotates opaque ed
   });
   const result = await f.run();
   assert.equal(result.status, 'generated'); assert.notEqual(result.item.revision, f.item.revision);
-  for (const kind of ['thumbnailUrl', 'posterUrl', 'clipUrl'] as const) {
+  for (const kind of ['thumbnailUrl', 'posterUrl', 'clipUrl', 'filmstripUrl'] as const) {
     assert.notEqual(result.item[kind], f.item[kind]);
     assert.match(new URL(result.item[kind]).search, /^\?v=[a-f0-9]{32}$/);
   }
@@ -384,6 +384,7 @@ test('details require a previously issued ID and copy bounded display fields onl
   assert.equal(selected.item.notes, 'Private note 0');
   assert.match(selected.item.clipUrl, /^theatrum:\/\/app\/media\/clips\/hash-0\.mp4\?v=[a-f0-9]{32}$/);
   assert.match(selected.item.posterUrl, /^theatrum:\/\/app\/media\/clips\/hash-0\.jpg\?v=[a-f0-9]{32}$/);
+  assert.match(selected.item.filmstripUrl, /^theatrum:\/\/app\/media\/filmstrips\/hash-0\.jpg\?v=[a-f0-9]{32}$/);
   assert.equal(selected.item.truncated, false);
   assert.equal(selected.item.editable, true); assert.match(selected.item.revision, /^[a-f0-9]{32}$/);
   assert.doesNotMatch(JSON.stringify(selected), /secret|fileName|inputDirs|locations|partialPath|hubName/);
@@ -391,7 +392,7 @@ test('details require a previously issued ID and copy bounded display fields onl
   const reloaded = (await f.detail(f.event, items[0].id)).item;
   assert.deepEqual(reloaded.tags, ['Insects']);
   assert.equal(reloaded.revision, selected.item.revision, 'unchanged metadata keeps its editing authority');
-  for (const kind of ['thumbnailUrl', 'posterUrl', 'clipUrl'] as const) {
+  for (const kind of ['thumbnailUrl', 'posterUrl', 'clipUrl', 'filmstripUrl'] as const) {
     assert.notEqual(reloaded[kind], selected.item[kind], 'reload also refreshes a generation cancelled after publication');
   }
 });

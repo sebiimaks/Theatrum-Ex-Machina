@@ -79,6 +79,7 @@ function project(image: ImageElement, index: number, regenerable = false): Row {
       thumbnailUrl: createTheatrumMediaUrl('thumbnails', image.hash, false, previewKey),
       clipUrl: createTheatrumMediaUrl('clips', image.hash, true, previewKey),
       posterUrl: createTheatrumMediaUrl('clips', image.hash, false, previewKey),
+      filmstripUrl: createTheatrumMediaUrl('filmstrips', image.hash, false, previewKey),
       truncated: (typeof image.cleanName === 'string' && image.cleanName.length > 2048)
         || (typeof image.notes === 'string' && image.notes.length > 65_536)
         || originalTags.length > 128 || originalTags.some(tag => typeof tag === 'string' && tag.length > 512),

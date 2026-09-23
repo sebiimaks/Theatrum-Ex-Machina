@@ -2,14 +2,14 @@ import type { FinalObject } from '../interfaces/final-object.interface';
 import { getImageLocations } from '../interfaces/media-locations';
 import { readPrivateHubCatalogue, PRIVATE_HUB_MAX_IMAGE_BYTES, type PrivateHubPreviewKind } from './private-hub-catalogue';
 import { resolvePrivatePreviewId } from './private-hub-preview-set';
-import { verifyPrivateHubConversion } from './private-hub-conversion';
+import { verifyPrivateHubConversion, isPrivateHubConversionCleanupFailure } from './private-hub-conversion';
 import { createPrivateHubImageResponse } from './private-hub-image-response';
 import { createPrivateHubMediaResponse } from './private-hub-media-response';
 import { PRIVATE_HUB_MEDIA_CHUNK_BYTES } from './private-hub-media';
 import { generatePrivateHubPreviews, isPrivatePreviewGenerationCleanupFailure } from './private-hub-preview-generation';
 import type { PrivatePreviewSet } from './private-hub-preview-set';
 import { isPrivatePreviewSource, privatePreviewSourceMatchesLocation, type PrivatePreviewSource } from './private-preview-source';
-import { PrivateHubStore } from './private-hub-store';
+import { PrivateHubStore, isPrivateHubStoreCleanupFailure } from './private-hub-store';
 import { CATALOGUE_FILE_MAX_BYTES, parseVhaJson } from './vha-file-persistence';
 import { applyPrivateVideoMetadata, privateVideoRevision, snapshotPrivateVideoMetadataUpdate,
   type PrivateVideoMetadataUpdate, type PrivateVideoMetadataResult } from './private-hub-metadata';
@@ -104,6 +104,8 @@ export class PrivateHubSession {
   #plaintextCopying = false;
   #plaintextCopyController: AbortController | undefined;
   #plaintextCopyCleanupFailure: Error | undefined;
+  #conversionCleanupFailure: Error | undefined;
+  #storeCleanupFailure: Error | undefined;
 
   constructor(options: PrivateHubSessionOptions = {}) { this.#options = { ...options }; }
 
@@ -148,7 +150,7 @@ export class PrivateHubSession {
   }
 
   private beginUnlock(directory: string, password: string, touchId: boolean): Promise<{ generation: number; catalogue: FinalObject }> {
-    if (this.#touchIdCleanupFailure || this.#plaintextCopyCleanupFailure || this.#previewCleanupFailure || this.#opening || this.#draining || this.#state === 'unlocked' || this.#state === 'unlocking') {
+    if (this.#storeCleanupFailure || this.#conversionCleanupFailure || this.#touchIdCleanupFailure || this.#plaintextCopyCleanupFailure || this.#previewCleanupFailure || this.#opening || this.#draining || this.#state === 'unlocked' || this.#state === 'unlocking') {
       return Promise.reject(unavailable());
     }
     this.#state = 'unlocking';
@@ -196,10 +198,20 @@ export class PrivateHubSession {
       this.#state = 'unlocked';
       return catalogue;
     } catch (error) {
+      // First activation can be cancelled before verification's iterator has
+      // drained. Keep its branded uncertainty after the public unlock rejects,
+      // including when closure later settles, so outer disposal cannot resume.
+      if (isPrivateHubStoreCleanupFailure(error)) { this.#storeCleanupFailure ??= error; }
+      if (isPrivateHubConversionCleanupFailure(error)) { this.#conversionCleanupFailure = error; }
       if (isPrivateTouchIdCleanupFailure(error)) { this.#touchIdCleanupFailure = error; }
       if (this.#generation === generation) { void this.lock('unlock-failed').catch(() => undefined); }
       // Also dispose a late successful open which was never adopted by this session.
-      try { await store?.lock(); } catch { /* preserve a generic unlock failure */ }
+      try { await store?.lock(); }
+      catch (error) {
+        // A late store may never have been adopted or observed by lock(). Keep
+        // its cleanup evidence without exposing filesystem details to the UI.
+        if (isPrivateHubStoreCleanupFailure(error)) { this.#storeCleanupFailure ??= error; }
+      }
       throw unavailable();
     } finally { password = ''; }
   }
@@ -249,6 +261,13 @@ export class PrivateHubSession {
     for (const release of this.#responseReservations) { release(); }
     this.#unlockController?.abort();
     const draining = Promise.allSettled([this.#draining, this.#opening, this.#queue, this.#previewJob, storeDrained]).then(results => {
+      for (const result of results) {
+        if (result.status === 'rejected' && isPrivateHubStoreCleanupFailure(result.reason)) {
+          this.#storeCleanupFailure ??= result.reason;
+        }
+      }
+      if (this.#storeCleanupFailure) { throw this.#storeCleanupFailure; }
+      if (this.#conversionCleanupFailure) { throw this.#conversionCleanupFailure; }
       if (this.#touchIdCleanupFailure) { throw this.#touchIdCleanupFailure; }
       if (this.#plaintextCopyCleanupFailure) { throw this.#plaintextCopyCleanupFailure; }
       if (this.#previewCleanupFailure) { throw this.#previewCleanupFailure; }

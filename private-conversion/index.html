@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; connect-src 'none'">
+    <title>Create private copy</title>
+    <link rel="stylesheet" href="conversion.css">
+    <script src="conversion.js" defer></script>
+  </head>
+  <body>
+    <main class="conversion-sheet" aria-labelledby="conversion-heading">
+      <div class="brand" aria-label="Theatrum Ex Machina">
+        <span class="brand-mark" aria-hidden="true">T</span>
+        <span>Theatrum Ex Machina</span>
+      </div>
+      <div class="heading-row">
+        <span class="lock-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <rect x="5" y="10" width="14" height="11" rx="3"></rect>
+            <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"></path>
+          </svg>
+        </span>
+        <h1 id="conversion-heading">Create private copy</h1>
+      </div>
+      <p class="description">Protect a separate copy of this hub’s catalogue and available previews with a password. Choose a destination folder next; the app will create a new “Private hub” folder inside it.</p>
+
+      <section id="review" class="review" aria-label="Copy contents" hidden>
+        <dl class="summary">
+          <div><dt>Videos in catalogue</dt><dd id="video-count">—</dd></div>
+          <div><dt>Available previews</dt><dd id="preview-count">—</dd></div>
+          <div><dt>Preview size</dt><dd id="preview-size">—</dd></div>
+        </dl>
+        <div id="missing-review" class="missing-review" hidden>
+          <h2>Some previews are missing</h2>
+          <p>The private copy will contain only the previews available now.</p>
+          <dl class="missing-summary">
+            <div><dt>Thumbnails</dt><dd id="missing-thumbnail">0</dd></div>
+            <div><dt>Filmstrips</dt><dd id="missing-filmstrip">0</dd></div>
+            <div><dt>Clip posters</dt><dd id="missing-clip-poster">0</dd></div>
+            <div><dt>Clips</dt><dd id="missing-clip">0</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <form id="conversion-form" autocomplete="off" novalidate aria-busy="true">
+        <fieldset id="credentials" class="credentials" disabled>
+          <legend>Protect your private copy</legend>
+          <div class="password-grid">
+            <div>
+              <label for="password">Password</label>
+              <input id="password" type="password" placeholder="Choose a password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="1024" aria-describedby="password-help conversion-status">
+            </div>
+            <div>
+              <label for="confirm-password">Confirm password</label>
+              <input id="confirm-password" type="password" placeholder="Enter it again" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="1024" aria-describedby="password-help conversion-status">
+            </div>
+          </div>
+          <div class="password-help-row">
+            <p id="password-help">Keep this password safe. It cannot be recovered.</p>
+            <button class="visibility-toggle" id="show-password" type="button" aria-controls="password confirm-password" aria-label="Show passwords" aria-pressed="false">Show passwords</button>
+          </div>
+          <p class="clipboard-help">Copying and dragging are disabled. You can paste into password fields.</p>
+          <label id="missing-consent" class="check-label missing-consent" for="allow-missing" hidden>
+            <input id="allow-missing" type="checkbox">
+            <span>I want to continue without the missing previews listed above.</span>
+          </label>
+          <label class="check-label originals-consent" for="acknowledge-originals">
+            <input id="acknowledge-originals" type="checkbox" aria-describedby="originals-help">
+            <span>I understand that the originals remain unencrypted.</span>
+          </label>
+          <p id="originals-help" class="originals-help">The original catalogue, previews, backups and source videos remain unencrypted. This creates a separate copy and does not automatically delete or protect the originals.</p>
+        </fieldset>
+
+        <div id="progress-section" class="progress-section" hidden>
+          <label id="progress-label" for="conversion-progress">Preparing private copy…</label>
+          <progress id="conversion-progress" max="1" aria-describedby="conversion-status"></progress>
+          <p id="progress-count" class="progress-count"></p>
+        </div>
+        <p id="conversion-status" class="status" role="status" aria-live="polite" aria-atomic="true">Reviewing this hub…</p>
+        <div class="actions">
+          <button class="button button-secondary" id="cancel" type="button">Cancel</button>
+          <button class="button button-primary" id="create-copy" type="submit" disabled>Create private copy</button>
+        </div>
+      </form>
+    </main>
+  </body>
+</html>
