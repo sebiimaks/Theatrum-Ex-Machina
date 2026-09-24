@@ -19,6 +19,7 @@
   ],
   "include": [
     "main.ts",
-    "preload.ts"
+    "preload.ts",
+    "node/normal-preview-validation-worker.ts"
   ]
 }

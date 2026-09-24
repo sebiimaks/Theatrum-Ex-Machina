@@ -1,5 +1,4 @@
 import { net, protocol } from 'electron';
-import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -13,6 +12,8 @@ import {
   resolveTheatrumAssetDirectory,
   resolveTheatrumMediaFile,
 } from './theatrum-protocol-paths';
+
+import { normalPreviewValidation } from './normal-preview-validation';
 
 const MAX_NORMAL_MEDIA_RESPONSES = 512;
 let activeNormalMediaResponses = 0;
@@ -46,39 +47,6 @@ function authorizedMediaRequestHash(requestUrl: string): string | undefined {
       && GLOBALS.authorizedCatalogueImageHashes.has(hash)
       ? hash
       : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isInsideDirectory(rootDirectory: string, candidatePath: string): boolean {
-  const relativePath = path.relative(rootDirectory, candidatePath);
-  return relativePath !== ''
-    && relativePath !== '..'
-    && !relativePath.startsWith(`..${path.sep}`)
-    && !path.isAbsolute(relativePath);
-}
-
-/** Resolve links before fetching so generated asset symlinks cannot escape the active hub. */
-async function resolveCanonicalMediaFile(
-  filePath: string,
-  outputDirectory: string,
-  assetDirectory: string,
-): Promise<string | undefined> {
-  try {
-    const [canonicalOutputDirectory, canonicalAssetDirectory, canonicalFilePath] = await Promise.all([
-      fs.realpath(outputDirectory).catch(() => undefined),
-      fs.realpath(assetDirectory).catch(() => undefined),
-      fs.realpath(filePath).catch(() => undefined),
-    ]);
-    if (
-      !canonicalOutputDirectory || !canonicalAssetDirectory || !canonicalFilePath
-      || !isInsideDirectory(canonicalOutputDirectory, canonicalAssetDirectory)
-      || !isInsideDirectory(canonicalAssetDirectory, canonicalFilePath)
-    ) {
-      return undefined;
-    }
-    return (await fs.stat(canonicalFilePath)).isFile() ? canonicalFilePath : undefined;
   } catch {
     return undefined;
   }
@@ -168,7 +136,7 @@ function fetchNormalMedia(
       revoked.addEventListener('abort', revoke, { once: true });
       try {
         if (!current()) { respond(protocolError(404)); return; }
-        const canonicalFile = await resolveCanonicalMediaFile(filePath, outputDirectory, assetDirectory);
+        const canonicalFile = await normalPreviewValidation.resolve(filePath, outputDirectory, assetDirectory, revoked);
         if (!canonicalFile || !current()) { respond(protocolError(404)); return; }
         const response = await fetchLocalFile(canonicalFile, request, allowDevelopmentMediaOrigin, nativeController.signal);
         if (response.body) { reader = response.body.getReader(); }

@@ -5,6 +5,8 @@ import { test, type TestContext } from 'node:test';
 import { GLOBALS } from './main-globals';
 import { NORMAL_CATALOGUE_STORAGE } from './catalogue-storage';
 import { normalOperationScope } from './normal-operation-scope';
+import { normalPreviewValidation } from './normal-preview-validation';
+import { resolveCanonicalPreviewFile } from './normal-preview-validation-worker';
 import type { PrivateHubSession } from './private-hub-session';
 import { parseTheatrumMediaRequest } from './theatrum-protocol-paths';
 
@@ -35,6 +37,9 @@ async function fixture(t: TestContext): Promise<string> {
   await fs.mkdir(root, { recursive: true });
   const directory = await fs.mkdtemp(path.join(root, 'private-protocol-'));
   const previous = { ...GLOBALS };
+  // Worker lifecycle is tested separately; these tests isolate stream ownership.
+  t.mock.method(normalPreviewValidation, 'resolve', async (filePath: string, outputDirectory: string, assetDirectory: string) =>
+    resolveCanonicalPreviewFile({ filePath, outputDirectory, assetDirectory }));
   fetches = 0;
   fetchFile = async () => new Response('plain file');
   t.after(async () => {
@@ -136,11 +141,8 @@ test('sealing blocks normal media admission while static application files remai
 test('canonical lookup is retained through revocation and cannot launch a late native fetch', async t => {
   const directory = await fixture(t); const handler = createHandler(directory);
   const filePath = path.join(directory, 'vha-Synthetic', 'thumbnails', 'known.jpg');
-  const entered = deferred(); const lookup = deferred<string>(); const original = fs.realpath;
-  t.mock.method(fs, 'realpath', (value: any, ...args: any[]) => {
-    if (value === filePath) { entered.resolve(); return lookup.promise; }
-    return original(value, ...args);
-  });
+  const entered = deferred(); const lookup = deferred<string>();
+  t.mock.method(normalPreviewValidation, 'resolve', () => { entered.resolve(); return lookup.promise; });
   const response = handler(new Request(mediaUrl)); await entered.promise;
   const draining = normalOperationScope.seal(); let drained = false;
   void draining.then(() => { drained = true; });
@@ -150,22 +152,25 @@ test('canonical lookup is retained through revocation and cannot launch a late n
   assert.equal(fetches, 0);
 });
 
-test('one rejected canonical lookup does not drop another still-running lookup from the drain', async t => {
-  const directory = await fixture(t); const handler = createHandler(directory);
-  const entered = deferred(); const lookup = deferred<string>(); const original = fs.realpath;
-  const assetPath = path.join(directory, 'vha-Synthetic');
-  t.mock.method(fs, 'realpath', (value: any, ...args: any[]) => {
-    if (value === directory) { return Promise.reject(new Error('Synthetic denied path')); }
-    if (value === assetPath) { entered.resolve(); return lookup.promise; }
-    return original(value, ...args);
+for (const drift of ['session', 'hash authorization'] as const) {
+  test(`worker result cannot authorize media after ${drift} changes`, async t => {
+    const directory = await fixture(t); const handler = createHandler(directory);
+    const entered = deferred(); const lookup = deferred<string>();
+    t.mock.method(normalPreviewValidation, 'resolve', () => { entered.resolve(); return lookup.promise; });
+    const response = handler(new Request(mediaUrl)); await entered.promise;
+    if (drift === 'session') { GLOBALS.catalogueSessionGeneration++; }
+    else { GLOBALS.authorizedCatalogueImageHashes.delete('known'); }
+    lookup.resolve(path.join(directory, 'vha-Synthetic', 'thumbnails', 'known.jpg'));
+    assert.equal((await response).status, 404); assert.equal(fetches, 0);
   });
-  const response = handler(new Request(mediaUrl)); await entered.promise; await turn();
-  assert.equal(normalOperationScope.pendingCount, 1);
-  const draining = normalOperationScope.seal(); let drained = false;
-  void draining.then(() => { drained = true; });
-  await turn(); assert.equal(drained, false);
-  lookup.resolve(assetPath); assert.equal((await response).status, 404); await draining;
-  assert.equal(fetches, 0);
+}
+
+test('failed worker validation returns a generic response without a native fetch', async t => {
+  const directory = await fixture(t); const handler = createHandler(directory);
+  t.mock.method(normalPreviewValidation, 'resolve', async () => undefined);
+  const response = await handler(new Request(mediaUrl));
+  assert.equal(response.status, 404); assert.equal(await response.text(), 'Not found.');
+  await turn(); assert.equal(normalOperationScope.pendingCount, 0); assert.equal(fetches, 0);
 });
 
 test('late native fetch headers are refused and native cancellation is awaited before the drain', async t => {
