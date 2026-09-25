@@ -74,6 +74,7 @@ import {
   sourceWatchDecision,
 } from './node/path-authority-store';
 import { configuredMediaFileExtensions } from './node/main-filenames';
+import { prepareApplicationSupport } from './node/application-support';
 
 // Variables
 const pathToAppData = app.getPath('appData');
@@ -87,7 +88,12 @@ if (packagedSmokeTest) {
   fs.mkdirSync(smokeUserDataPath, { recursive: true });
   app.setPath('userData', smokeUserDataPath);
 }
-GLOBALS.settingsPath = pathToPortableApp ? pathToPortableApp : path.join(pathToAppData, 'theatrum-ex-machina');
+GLOBALS.settingsPath = prepareApplicationSupport(pathToAppData, pathToPortableApp);
+if (!pathToPortableApp) {
+  // Set both before Electron creates its ordinary browser session.
+  app.setPath('userData', GLOBALS.settingsPath);
+  app.setPath('sessionData', GLOBALS.settingsPath);
+}
 loadAuthorizedCataloguePaths(GLOBALS.settingsPath).forEach((cataloguePath: string) => {
   try {
     const canonicalCataloguePath = fs.realpathSync.native(cataloguePath);

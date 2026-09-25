@@ -39,6 +39,8 @@
     "node/thumbnail-regeneration-ipc.test.ts",
     "node/gallery-layout.test.ts",
     "node/settings-startup.test.ts",
+    "node/application-support.ts",
+    "node/application-support.test.ts",
     "node/source-folder-connections.test.ts",
     "node/tag-hierarchy.test.ts",
     "node/main-extract.ts",
