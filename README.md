@@ -46,6 +46,10 @@ Right-click a video for actions such as **Rename file**, **Open folder**, and **
 
 Open **Settings** to search preferences or browse categories for appearance, playback, previews, filters, tags, and keyboard shortcuts. Use the eye controls beside settings to choose which controls appear in the pinned toolbar. **Pinned** shows or hides that toolbar.
 
+On macOS, application settings and the ordinary browser profile are stored in `~/Library/Application Support/Theatrum Ex Machina`. Settings are shared across hubs. If this folder has no `settings.json`, the app recovers the newest valid settings file from the known older Theatrum Ex Machina and Video Hub App support folders. Existing settings in the new folder take priority, and the older folders are left intact. Catalogue files and video previews stay in their existing locations.
+
+During settings recovery, existing folder and player permissions from the previous `theatrum-ex-machina` support folder are preserved if no permission store exists in the new folder. Preferences from older Video Hub App versions do not grant file access; select your hub again if it does not reopen automatically. Windows portable builds continue to keep settings beside the portable app.
+
 ## Reconnect a video source
 
 Connect the external drive or network folder containing your videos. The app checks for returning source folders while the hub remains open; restarting is not required.
