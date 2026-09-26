@@ -1,5 +1,4 @@
 import { net, protocol } from 'electron';
-import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -7,6 +6,7 @@ import {
   THEATRUM_APP_PROTOCOL,
 } from '../interfaces/theatrum-protocol';
 import { GLOBALS } from './main-globals';
+import { normalPreviewValidation } from './normal-preview-validation';
 import {
   resolveTheatrumAppFile,
   resolveTheatrumAssetDirectory,
@@ -37,38 +37,6 @@ function authorizedMediaRequestHash(requestUrl: string): string | undefined {
       && GLOBALS.authorizedCatalogueImageHashes.has(hash)
       ? hash
       : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isInsideDirectory(rootDirectory: string, candidatePath: string): boolean {
-  const relativePath = path.relative(rootDirectory, candidatePath);
-  return relativePath !== ''
-    && relativePath !== '..'
-    && !relativePath.startsWith(`..${path.sep}`)
-    && !path.isAbsolute(relativePath);
-}
-
-/** Resolve links before fetching so generated asset symlinks cannot escape the active hub. */
-async function resolveCanonicalMediaFile(
-  filePath: string,
-  outputDirectory: string,
-  assetDirectory: string,
-): Promise<string | undefined> {
-  try {
-    const [canonicalOutputDirectory, canonicalAssetDirectory, canonicalFilePath] = await Promise.all([
-      fs.realpath(outputDirectory),
-      fs.realpath(assetDirectory),
-      fs.realpath(filePath),
-    ]);
-    if (
-      !isInsideDirectory(canonicalOutputDirectory, canonicalAssetDirectory)
-      || !isInsideDirectory(canonicalAssetDirectory, canonicalFilePath)
-    ) {
-      return undefined;
-    }
-    return (await fs.stat(canonicalFilePath)).isFile() ? canonicalFilePath : undefined;
   } catch {
     return undefined;
   }
@@ -121,10 +89,11 @@ export function registerTheatrumProtocols(
         ? resolveTheatrumMediaFile(request.url, assetDirectory)
         : undefined;
       const canonicalMediaFile = filePath && assetDirectory
-        ? await resolveCanonicalMediaFile(filePath, outputDirectory, assetDirectory)
+        ? await normalPreviewValidation.resolve(filePath, outputDirectory, assetDirectory, request.signal)
         : undefined;
       const requestStillAuthorized = Boolean(
         canonicalMediaFile
+        && !request.signal.aborted
         && GLOBALS.authorizedCatalogueImageHashes === authorizedHashes
         && GLOBALS.selectedOutputFolder === outputDirectory
         && GLOBALS.hubName === hubName

@@ -8,16 +8,18 @@
     ],
     "moduleResolution": "node",
     "sourceMap": true,
-    "target": "es5",
+    "target": "es2022",
     "typeRoots": [
       "node_modules/@types"
-    ]
+    ],
+    "module": "commonjs"
   },
   "exclude": [
     "node_modules"
   ],
   "include": [
     "main.ts",
-    "preload.ts"
+    "preload.ts",
+    "node/normal-preview-validation-worker.ts"
   ]
 }

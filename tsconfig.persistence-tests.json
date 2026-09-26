@@ -76,6 +76,12 @@
     "src/app/common/folder-thumbnail-regeneration-session.ts",
     "src/app/common/thumbnail-regeneration-ipc.ts",
     "src/app/common/virtual-scroll-layout.ts",
-    "src/app/components/catalogue-editor/catalogue-editor.logic.ts"
+    "src/app/components/catalogue-editor/catalogue-editor.logic.ts",
+    "node/theatrum-protocol.test.ts",
+    "node/normal-operation-scope.ts",
+    "node/normal-operation-scope.test.ts",
+    "node/normal-preview-validation.ts",
+    "node/normal-preview-validation-worker.ts",
+    "node/normal-preview-validation.test.ts"
   ]
 }
