@@ -1,5 +1,6 @@
 import type { ImageElement, StarRating } from './final-object.interface';
 import { normalizeDateAdded } from './date-added';
+import { normalizeLastPlayed } from './last-played';
 import { normalizeNewTagPath, tagIdentityKey } from './tag-hierarchy';
 
 export const CATALOGUE_METADATA_FORMAT = 'theatrum-ex-machina.catalogue-metadata';
@@ -12,6 +13,7 @@ export const catalogueMetadataCategories = [
   'year',
   'dateAdded',
   'timesPlayed',
+  'lastPlayed',
   'tags',
   'notes',
 ] as const;
@@ -21,6 +23,7 @@ export type PortableStarRating = 1 | 2 | 3 | 4 | 5 | null;
 
 export const catalogueMetadataCategoryLabels: Record<CatalogueMetadataCategory, string> = {
   dateAdded: 'Date Added',
+  lastPlayed: 'Last Played',
   notes: 'Notes',
   stars: 'Stars',
   tags: 'Tags',
@@ -35,6 +38,8 @@ export interface CatalogueMetadataEntry {
   year: number | null;
   dateAdded: string | null;
   timesPlayed: number;
+  // Older version 1 exports omit this field; omission must not become a reset.
+  lastPlayed?: string | null;
   tags: string[];
   notes: string | null;
 }
@@ -61,6 +66,7 @@ interface CatalogueMetadataImportEntry {
   year?: number | null;
   dateAdded?: number | null;
   timesPlayed?: number;
+  lastPlayed?: number | null;
   tags?: string[];
   notes?: string | null;
 }
@@ -70,6 +76,7 @@ export interface CatalogueMetadataUpdate {
   year?: number | null;
   dateAdded?: number | null;
   timesPlayed?: number;
+  lastPlayed?: number | null;
   tags?: string[];
   notes?: string | null;
 }
@@ -103,9 +110,9 @@ export interface CatalogueMetadataImportResult {
 const exportInstructions = [
   'Hash is the only import match key. Keep it unchanged; File Name is for reference only.',
   'Choose the metadata categories to import in the Catalogue JSON Editor.',
-  'Use null to clear Stars, Year, Date Added, or Notes, and use an empty array to clear Tags.',
+  'Use null to clear Stars, Year, Date Added, Last Played, or Notes, and use an empty array to clear Tags.',
   'If a selected category is omitted from an entry, its existing value remains unchanged.',
-  'Date Added uses an absolute ISO 8601 timestamp with a timezone.',
+  'Date Added and Last Played use absolute ISO 8601 timestamps with a timezone; null Last Played means never played.',
 ];
 
 const own = (value: object, key: PropertyKey): boolean => Object.prototype.hasOwnProperty.call(value, key);
@@ -179,6 +186,34 @@ function normalizeIsoDate(value: unknown, label: string): string | null {
   const timestamp = Date.parse(value);
   if (normalizeDateAdded(timestamp) === undefined) {
     throw new Error(`${label} is not a valid date and time.`);
+  }
+
+  return new Date(timestamp).toISOString();
+}
+
+function normalizeIsoLastPlayed(value: unknown, label: string): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  const match = typeof value === 'string'
+    ? /^(\d{4}|[+-]\d{6})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(value)
+    : null;
+  if (!match) {
+    throw new Error(`${label} must be null or an ISO 8601 date and time with a timezone.`);
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const timestamp = Date.parse(value as string);
+  if (
+    month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]
+    || normalizeLastPlayed(timestamp) === undefined
+  ) {
+    throw new Error(`${label} is not a valid date and time after 1 January 1970 00:00:00 UTC.`);
   }
 
   return new Date(timestamp).toISOString();
@@ -263,7 +298,7 @@ function normalizeExportEntry(value: unknown, index: number): CatalogueMetadataE
   const fileName = requireString(record.fileName, `Entry ${index + 1} File Name`, 4096, true);
   const hash = requireString(record.hash, `Entry ${index + 1} Hash`, 512).trim();
 
-  return {
+  const entry: CatalogueMetadataEntry = {
     fileName,
     hash,
     stars: normalizePortableStars(record.stars, `${fileName || `Entry ${index + 1}`} Stars`),
@@ -273,6 +308,12 @@ function normalizeExportEntry(value: unknown, index: number): CatalogueMetadataE
     tags: normalizeTags(record.tags, `${fileName || `Entry ${index + 1}`} Tags`),
     notes: normalizeNotes(record.notes, `${fileName || `Entry ${index + 1}`} Notes`),
   };
+
+  if (own(record, 'lastPlayed')) {
+    entry.lastPlayed = normalizeIsoLastPlayed(record.lastPlayed, `${fileName || `Entry ${index + 1}`} Last Played`);
+  }
+
+  return entry;
 }
 
 function validateDocumentHeader(value: unknown): Record<string, unknown> {
@@ -353,10 +394,12 @@ export function createCatalogueMetadataExport(
     }
 
     const dateAdded = normalizeDateAdded(item.dateAdded);
+    const lastPlayed = normalizeLastPlayed(item.lastPlayed);
     entries.push({
       dateAdded: dateAdded === undefined ? null : new Date(dateAdded).toISOString(),
       fileName: typeof item.fileName === 'string' ? item.fileName : '',
       hash,
+      lastPlayed: lastPlayed === undefined ? null : new Date(lastPlayed).toISOString(),
       notes: typeof item.notes === 'string' && item.notes ? item.notes : null,
       stars: portableStarsFromImage(item.stars),
       tags: tagsFromImage(item.tags),
@@ -429,6 +472,9 @@ function parseImportEntry(
       entry.dateAdded = dateAdded === null ? null : Date.parse(dateAdded);
     } else if (category === 'timesPlayed') {
       entry.timesPlayed = requireNonNegativeInteger(record.timesPlayed, `${fileName} Times Played`);
+    } else if (category === 'lastPlayed') {
+      const lastPlayed = normalizeIsoLastPlayed(record.lastPlayed, `${fileName} Last Played`);
+      entry.lastPlayed = lastPlayed === null ? null : Date.parse(lastPlayed);
     } else if (category === 'tags') {
       entry.tags = normalizeTags(record.tags, `${fileName} Tags`, true, catalogueTagSpellings);
     } else if (category === 'notes') {
@@ -514,6 +560,10 @@ function buildUpdates(
     let changed = false;
     if (category === 'tags') {
       changed = !arraysMatch(item.tags, incoming as string[]);
+    } else if (category === 'lastPlayed') {
+      changed = incoming === null
+        ? item.lastPlayed !== undefined && item.lastPlayed !== 0
+        : item.lastPlayed !== incoming;
     } else if (category === 'year' || category === 'dateAdded' || category === 'notes') {
       changed = !optionalValueMatches(item[category], incoming);
     } else {
@@ -647,6 +697,9 @@ export function applyCatalogueMetadataImportPlan(
     }
     if (own(updates, 'timesPlayed')) {
       item.timesPlayed = updates.timesPlayed as number;
+    }
+    if (own(updates, 'lastPlayed')) {
+      item.lastPlayed = updates.lastPlayed === null ? 0 : updates.lastPlayed as number;
     }
     if (own(updates, 'tags')) {
       const tags = updates.tags as string[];

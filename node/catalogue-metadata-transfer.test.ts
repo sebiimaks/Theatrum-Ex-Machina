@@ -44,6 +44,7 @@ test('exports only the requested human-readable metadata with safe representatio
     dateAdded,
     fileName: 'Quoted, “Unicode”.mp4',
     hash: 'unique-hash',
+    lastPlayed: Date.parse('2026-08-03T12:34:56.789Z'),
     notes: 'Line one\nLine two, with "quotes" and 日本語',
     stars: 5.5,
     tags: ['Tag One', '日本語'],
@@ -61,6 +62,7 @@ test('exports only the requested human-readable metadata with safe representatio
     dateAdded: '2026-07-30T04:45:00.000Z',
     fileName: 'Quoted, “Unicode”.mp4',
     hash: 'unique-hash',
+    lastPlayed: '2026-08-03T12:34:56.789Z',
     notes: 'Line one\nLine two, with "quotes" and 日本語',
     stars: 5,
     tags: ['Tag One', '日本語'],
@@ -93,12 +95,14 @@ test('imports only selected categories by exact hash and includes unavailable en
     dateAdded: 1000,
     fileName: 'renamed-locally.mp4',
     hash: 'same-hash',
+    lastPlayed: 2000,
     missing: true,
   });
   const json = metadataJson([{
     dateAdded: '2026-07-30T04:45:00.000Z',
     fileName: 'old-name.mp4',
     hash: 'same-hash',
+    lastPlayed: '2026-08-03T12:34:56.789Z',
     notes: 'Imported notes\nwith a second line',
     stars: 5,
     tags: ['New Tag', 'new tag', 'Second'],
@@ -119,6 +123,7 @@ test('imports only selected categories by exact hash and includes unavailable en
   assert.equal(target.year, 2020);
   assert.equal(target.dateAdded, 1000);
   assert.equal(target.timesPlayed, 2);
+  assert.equal(target.lastPlayed, 2000);
   assert.equal(target.fileName, 'renamed-locally.mp4');
   assert.equal(target.hash, 'same-hash');
 });
@@ -257,11 +262,12 @@ test('a filtered scope never makes a globally duplicated hash safe to import', (
 });
 
 test('all-category import maps stars and dates and clears explicit empty metadata', () => {
-  const target = image({ dateAdded: 1000 });
+  const target = image({ dateAdded: 1000, lastPlayed: 2000 });
   const json = metadataJson([{
     dateAdded: null,
     fileName: 'reference-only.mp4',
     hash: 'example-hash',
+    lastPlayed: null,
     notes: null,
     stars: null,
     tags: [],
@@ -272,21 +278,22 @@ test('all-category import maps stars and dates and clears explicit empty metadat
   const plan = buildCatalogueMetadataImportPlan(
     [target],
     json,
-    ['stars', 'year', 'dateAdded', 'timesPlayed', 'tags', 'notes'],
+    ['stars', 'year', 'dateAdded', 'timesPlayed', 'lastPlayed', 'tags', 'notes'],
   );
   const result = applyCatalogueMetadataImportPlan(plan);
 
-  assert.equal(result.updatedFieldCount, 6);
+  assert.equal(result.updatedFieldCount, 7);
   assert.equal(target.stars, 0.5);
   assert.equal(target.year, undefined);
   assert.equal(target.dateAdded, undefined);
   assert.equal(target.timesPlayed, 0);
+  assert.equal(target.lastPlayed, 0);
   assert.equal(target.tags, undefined);
   assert.equal(target.notes, undefined);
   assert.equal(buildCatalogueMetadataImportPlan(
     [target],
     json,
-    ['stars', 'year', 'dateAdded', 'timesPlayed', 'tags', 'notes'],
+    ['stars', 'year', 'dateAdded', 'timesPlayed', 'lastPlayed', 'tags', 'notes'],
   ).changedEntryCount, 0);
 });
 
@@ -390,4 +397,109 @@ test('a matching filename never substitutes for a matching hash', () => {
   assert.equal(plan.unmatchedRecordCount, 1);
   assert.equal(plan.changedEntryCount, 0);
   assert.equal(target.notes, 'Original notes');
+});
+
+test('Last Played round-trips as an absolute timestamp without changing other metadata', () => {
+  const timestamp = Date.parse('2026-08-04T05:30:15.123Z');
+  const original = image({ lastPlayed: timestamp, timesPlayed: 7 });
+  const json = serializeCatalogueMetadataExport(createCatalogueMetadataExport([original]).document);
+  const target = image({ lastPlayed: 0, timesPlayed: 2 });
+  const plan = buildCatalogueMetadataImportPlan([target], json, ['lastPlayed']);
+
+  assert.equal(JSON.parse(json).entries[0].lastPlayed, '2026-08-04T05:30:15.123Z');
+  assert.equal(plan.changedFieldCount, 1);
+  assert.equal(target.lastPlayed, 0);
+  applyCatalogueMetadataImportPlan(plan);
+  assert.equal(target.lastPlayed, timestamp);
+  assert.equal(target.timesPlayed, 2);
+  assert.equal(target.notes, 'Original notes');
+
+  const sameInstant = metadataJson([{
+    hash: target.hash,
+    lastPlayed: '2026-08-04T15:30:15.123+10:00',
+  }]);
+  assert.equal(buildCatalogueMetadataImportPlan([target], sameInstant, ['lastPlayed']).changedFieldCount, 0);
+});
+
+test('Last Played exports never-played and malformed internal timestamps as null', () => {
+  const invalidValues = [undefined, null, 0, -1, 1.5, NaN, Infinity, 8640000000000001, '2026-08-04T00:00:00Z'];
+  invalidValues.forEach(value => {
+    const target = image({ lastPlayed: value as number });
+    const document = createCatalogueMetadataExport([target]).document;
+    assert.equal(document.entries[0].lastPlayed, null);
+    assert.equal(JSON.parse(serializeCatalogueMetadataExport(document)).entries[0].lastPlayed, null);
+  });
+});
+
+test('legacy version 1 documents preserve an omitted Last Played value through serialization and import', () => {
+  const target = image({ lastPlayed: 1234 });
+  const document = createCatalogueMetadataExport([target]).document;
+  delete document.entries[0].lastPlayed;
+  document.entries[0].notes = 'Updated notes';
+
+  const json = serializeCatalogueMetadataExport(document);
+  assert.equal(Object.prototype.hasOwnProperty.call(JSON.parse(json).entries[0], 'lastPlayed'), false);
+  const plan = buildCatalogueMetadataImportPlan([target], json, ['lastPlayed', 'notes']);
+  assert.equal(plan.changedFieldCount, 1);
+  applyCatalogueMetadataImportPlan(plan);
+  assert.equal(target.lastPlayed, 1234);
+  assert.equal(target.notes, 'Updated notes');
+});
+
+test('null Last Played clears its timestamp independently and is a no-op for never-played entries', () => {
+  const json = metadataJson([{ hash: 'example-hash', lastPlayed: null }]);
+  const target = image({ lastPlayed: 1234, timesPlayed: 7 });
+  const plan = buildCatalogueMetadataImportPlan([target], json, ['lastPlayed']);
+
+  assert.equal(plan.changedFieldCount, 1);
+  assert.deepEqual(plan.changes[0].updates, { lastPlayed: null });
+  applyCatalogueMetadataImportPlan(plan);
+  assert.equal(target.lastPlayed, 0);
+  assert.equal(target.timesPlayed, 7);
+  assert.equal(buildCatalogueMetadataImportPlan([target], json, ['lastPlayed']).changedEntryCount, 0);
+  delete (target as Partial<ImageElement>).lastPlayed;
+  assert.equal(buildCatalogueMetadataImportPlan([target], json, ['lastPlayed']).changedEntryCount, 0);
+  assert.equal(Object.prototype.hasOwnProperty.call(target, 'lastPlayed'), false);
+});
+
+test('invalid selected Last Played timestamps reject the entire import before applying changes', () => {
+  const invalidValues = [
+    0, 1234, false, {}, [], '', 'yesterday',
+    'August 4, 2026 00:00:00 GMTZ',
+    '2026-08-04', '2026-08-04T00:00:00',
+    '1970-01-01T00:00:00Z', '1969-12-31T23:59:59.999Z',
+    '2026-02-29T00:00:00Z', '2026-04-31T00:00:00Z',
+    '2026-13-01T00:00:00Z', '2026-08-04T24:00:00Z',
+    '2026-08-04T00:00:00+24:00', '+275760-09-13T00:00:00.001Z',
+  ];
+
+  invalidValues.forEach(lastPlayed => {
+    const first = image({ hash: 'first-hash', lastPlayed: 1234 });
+    const second = image({ hash: 'second-hash', lastPlayed: 5678 });
+    const json = metadataJson([
+      { hash: first.hash, lastPlayed: '2026-08-04T00:00:00Z', notes: 'First changed' },
+      { hash: second.hash, lastPlayed, notes: 'Second changed' },
+    ]);
+    assert.throws(
+      () => buildCatalogueMetadataImportPlan([first, second], json, ['lastPlayed', 'notes']),
+      /Last Played/,
+      `Accepted invalid timestamp ${JSON.stringify(lastPlayed)}`,
+    );
+    assert.equal(first.lastPlayed, 1234);
+    assert.equal(second.lastPlayed, 5678);
+    assert.equal(first.notes, 'Original notes');
+    assert.equal(second.notes, 'Original notes');
+  });
+});
+
+test('invalid unselected Last Played data is ignored and invalid export values are rejected', () => {
+  const target = image({ lastPlayed: 1234 });
+  const json = metadataJson([{ hash: target.hash, lastPlayed: 0, notes: 'Changed notes' }]);
+  applyCatalogueMetadataImportPlan(buildCatalogueMetadataImportPlan([target], json, ['notes']));
+  assert.equal(target.lastPlayed, 1234);
+  assert.equal(target.notes, 'Changed notes');
+
+  const document = createCatalogueMetadataExport([target]).document;
+  document.entries[0].lastPlayed = '2026-02-29T00:00:00Z';
+  assert.throws(() => serializeCatalogueMetadataExport(document), /Last Played/);
 });

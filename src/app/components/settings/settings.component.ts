@@ -106,7 +106,7 @@ export class SettingsComponent implements OnInit, OnChanges {
     if (key === 'playPlaylist') { return 'WORKBENCH.play'; }
     if (key === 'shuffleGalleryNow') { return 'WORKBENCH.shuffle'; }
     if (key === 'clearHistory' || key === 'clearAllFilters') { return 'WORKBENCH.clear'; }
-    if (key === 'resetSettings' || key === 'resetTimesPlayed') { return 'WORKBENCH.reset'; }
+    if (key === 'resetSettings' || key === 'resetTimesPlayed' || key === 'resetLastPlayed') { return 'WORKBENCH.reset'; }
     return 'WORKBENCH.runAction';
   }
 

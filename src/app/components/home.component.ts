@@ -2909,6 +2909,22 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     this.modalService.openSnackbar(this.translate.instant('SETTINGS.timesPlayedReset'));
   }
 
+  /** Reset playback dates for the current hub and refresh playback-based views. */
+  resetLastPlayed(): void {
+    if (this.catalogueEditorSaving || this.blockActionDuringFolderThumbnailRegeneration()) {
+      return;
+    }
+    if (this.catalogueReadOnly) {
+      this.showReadOnlyActionBlocked();
+      return;
+    }
+
+    if (this.imageElementService.resetLastPlayed()) {
+      this.playbackRevision++;
+    }
+    this.modalService.openSnackbar(this.translate.instant('SETTINGS.lastPlayedReset'));
+  }
+
   /**
    * Show or hide settings
    */
@@ -3162,6 +3178,8 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       this.resetSettingsToDefault();
     } else if (uniqueKey === 'resetTimesPlayed') {
       this.resetTimesPlayed();
+    } else if (uniqueKey === 'resetLastPlayed') {
+      this.resetLastPlayed();
     } else if (uniqueKey === 'showTags') {
       if (this.settingsModalOpen) {
         this.settingsModalOpen = false;
@@ -3510,6 +3528,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.catalogueReadOnly) {
       return;
     }
+    this.playbackRevision++;
     this.reconcileVideoSelection();
     const activeImages = this.imageElementService.imageElements.filter((element: ImageElement) => (
       !element.deleted && !element.missing

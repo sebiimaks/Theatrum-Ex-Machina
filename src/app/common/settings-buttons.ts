@@ -41,6 +41,7 @@ export type SettingsButtonKey = 'autoFileTags'
  | 'regex'
  | 'resetSettings'
  | 'resetTimesPlayed'
+ | 'resetLastPlayed'
  | 'resolutionFilter'
  | 'returnToFirstScreenshot'
  | 'showClips'
@@ -216,6 +217,7 @@ export const SettingsButtonsGroups: SettingsButtonKey[][] = [
     'startWizard',
     'resetSettings', // Various settings
     'resetTimesPlayed',
+    'resetLastPlayed',
     'clearHistory',
     'showDeleteOption',
     'dangerousDelete',
@@ -674,6 +676,13 @@ export const SettingsButtons: SettingsButtonsType = {
     description: 'BUTTONS.resetTimesPlayedDescription',
     hidden: false,
     title: 'BUTTONS.resetTimesPlayedHint',
+    toggled: false
+  },
+  'resetLastPlayed': {
+    description: 'BUTTONS.resetLastPlayedDescription',
+    hidden: false,
+    moreInfo: 'BUTTONS.resetLastPlayedMoreInfo',
+    title: 'BUTTONS.resetLastPlayedHint',
     toggled: false
   },
   'resolutionFilter': {

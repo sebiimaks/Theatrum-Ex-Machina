@@ -6,6 +6,12 @@ import {
   normalizeDateAdded,
   parseDateAddedInput,
 } from '../../../../interfaces/date-added';
+import {
+  formatLastPlayedForDisplay,
+  formatLastPlayedForInput,
+  normalizeLastPlayed,
+  parseLastPlayedInput,
+} from '../../../../interfaces/last-played';
 
 export type CatalogueSearchField =
   | 'all'
@@ -17,6 +23,7 @@ export type CatalogueSearchField =
   | 'year'
   | 'dateAdded'
   | 'timesPlayed'
+  | 'lastPlayed'
   | 'defaultScreen'
   | 'notes'
   | 'entryNumber'
@@ -29,7 +36,7 @@ export type CatalogueSearchField =
   | 'hash';
 export type CatalogueSearchOperator = 'contains' | 'doesNotContain';
 export type CatalogueAvailabilityFilter = 'all' | 'available' | 'missing';
-export type CatalogueOverwriteField = 'cleanName' | 'dateAdded' | 'stars' | 'year' | 'timesPlayed' | 'defaultScreen' | 'notes';
+export type CatalogueOverwriteField = 'cleanName' | 'dateAdded' | 'stars' | 'year' | 'timesPlayed' | 'lastPlayed' | 'defaultScreen' | 'notes';
 export type CatalogueOverwriteValue = number | string | undefined;
 
 export interface CatalogueSearchCriterion {
@@ -59,6 +66,7 @@ export const catalogueOverwriteFieldLabels: Record<CatalogueOverwriteField, stri
   cleanName: 'Clean Name',
   dateAdded: 'Date Added',
   defaultScreen: 'Default Screen',
+  lastPlayed: 'Last Played',
   notes: 'Notes',
   stars: 'Stars',
   timesPlayed: 'Times Played',
@@ -101,6 +109,12 @@ export function applyCatalogueOverwrite(
       changed = true;
     } else if (field === 'dateAdded') {
       changed = setOptionalNumber(item, 'dateAdded', value);
+    } else if (field === 'lastPlayed') {
+      const timestamp = value === undefined || value === 0 ? 0 : normalizeLastPlayed(value);
+      if (timestamp !== undefined && item.lastPlayed !== timestamp) {
+        item.lastPlayed = timestamp;
+        changed = true;
+      }
     } else if (field === 'stars' && typeof value === 'number' && item.stars !== value) {
       item.stars = value as StarRating;
       changed = true;
@@ -202,6 +216,19 @@ export function validateCatalogueOverwrite(
     }
 
     return validOverwrite(parsedDate, formatDateAddedForDisplay(parsedDate));
+  }
+
+  if (field === 'lastPlayed') {
+    const parsedDate = parseLastPlayedInput(draft);
+
+    if (parsedDate === undefined) {
+      return { action: 'clear', displayValue: 'Never played', valid: true, value: 0 };
+    }
+    if (parsedDate === null) {
+      return invalidOverwrite('Enter a valid local date and time from 1970 onwards, or leave blank for Never played.');
+    }
+
+    return validOverwrite(parsedDate, formatLastPlayedForDisplay(parsedDate));
   }
 
   if (field === 'stars') {
@@ -314,6 +341,13 @@ function formatStarsSearchAliases(value: unknown): string[] {
   return [String(displayedStars), `${displayedStars} ${displayedStars === 1 ? 'star' : 'stars'}`];
 }
 
+function formatLastPlayedSearchAliases(value: unknown): string[] {
+  const timestamp = normalizeLastPlayed(value);
+  return timestamp === undefined
+    ? ['never played', 'not set']
+    : [formatLastPlayedForInput(timestamp).replace('T', ' '), formatLastPlayedForDisplay(timestamp)];
+}
+
 function formatStatusSearchAliases(item: ImageElement): string[] {
   const statuses: string[] = [];
   if (item.deleted) {
@@ -344,6 +378,7 @@ function getCatalogueSearchAliases(item: ImageElement, field: CatalogueSearchFie
     fileSize: formatFileSizeSearchAliases(item.fileSize),
     fps: [String(item.fps || 0), `${item.fps || 0} fps`],
     hash: item.hash ? [String(item.hash)] : ['no hash available'],
+    lastPlayed: formatLastPlayedSearchAliases(item.lastPlayed),
     name: [String(item.cleanName || '')],
     notes: [String(item.notes || '')],
     path: item.partialPath ? [String(item.partialPath)] : ['root'],

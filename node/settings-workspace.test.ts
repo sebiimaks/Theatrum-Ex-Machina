@@ -8,6 +8,7 @@ import { SettingsButtons } from '../src/app/common/settings-buttons';
 import {
   getSettingsWorkspaceSections,
   SettingsActionKeys,
+  SettingsDestructiveKeys,
   SettingsViewKeys,
   SettingsWorkspaceCategories,
 } from '../src/app/common/settings-workspace';
@@ -40,9 +41,9 @@ test('every supported language covers the Workbench and preserves interpolation 
   }
 });
 
-test('organizes all 94 persisted settings exactly once across the settings workspace', () => {
+test('organizes all 95 persisted settings exactly once across the settings workspace', () => {
   const keys = SettingsWorkspaceCategories.flatMap((category) => category.sections.flatMap((section) => section.buttonKeys));
-  assert.equal(keys.length, 94);
+  assert.equal(keys.length, 95);
   assert.equal(new Set(keys).size, keys.length);
   assert.deepEqual([...keys].sort(), Object.keys(SettingsButtons).sort());
   assert.equal(new Set(SettingsWorkspaceCategories.map((category) => category.id)).size, 11);
@@ -109,9 +110,20 @@ test('search never passes absent setting titles to the translation service', () 
 });
 
 test('imperative actions and gallery choices are represented separately from boolean switches', () => {
-  for (const action of ['clearHistory', 'resetSettings', 'resetTimesPlayed', 'makeSmaller', 'makeLarger', 'playPlaylist', 'shuffleGalleryNow', 'startWizard', 'clearAllFilters']) {
+  for (const action of ['clearHistory', 'resetSettings', 'resetTimesPlayed', 'resetLastPlayed', 'makeSmaller', 'makeLarger', 'playPlaylist', 'shuffleGalleryNow', 'startWizard', 'clearAllFilters']) {
     assert.ok(SettingsActionKeys.includes(action as typeof SettingsActionKeys[number]));
   }
   assert.equal(SettingsViewKeys.length, 7);
   assert.ok(SettingsViewKeys.every((key) => !SettingsActionKeys.includes(key)));
+});
+
+test('offers Last Played reset directly below Times Played reset in Maintenance', () => {
+  const maintenance = search('', 'maintenance').find((section) => section.id === 'maintenance');
+  assert.ok(maintenance);
+  assert.equal(maintenance.buttonKeys.indexOf('resetLastPlayed'), maintenance.buttonKeys.indexOf('resetTimesPlayed') + 1);
+  assert.ok(SettingsDestructiveKeys.includes('resetLastPlayed'));
+  assert.deepEqual(search('reset last played').flatMap((section) => section.buttonKeys), ['resetLastPlayed']);
+  assert.equal(translate(SettingsButtons.resetLastPlayed.title), 'Reset Last Played');
+  assert.match(translate(SettingsButtons.resetLastPlayed.description), /current hub/);
+  assert.match(translate(SettingsButtons.resetLastPlayed.moreInfo), /without changing times played/);
 });
