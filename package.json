@@ -103,7 +103,7 @@
     "test:thumbnail-batch": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/sequential-batch.test.ts",
     "test:thumbnail-count": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/thumbnail-count.test.ts",
     "test:thumbnail-transaction": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/thumbnail-transaction.test.ts",
-    "test:theatrum-protocol": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/theatrum-protocol-paths.test.ts",
+    "test:theatrum-protocol": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/theatrum-protocol-paths.test.ts && ts-node --preferTsExts --project tsconfig.persistence-tests.json node/theatrum-protocol.test.ts",
     "test:virtual-scroll-layout": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/virtual-scroll-layout.test.ts",
     "test:vha2-compatibility": "ts-node --preferTsExts --project tsconfig.persistence-tests.json node/vha2-compatibility.test.ts",
     "verify:mac:release": "node ./bin/verify-packaged-app.mjs './release/mac-arm64/Theatrum Ex Machina.app'",

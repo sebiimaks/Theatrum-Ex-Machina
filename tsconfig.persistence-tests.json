@@ -187,6 +187,7 @@
     "node/private-touch-id.ts",
     "node/private-touch-id.test.ts",
     "node/private-hub-touch-id.test.ts",
-    "node/private-hub-touch-id-session.test.ts"
+    "node/private-hub-touch-id-session.test.ts",
+    "node/theatrum-protocol.test.ts"
   ]
 }
