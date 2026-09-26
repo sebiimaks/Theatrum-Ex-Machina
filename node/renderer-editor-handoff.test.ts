@@ -143,7 +143,7 @@ test('destroying an editor unregisters its pending invalid drafts', () => {
 });
 
 test('paused live editor rejects document and draft mutations without changing its revision', () => {
-  const h = harness();
+  const h = harness([image(0, { lastPlayed: 1_700_000_000_000 })]);
   const before = JSON.stringify(h.images);
   const thaw = h.mutations.freeze();
   const revision = h.mutations.revision;
@@ -154,6 +154,7 @@ test('paused live editor rejects document and draft mutations without changing i
   h.editor.updateStar(h.images[0], 5.5);
   h.editor.updateDefaultScreen(h.images[0], 1);
   h.editor.updateDateAdded(h.images[0], '2026-09-22T12:00');
+  h.editor.updateLastPlayed(h.images[0], '');
   h.editor.updateYear(h.images[0], 2026);
   h.editor.updateTagDraft(h.images[0], 'Unexpected');
   h.editor.deleteEntry(h.images[0]);
@@ -167,6 +168,9 @@ test('paused live editor rejects document and draft mutations without changing i
   thaw();
   h.editor.updateNotes(h.images[0], 'Resumed notes');
   assert.equal(h.images[0].notes, 'Resumed notes');
+  h.editor.updateLastPlayed(h.images[0], '');
+  assert.equal(h.images[0].lastPlayed, 0);
+  assert.equal(h.mutations.revision, revision + 2);
 });
 
 for (const timing of ['frozen', 'resumed', 'destroyed'] as const) {

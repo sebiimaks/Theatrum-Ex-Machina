@@ -118,6 +118,26 @@ export class ImageElementService {
     }
   }
 
+  /** Clear playback dates throughout the current hub without changing play counts. */
+  resetLastPlayed(): boolean {
+    this.mutations.assertAccepting();
+    let changed = false;
+
+    this.imageElements.forEach((element: ImageElement) => {
+      if (element.lastPlayed !== 0) {
+        element.lastPlayed = 0;
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      this.imageElements = this.imageElements.slice();
+      this.finalArrayNeedsSaving = true;
+    }
+
+    return changed;
+  }
+
   /**
    * Remove a manual tag from every video in the current catalogue.
    * Returns the number of videos that were changed.

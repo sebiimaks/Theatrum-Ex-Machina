@@ -3,6 +3,7 @@ import { Component, ElementRef, EventEmitter, Input, Output, QueryList, ViewChil
 
 import type { ImageElement, StarRating } from '../../../../interfaces/final-object.interface';
 import { formatDateAddedForInput, parseDateAddedInput } from '../../../../interfaces/date-added';
+import { formatLastPlayedForDisplay, formatLastPlayedForInput, parseLastPlayedInput } from '../../../../interfaces/last-played';
 import { tagIdentityKey } from '../../../../interfaces/tag-hierarchy';
 import {
   normalizeImageLocation,
@@ -108,6 +109,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   metadataImportPlan: CatalogueMetadataImportPlan | undefined;
   metadataImportSelection: Record<CatalogueMetadataCategory, boolean> = {
     dateAdded: true,
+    lastPlayed: true,
     notes: true,
     stars: true,
     tags: true,
@@ -129,6 +131,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     { label: 'Stars', value: 'stars' },
     { label: 'Year', value: 'year' },
     { label: 'Times Played', value: 'timesPlayed' },
+    { label: 'Last Played', value: 'lastPlayed' },
     { label: 'Default Screen', value: 'defaultScreen' },
     { label: 'Notes', value: 'notes' },
   ];
@@ -151,6 +154,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   private tagValidationErrors: { [index: number]: string } = {};
   private tagTypeaheads: { [index: number]: string } = {};
   private dateAddedErrors = new WeakMap<ImageElement, string>();
+  private lastPlayedErrors = new WeakMap<ImageElement, string>();
   private locationFieldErrors = new WeakMap<
     ImageElement,
     Partial<Record<CatalogueLocationField, string>>
@@ -234,7 +238,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   get batchOverwritePlaceholder(): string {
-    if (this.batchOverwriteField === 'dateAdded') {
+    if (this.batchOverwriteUsesDateInput) {
       return 'New local date and time, or leave blank to clear';
     }
 
@@ -256,7 +260,11 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   get batchOverwriteUsesDateInput(): boolean {
-    return this.batchOverwriteField === 'dateAdded';
+    return this.batchOverwriteField === 'dateAdded' || this.batchOverwriteField === 'lastPlayed';
+  }
+
+  get batchOverwriteDateLabel(): string {
+    return this.batchOverwriteField === 'lastPlayed' ? 'Last Played' : 'Date Added';
   }
 
   get deletedCount(): number {
@@ -812,7 +820,7 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
   }
 
   requestBatchOverwrite(): void {
-    if (!this.canMutate) {
+    if (!this.canMutate || this.isSaving || this.metadataTransferBusy || this.metadataImportPreviewActive) {
       return;
     }
     const mutation = this.rendererMutations.capture();
@@ -870,7 +878,8 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
         toLabel: clearingField ? 'Action' : 'New value',
       },
     }).subscribe((confirmed: boolean) => {
-      if (!confirmed || this.destroyed || !this.rendererMutations.isCurrent(mutation)) {
+      if (!confirmed || this.destroyed || !this.rendererMutations.isCurrent(mutation)
+          || this.isSaving || this.metadataTransferBusy || this.metadataImportPreviewActive) {
         return;
       }
 
@@ -1133,6 +1142,51 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     } else if (item.notes !== undefined) {
       delete item.notes;
       this.markDirty();
+    }
+  }
+
+  lastPlayedInputValue(item: ImageElement): string {
+    return formatLastPlayedForInput(item.lastPlayed);
+  }
+
+  lastPlayedDisplayValue(item: ImageElement): string {
+    return formatLastPlayedForDisplay(item.lastPlayed);
+  }
+
+  lastPlayedErrorFor(item: ImageElement): string {
+    return this.lastPlayedErrors.get(item) || '';
+  }
+
+  updateLastPlayed(item: ImageElement, value: string, input?: HTMLInputElement): void {
+    if (
+      !this.canMutate || this.isSaving || this.metadataTransferBusy || this.metadataImportPreviewActive
+      || !this.images.includes(item)
+    ) {
+      return;
+    }
+
+    // A datetime-local control displays minutes; unchanged input must retain
+    // the original playback timestamp's seconds and milliseconds.
+    if (value && value === formatLastPlayedForInput(item.lastPlayed)) {
+      this.lastPlayedErrors.delete(item);
+      return;
+    }
+
+    const parsed = input?.validity.badInput ? null : parseLastPlayedInput(value);
+    if (parsed === null) {
+      this.lastPlayedErrors.set(item, 'Enter a valid local date and time, or leave blank for Never played.');
+      if (input) {
+        input.value = formatLastPlayedForInput(item.lastPlayed);
+      }
+      return;
+    }
+
+    this.lastPlayedErrors.delete(item);
+    const timestamp = parsed ?? 0;
+    if (item.lastPlayed !== timestamp) {
+      item.lastPlayed = timestamp;
+      this.markDirty();
+      this.refreshFilteredEntries();
     }
   }
 
@@ -1493,7 +1547,9 @@ export class CatalogueEditorComponent implements OnChanges, OnDestroy {
     const incoming = (updates as Record<string, unknown>)[category];
     let fullValue: string;
 
-    if (incoming === null) {
+    if (category === 'lastPlayed') {
+      fullValue = formatLastPlayedForDisplay(incoming);
+    } else if (incoming === null) {
       fullValue = category === 'tags' ? 'Clear all tags' : 'Clear current value';
     } else if (category === 'stars') {
       fullValue = Number(incoming) === 0.5 ? 'N/A' : String(Number(incoming) - 0.5);

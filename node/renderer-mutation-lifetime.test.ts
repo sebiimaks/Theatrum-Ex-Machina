@@ -181,6 +181,7 @@ test('central video mutations are refused before any data changes while frozen',
   image.playlist = 123;
   image.stars = 2.5;
   image.timesPlayed = 4;
+  image.lastPlayed = 1_700_000_000_000;
   images.imageElements = [image];
   const initial = JSON.stringify(images.imageElements);
   const release = lifetime.freeze();
@@ -189,6 +190,7 @@ test('central video mutations are refused before any data changes while frozen',
     () => images.replaceFileNameInFinalArray('changed.mp4', 'original.mp4', 0),
     () => images.updateNumberOfTimesPlayed(0),
     () => images.resetTimesPlayed(),
+    () => images.resetLastPlayed(),
     () => images.removeTagFromAll('Animals/Birds'),
     () => images.removeTagsFromAll(['Animals/Birds']),
     () => images.applyTagBranchRemovalPlan({ entries: [] } as any),
@@ -207,6 +209,10 @@ test('central video mutations are refused before any data changes while frozen',
   images.HandleEmission({ index: 0, stars: 3.5 });
   assert.equal(image.stars, 3.5);
   assert.equal(lifetime.revision, 1);
+  assert.equal(images.resetLastPlayed(), true);
+  assert.equal(image.lastPlayed, 0);
+  assert.equal(image.timesPlayed, 4);
+  assert.equal(lifetime.revision, 2);
 });
 
 test('automatic tag edits and restore advance revision; save acknowledgement only clears dirtiness', () => {

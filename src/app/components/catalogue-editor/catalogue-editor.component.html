@@ -99,6 +99,7 @@
               <option value="year">Year</option>
               <option value="dateAdded">Date Added</option>
               <option value="timesPlayed">Times Played</option>
+              <option value="lastPlayed">Last Played</option>
               <option value="defaultScreen">Default Screen</option>
               <option value="notes">Notes</option>
             </optgroup>
@@ -376,16 +377,16 @@
             [ngModel]="batchOverwriteDraft"
             (ngModelChange)="updateBatchOverwriteDraft($event)"
             (keydown.enter)="requestBatchOverwrite()"
-            aria-describedby="catalogue-date-added-overwrite-hint"
-            aria-label="New Date Added value in local time"
+            aria-describedby="catalogue-date-overwrite-hint"
+            [attr.aria-label]="'New ' + batchOverwriteDateLabel + ' value in local time'"
             class="catalogue-overwrite-value"
             step="60"
             type="datetime-local"
           >
           <span
             class="catalogue-overwrite-hint"
-            id="catalogue-date-added-overwrite-hint"
-          >Local time; leave blank to clear.</span>
+            id="catalogue-date-overwrite-hint"
+          >{{ batchOverwriteField === 'lastPlayed' ? 'Local time; leave blank for Never played.' : 'Local time; leave blank to clear.' }}</span>
         </div>
       </ng-template>
 
@@ -593,6 +594,29 @@
             min="0"
             type="number"
           >
+        </label>
+
+        <label
+          class="last-played-field"
+          [class.catalogue-field-pending-change]="metadataFieldWillChange(item, 'lastPlayed')"
+        >
+          <span>Last Played</span>
+          <input
+            #lastPlayedInput
+            [ngModel]="lastPlayedInputValue(item)"
+            (ngModelChange)="updateLastPlayed(item, $event, lastPlayedInput)"
+            [disabled]="metadataImportPreviewActive || isSaving || metadataTransferBusy"
+            [attr.aria-invalid]="lastPlayedErrorFor(item) ? 'true' : null"
+            [attr.aria-describedby]="'last-played-hint-' + item.index"
+            step="60"
+            type="datetime-local"
+          >
+          <span [id]="'last-played-hint-' + item.index">{{ lastPlayedDisplayValue(item) }} · Clear to reset.</span>
+          <span
+            *ngIf="lastPlayedErrorFor(item)"
+            aria-live="polite"
+            class="catalogue-field-error"
+          >{{ lastPlayedErrorFor(item) }}</span>
         </label>
 
         <label>

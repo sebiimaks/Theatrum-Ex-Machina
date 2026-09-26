@@ -2,10 +2,13 @@ import { strict as assert } from 'assert';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { test } from 'node:test';
+import { runInNewContext } from 'node:vm';
+import * as ts from 'typescript';
 
 import type { ImageElement } from '../interfaces/final-object.interface';
 import { NewImageElement } from '../interfaces/final-object.interface';
 import { parseDateAddedInput } from '../interfaces/date-added';
+import { formatLastPlayedForInput, parseLastPlayedInput } from '../interfaces/last-played';
 import {
   applyCatalogueOverwrite,
   filterCatalogueEntries,
@@ -43,6 +46,7 @@ test('search dropdown exposes every editable and displayed entry field', () => {
     ['year', 'Year'],
     ['dateAdded', 'Date Added'],
     ['timesPlayed', 'Times Played'],
+    ['lastPlayed', 'Last Played'],
     ['defaultScreen', 'Default Screen'],
     ['notes', 'Notes'],
     ['entryNumber', 'Entry Number'],
@@ -163,6 +167,7 @@ test('searches every editable and displayed entry field using human-readable val
     stars: 4.5,
     tags: ['Camera Archive'],
     timesPlayed: 12,
+    lastPlayed: new Date(2026, 8, 26, 9, 12).getTime(),
     width: 3840,
     year: 2026,
   });
@@ -191,6 +196,7 @@ test('searches every editable and displayed entry field using human-readable val
     ['year', '2026'],
     ['dateAdded', '2026-08-04 12:34'],
     ['timesPlayed', '12 times played'],
+    ['lastPlayed', '2026-09-26 09:12'],
     ['defaultScreen', '3'],
     ['notes', 'restored lens'],
     ['entryNumber', '#7'],
@@ -437,4 +443,148 @@ test('validates and applies an editable Date Added value', () => {
   assert.equal(applyCatalogueOverwrite([first, second], 'dateAdded', undefined), 2);
   assert.equal(first.dateAdded, undefined);
   assert.equal(second.dateAdded, undefined);
+});
+
+test('Last Played batch edits validate dates, preserve other metrics, and clear to persisted zero', () => {
+  const first = image({ lastPlayed: 1234, timesPlayed: 3 });
+  const second = image({ index: 2, lastPlayed: 0, timesPlayed: 8 });
+  const draft = '2026-09-26T13:15';
+  const timestamp = parseLastPlayedInput(draft) as number;
+  const validation = validateCatalogueOverwrite('lastPlayed', draft, [first, second]);
+  assert.equal(validation.valid, true);
+  assert.equal(validation.value, timestamp);
+  assert.match(validation.displayValue, /2026/);
+  assert.equal(applyCatalogueOverwrite([first, second], 'lastPlayed', timestamp), 2);
+  assert.equal(applyCatalogueOverwrite([first, second], 'lastPlayed', timestamp), 0);
+  assert.deepEqual([first.timesPlayed, second.timesPlayed], [3, 8]);
+  assert.equal(validateCatalogueOverwrite('lastPlayed', '2026-02-30T12:00', [first]).valid, false);
+  for (const invalid of [-1, 0.5, Number.MAX_SAFE_INTEGER, NaN, 'yesterday']) {
+    assert.equal(applyCatalogueOverwrite([first], 'lastPlayed', invalid), 0);
+    assert.equal(first.lastPlayed, timestamp);
+  }
+  const clearing = validateCatalogueOverwrite('lastPlayed', '', [first, second]);
+  assert.deepEqual(clearing, { action: 'clear', displayValue: 'Never played', valid: true, value: 0 });
+  assert.equal(applyCatalogueOverwrite([first, second], 'lastPlayed', clearing.value), 2);
+  assert.equal(first.lastPlayed, 0);
+  assert.equal(second.lastPlayed, 0);
+  assert.equal(applyCatalogueOverwrite([first, second], 'lastPlayed', clearing.value), 0);
+  assert.equal(JSON.parse(JSON.stringify(first)).lastPlayed, 0);
+});
+
+test('Last Played search includes Never played and never aliases zero as a 1970 date', () => {
+  const neverPlayed = image();
+  const played = image({ index: 2, lastPlayed: new Date(2026, 8, 26, 13, 15).getTime() });
+  for (const field of ['all', 'lastPlayed'] as const) {
+    assert.deepEqual(filterCatalogueEntries([neverPlayed, played], [{
+      field, id: 0, operator: 'contains', query: 'Never played',
+    }], false), [neverPlayed]);
+  }
+  assert.deepEqual(filterCatalogueEntries([neverPlayed], [{
+    field: 'lastPlayed', id: 0, operator: 'contains', query: '1970',
+  }], false), []);
+});
+
+function lastPlayedEditorHarness(item: ImageElement) {
+  const source = readFileSync(
+    join(__dirname, '../src/app/components/catalogue-editor/catalogue-editor.component.ts'), 'utf8',
+  );
+  const syntax = ts.createSourceFile('catalogue-editor.component.ts', source, ts.ScriptTarget.Latest, true);
+  const component = syntax.statements.find((statement): statement is ts.ClassDeclaration => (
+    ts.isClassDeclaration(statement) && statement.name?.text === 'CatalogueEditorComponent'
+  ));
+  const method = component?.members.find((member): member is ts.MethodDeclaration => (
+    ts.isMethodDeclaration(member) && ts.isIdentifier(member.name) && member.name.text === 'updateLastPlayed'
+  ));
+  assert.ok(method);
+  const executable = ts.transpileModule(
+    `class Editor { ${method.getText(syntax)} } Editor.prototype.updateLastPlayed;`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const update: (this: unknown, target: ImageElement, value: string, input?: unknown) => void = runInNewContext(
+    executable, { formatLastPlayedForInput, parseLastPlayedInput },
+  );
+  const context = {
+    destroyed: false,
+    rendererMutations: { accepting: true },
+    get canMutate() { return !this.destroyed && this.rendererMutations.accepting; },
+    images: [item],
+    isSaving: false,
+    lastPlayedErrors: new WeakMap<ImageElement, string>(),
+    metadataImportPreviewActive: false,
+    metadataTransferBusy: false,
+    dirtyCalls: 0,
+    refreshCalls: 0,
+    markDirty() { this.dirtyCalls++; },
+    refreshFilteredEntries() { this.refreshCalls++; },
+  };
+  return { context, update: (value: string, input?: unknown) => update.call(context, item, value, input) };
+}
+
+test('Last Played row editor preserves precision, edits and clears through dirty and refresh events', () => {
+  const original = new Date(2026, 8, 26, 13, 15, 42, 123).getTime();
+  const item = image({ lastPlayed: original });
+  const { context, update } = lastPlayedEditorHarness(item);
+  update(formatLastPlayedForInput(original));
+  assert.equal(item.lastPlayed, original);
+  assert.equal(context.dirtyCalls, 0);
+  update('2026-09-26T15:00');
+  assert.equal(item.lastPlayed, parseLastPlayedInput('2026-09-26T15:00'));
+  assert.equal(context.dirtyCalls, 1);
+  assert.equal(context.refreshCalls, 1);
+  update('');
+  assert.equal(item.lastPlayed, 0);
+  assert.equal(context.dirtyCalls, 2);
+  assert.equal(context.refreshCalls, 2);
+  update('');
+  assert.equal(context.dirtyCalls, 2);
+});
+
+test('Last Played row editor rejects invalid and incomplete controls without losing the stored timestamp', () => {
+  const item = image({ lastPlayed: new Date(2026, 8, 26, 13, 15).getTime() });
+  const { context, update } = lastPlayedEditorHarness(item);
+  const original = item.lastPlayed;
+  update('2026-02-30T12:00');
+  assert.equal(item.lastPlayed, original);
+  assert.ok(context.lastPlayedErrors.get(item));
+  const incompleteInput = { validity: { badInput: true }, value: '' };
+  update('', incompleteInput);
+  assert.equal(item.lastPlayed, original);
+  assert.equal(incompleteInput.value, formatLastPlayedForInput(original));
+  assert.equal(context.dirtyCalls, 0);
+  update('2026-09-27T12:00');
+  assert.equal(context.lastPlayedErrors.get(item), undefined);
+  assert.equal(context.dirtyCalls, 1);
+});
+
+test('Last Played row editor does not mutate during save, transfer, import review, or after closing', () => {
+  for (const flag of ['destroyed', 'isSaving', 'metadataImportPreviewActive', 'metadataTransferBusy'] as const) {
+    const item = image({ lastPlayed: 1234 });
+    const { context, update } = lastPlayedEditorHarness(item);
+    context[flag] = true;
+    update('');
+    assert.equal(item.lastPlayed, 1234, flag);
+    assert.equal(context.dirtyCalls, 0, flag);
+  }
+  const stale = image({ lastPlayed: 1234 });
+  const { context, update } = lastPlayedEditorHarness(stale);
+  context.images = [];
+  update('');
+  assert.equal(stale.lastPlayed, 1234);
+  assert.equal(context.dirtyCalls, 0);
+});
+
+test('Last Played row editor refuses edits while paused and permits clearing after thaw', () => {
+  const item = image({ lastPlayed: 1234 });
+  const { context, update } = lastPlayedEditorHarness(item);
+  context.rendererMutations.accepting = false;
+  update('');
+  assert.equal(item.lastPlayed, 1234);
+  assert.equal(context.dirtyCalls, 0);
+  assert.equal(context.refreshCalls, 0);
+
+  context.rendererMutations.accepting = true;
+  update('');
+  assert.equal(item.lastPlayed, 0);
+  assert.equal(context.dirtyCalls, 1);
+  assert.equal(context.refreshCalls, 1);
 });

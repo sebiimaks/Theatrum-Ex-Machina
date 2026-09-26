@@ -91,7 +91,7 @@ export const SettingsWorkspaceCategories: SettingsWorkspaceCategory[] = [
   {
     id: 'maintenance', label: 'WORKBENCH.settingsMaintenance', description: 'WORKBENCH.settingsMaintenanceDescription', iconName: 'icon-gear',
     sections: [
-      { id: 'maintenance', heading: 'SETTINGS.variousSettings', buttonKeys: ['resetSettings', 'resetTimesPlayed', 'clearHistory'] },
+      { id: 'maintenance', heading: 'SETTINGS.variousSettings', buttonKeys: ['resetSettings', 'resetTimesPlayed', 'resetLastPlayed', 'clearHistory'] },
       { id: 'file-deletion', heading: 'WORKBENCH.settingsDeletion', buttonKeys: ['showDeleteOption', 'dangerousDelete'] },
     ],
   },
@@ -103,7 +103,7 @@ export const SettingsWorkspaceCategories: SettingsWorkspaceCategory[] = [
 
 export const SettingsActionKeys: readonly SettingsButtonKey[] = [
   'clearAllFilters', 'clearHistory', 'makeSmaller', 'makeLarger', 'playPlaylist',
-  'resetSettings', 'resetTimesPlayed', 'shuffleGalleryNow', 'startWizard', 'showTags',
+  'resetSettings', 'resetTimesPlayed', 'resetLastPlayed', 'shuffleGalleryNow', 'startWizard', 'showTags',
 ];
 
 export const SettingsViewKeys: readonly SettingsButtonKey[] = [
@@ -111,7 +111,7 @@ export const SettingsViewKeys: readonly SettingsButtonKey[] = [
 ];
 
 export const SettingsDestructiveKeys: readonly SettingsButtonKey[] = [
-  'clearHistory', 'resetSettings', 'resetTimesPlayed', 'dangerousDelete',
+  'clearHistory', 'resetSettings', 'resetTimesPlayed', 'resetLastPlayed', 'dangerousDelete',
 ];
 
 function normalizeSearchText(value: string): string {
