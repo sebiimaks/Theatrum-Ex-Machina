@@ -7,6 +7,22 @@ Changes to Theatrum Ex Machina after the [Video Hub App baseline](https://github
 `v1.0.0` begins the independent Theatrum Ex Machina version line. Earlier entries preserve the fork's pre-1.0 development history.
 
 <details>
+<summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v2.0.1">v2.0.1</a> — 26 September 2026</strong></summary>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/f6a6f792381cd4dc621525affea38694f90694b9"><code>f6a6f792</code></a> — <strong>Reduce thumbnail delays during background scans</strong></summary>
+<p>Fixed thumbnail-loading delays caused by background folder scans, including initial gallery loading and newly visible thumbnails while scrolling. Thumbnail validation no longer waits behind those scans, while folder and media access protections remain in place.</p>
+</details>
+
+<details>
+<summary><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/commit/57572800f0d6abad63cd41ced49aeaedeb94ffdb"><code>57572800</code></a> — <strong>Use one application support folder and recover existing settings</strong></summary>
+<p>On macOS, settings and the ordinary browser profile now use <code>~/Library/Application Support/Theatrum Ex Machina</code>. If no current settings file exists, the app recovers the newest valid shared settings from known older Theatrum Ex Machina and Video Hub App support folders. Existing settings take priority; catalogue files, video previews, and older support folders stay in place.</p>
+<p>During settings recovery, existing folder and player permissions from the previous <code>theatrum-ex-machina</code> folder are preserved when the new folder has no permission store. Older Video Hub App preferences do not grant file access, so select your hub again if necessary. Keep older support folders until settings have been recovered and you have stopped using app versions that depend on them. Windows portable settings remain beside the portable app.</p>
+</details>
+
+</details>
+
+<details>
 <summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v2.0.0">v2.0.0</a> — 22 September 2026</strong></summary>
 
 ![Theatrum Ex Machina 2.0.0](./screens/20260921_main_hub.png)
