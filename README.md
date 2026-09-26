@@ -1,18 +1,18 @@
 # Theatrum Ex Machina
 
-![Theatrum Ex Machina 2.0.0](./screens/20260921_main_hub.png)
+![Theatrum Ex Machina main library](./screens/20260921_main_hub.png)
 
 **Theatrum Ex Machina** is a desktop video catalogue for browsing, searching, previewing, and organising your video collection. Browse thumbnails and filmstrips, organise videos with tags, ratings, and notes, and open videos in your preferred player. Your videos stay in their original folders; each hub stores its catalogue and generated previews separately.
 
-[Download v2.0.0](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v2.0.0) · [Changelog](./CHANGELOG.md) · [Report an issue](https://github.com/sebiimaks/Theatrum-Ex-Machina/issues)
+[Download v2.0.1](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v2.0.1) · [Changelog](./CHANGELOG.md) · [Report an issue](https://github.com/sebiimaks/Theatrum-Ex-Machina/issues)
 
 Theatrum Ex Machina is an independent personal fork of [Video Hub App](https://www.videohubapp.com/), developed with LLM assistance. It is not supported or endorsed by the original developer. Its name and logo are specific to this fork.
 
 ## Install
 
-Version **2.0.0**, released **22 September 2026**, is available for **Apple Silicon Macs (ARM64)**.
+Version **2.0.1**, released **26 September 2026**, is available for **Apple Silicon Macs (ARM64)**.
 
-1. Open the [2.0.0 release](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v2.0.0) and download `theatrum-ex-machina-v2.0.0-arm64.zip`.
+1. Open the [2.0.1 release](https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v2.0.1) and download `theatrum-ex-machina-v2.0.1-arm64.zip`.
 2. Extract the ZIP and move **Theatrum Ex Machina.app** to your Applications folder or another location of your choice.
 3. Open the app. This build is unsigned and unnotarized, so macOS may require approval before its first launch.
 
@@ -50,6 +50,8 @@ On macOS, application settings and the ordinary browser profile are stored in `~
 
 During settings recovery, existing folder and player permissions from the previous `theatrum-ex-machina` support folder are preserved if no permission store exists in the new folder. Preferences from older Video Hub App versions do not grant file access; select your hub again if it does not reopen automatically. Windows portable builds continue to keep settings beside the portable app.
 
+Keep the older support folders while using older app versions or until you have confirmed that your recovered settings persist after quitting and reopening the updated app. Once you no longer need those versions, quit the app and archive or move the old support folders to Trash before permanently deleting them. Keep the current `Theatrum Ex Machina` folder.
+
 ## Reconnect a video source
 
 Connect the external drive or network folder containing your videos. The app checks for returning source folders while the hub remains open; restarting is not required.
@@ -66,14 +68,12 @@ Open a legacy `.vha2` catalogue to choose between browsing it **read only** and 
 
 You can also export an editable `.scaena` catalogue as a Video Hub App-compatible `.vha2` copy from the library settings. Review the conversion notice before exporting: fork-specific information such as Date Added, tag hierarchy, and alternate media locations is not retained in that format.
 
-## What's new in 2.0.0
+## What's new in 2.0.1
 
-For the password-protected private-hub workflow in the macOS development branch, see [Try private hubs](./docs/private-hubs-first-build.md). This experimental feature is separate from the published 2.0.0 release.
+For the password-protected private-hub workflow in the macOS development branch, see [Try private hubs](./docs/private-hubs-first-build.md). This experimental feature is separate from the published 2.0.1 release.
 
-- A redesigned library with catalogue navigation, consistent gallery controls, searchable settings, and improved compact layouts.
-- Collapsible tag hierarchies, a Recently played collection, and a gallery toolbar for Word cloud, Similar, Recent, Details, and Tags.
-- Clear video selection, optional Auto-open Details, and editable notes in the bottom Details panel.
-- Source-folder reconnection while a hub is open, including access prompts for newly available folders and automatic refresh of Hide offline results.
+- Reduced thumbnail-loading delays caused by background folder scans, both when opening the gallery and when scrolling to more videos.
+- A consistent `Theatrum Ex Machina` support folder, with automatic recovery of the newest valid shared settings from older support folders when no current settings exist. Existing settings and older folders are preserved.
 
 Read the [full changelog](./CHANGELOG.md) for release history and detailed changes.
 
