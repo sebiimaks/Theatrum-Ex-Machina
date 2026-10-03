@@ -360,7 +360,7 @@ test('empty successful output is rejected and a synchronous spawn exception rema
 });
 
 test('every built-in preview plan passes the runner option allowlist', async t => {
-  const plan = buildPrivatePreviewPlan({ duration: 30, width: 1920, height: 1080, hasAudio: true },
+  const plan = buildPrivatePreviewPlan({ duration: 30, width: 1920, height: 1080, fps: 30, hasAudio: true },
     { fixed: true, n: 3, height: 144, clipHeight: 144, clipSnippets: 2, clipSnippetLength: 1 });
   const plans = [privateProbeCommand(), plan.thumbnail, ...plan.frames, ...plan.clip!.snippets, plan.clip!.poster];
   for (const command of plans) {
@@ -374,6 +374,20 @@ test('every built-in preview plan passes the runner option allowlist', async t =
     const input = async function* (): AsyncGenerator<Uint8Array> { yield Buffer.from('memory only'); };
     assert.equal((await collect(streamPrivateMediaProcess(options({ ...command, sourceFd: undefined, input: input() })))).toString(), 'ok');
   }
+});
+
+test('probe allowlist rejects wider metadata exposure when requesting average frame rate', async t => {
+  const mocked = mockSpawn(t);
+  const plan = privateProbeCommand();
+  for (const entries of ['format=duration,filename:stream=codec_type,width,height,duration,avg_frame_rate:stream_disposition=attached_pic',
+    'format=duration:stream=codec_type,width,height,duration,avg_frame_rate:stream_tags',
+    'format=duration:stream=codec_type,width,height,duration,avg_frame_rate:packet=pts_time',
+    'format=duration:stream=codec_type,width,height,duration,avg_frame_rate,r_frame_rate:stream_disposition=attached_pic']) {
+    const args = [...plan.args];
+    args[args.indexOf('-show_entries') + 1] = entries;
+    await assert.rejects(streamPrivateMediaProcess(options({ ...plan, args })).next(), failure);
+  }
+  assert.equal(mocked.calls.length, 0);
 });
 
 test('bundled FFprobe reads an inherited descriptor and returns bounded metadata without a source path', async t => {

@@ -51,6 +51,24 @@ test('binds frozen exact catalogue location and exposes a branded path-free capa
   assert.equal(source.isCurrent(), true);
 });
 
+test('exposes immutable millisecond metadata from the verified file snapshot', async t => {
+  const f = await fixture(t);
+  await fs.promises.utimes(f.file, 1_700_000_000, 1_700_000_123.456);
+  const stat = await fs.promises.lstat(f.file, { bigint: true });
+  const source = await f.capture();
+  assert.equal(source.birthtime, Number(stat.birthtimeMs));
+  assert.equal(source.mtime, Number(stat.mtimeMs));
+  assert.equal(Number.isFinite(source.birthtime), true);
+  assert.equal(Reflect.set(source, 'birthtime', 0), false);
+  assert.equal(Reflect.set(source, 'mtime', 0), false);
+  assert.throws(() => Object.defineProperty(source, 'mtime', { value: 0 }), TypeError);
+  await fs.promises.utimes(f.file, 1_700_000_000, 1_700_000_124);
+  assert.equal(source.isCurrent(), false);
+  assert.equal(source.mtime, Number(stat.mtimeMs), 'revocation cannot silently rebind metadata to the changed file');
+  assert.equal(source.birthtime, Number(stat.birthtimeMs));
+  await assert.rejects(source.open(), genericError);
+});
+
 test('main-only matching requires the complete immutable binding and rejects lookalikes', async t => {
   const f = await fixture(t);
   const source = await f.capture();
@@ -60,7 +78,7 @@ test('main-only matching requires the complete immutable binding and rejects loo
     { hash: 'another-hash' }, { root: f.folder }, { inputSource: 1 }, { partialPath: '/elsewhere' },
     { fileName: 'another-title.mp4' }, { root: 'relative' }, { partialPath: '../nested' },
   ]) { assert.equal(privatePreviewSourceMatchesLocation(source, { ...f.options, ...overrides }), false); }
-  const imitation = { hash: source.hash, signal: source.signal, isCurrent: () => true, open: source.open, close: source.close };
+  const imitation = { byteLength: source.byteLength, birthtime: source.birthtime, mtime: source.mtime, hash: source.hash, signal: source.signal, isCurrent: () => true, open: source.open, close: source.close };
   assert.equal(privatePreviewSourceMatchesLocation(imitation, f.options), false);
   assert.equal(privatePreviewSourceMatchesLocation(source, undefined), false);
   // Closing changes authority but never rebinds the original location.
@@ -387,4 +405,116 @@ test('ordinary capture or open failure with confirmed cleanup is not branded', a
   });
   assert.equal(descriptors.length, 1);
   assert.throws(() => fs.fstatSync(descriptors[0]), { code: 'EBADF' });
+});
+
+test('positional reads are bounded, independent, and retain captured size without exposing a path', async t => {
+  const f = await fixture(t);
+  const source = await f.capture();
+  assert.equal(source.byteLength, Buffer.byteLength('SYNTHETIC-PRIVATE-MEDIA'));
+  const lease = await source.open();
+  assert.equal((await lease.read(10, 7)).toString(), 'PRIVATE');
+  assert.equal((await lease.read(0, 9)).toString(), 'SYNTHETIC');
+  for (const [position, length] of [[-1, 1], [0, 0], [0, 256 * 1024 + 1], [0.5, 1], [0, 1.5], [source.byteLength, 1]]) {
+    await assert.rejects(lease.read(position, length), genericError);
+  }
+  assert.equal(source.isCurrent(), true);
+  await lease.close();
+  await assert.rejects(lease.read(0, 1), genericError);
+});
+
+test('closing waits for an in-flight positional read, rejects its delivery and wipes its owned buffer', async t => {
+  const f = await fixture(t);
+  const source = await f.capture();
+  const originalOpen = fs.promises.open.bind(fs.promises);
+  let resume!: () => void;
+  let seen: Buffer | undefined;
+  let readEntered = false;
+  let handleClosed = false;
+  t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof fs.promises.open>) => {
+    const handle = await originalOpen(...args);
+    const read = handle.read.bind(handle);
+    const close = handle.close.bind(handle);
+    t.mock.method(handle, 'read', async (buffer: Buffer, offset: number, length: number, position: number) => {
+      seen = buffer;
+      const result = await read(buffer, offset, length, position);
+      readEntered = true;
+      await new Promise<void>(resolve => { resume = resolve; });
+      return result;
+    });
+    t.mock.method(handle, 'close', async () => { handleClosed = true; await close(); });
+    return handle;
+  });
+  const lease = await source.open();
+  const reading = lease.read(0, 9);
+  const rejected = assert.rejects(reading, genericError);
+  while (!readEntered) { await new Promise(resolve => setImmediate(resolve)); }
+  await assert.rejects(lease.read(0, 1), genericError);
+  const closing = source.close();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(handleClosed, false);
+  assert.ok(fs.fstatSync(lease.fd).isFile());
+  resume();
+  await rejected;
+  await closing;
+  assert.equal(handleClosed, true);
+  assert.ok(seen!.every(byte => byte === 0));
+});
+
+test('short filesystem reads are completed but EOF and changed file metadata cannot publish bytes', async t => {
+  const f = await fixture(t);
+  const source = await f.capture();
+  const originalOpen = fs.promises.open.bind(fs.promises);
+  const buffers: Buffer[] = [];
+  let mode: 'short' | 'eof' = 'short';
+  t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof fs.promises.open>) => {
+    const handle = await originalOpen(...args);
+    const read = handle.read.bind(handle);
+    t.mock.method(handle, 'read', async (buffer: Buffer, offset: number, length: number, position: number) => {
+      buffers.push(buffer);
+      if (mode === 'eof') { buffer.fill(41); return { bytesRead: 0, buffer }; }
+      return read(buffer, offset, Math.min(2, length), position);
+    });
+    return handle;
+  });
+  const lease = await source.open();
+  assert.equal((await lease.read(0, 9)).toString(), 'SYNTHETIC');
+  mode = 'eof';
+  await assert.rejects(lease.read(0, 9), genericError);
+  assert.ok(buffers.at(-1)!.every(byte => byte === 0));
+  await fs.promises.writeFile(f.file, 'OTHER-PRIVATE-CONTENT');
+  await assert.rejects(lease.read(0, 9), genericError);
+  assert.equal(source.signal.aborted, true);
+});
+
+test('capture rejects a symlink parent before probing an outside leaf', async t => {
+  const f = await fixture(t);
+  const outside = path.join(f.directory, 'outside');
+  await fs.promises.mkdir(outside);
+  await fs.promises.writeFile(path.join(outside, 'private-title.mp4'), 'OUTSIDE');
+  await fs.promises.symlink(outside, path.join(f.root, 'linked'));
+  const original = fs.lstatSync;
+  const leaf = path.join(f.root, 'linked', 'private-title.mp4');
+  let probed = false;
+  t.mock.method(fs, 'lstatSync', (...args: Parameters<typeof fs.lstatSync>) => {
+    if (String(args[0]) === leaf) { probed = true; }
+    return original(...args);
+  });
+  await assert.rejects(f.capture({ partialPath: '/linked' }), genericError);
+  assert.equal(probed, false);
+});
+
+test('a parent replaced with a symlink revokes before any further leaf probe', async t => {
+  const f = await fixture(t);
+  const source = await f.capture();
+  await fs.promises.rename(f.folder, f.folder + '-moved');
+  await fs.promises.symlink(f.folder + '-moved', f.folder);
+  const original = fs.lstatSync;
+  let probed = false;
+  t.mock.method(fs, 'lstatSync', (...args: Parameters<typeof fs.lstatSync>) => {
+    if (String(args[0]) === f.file) { probed = true; }
+    return original(...args);
+  });
+  assert.equal(source.isCurrent(), false);
+  assert.equal(probed, false);
+  assert.equal(source.signal.aborted, true);
 });

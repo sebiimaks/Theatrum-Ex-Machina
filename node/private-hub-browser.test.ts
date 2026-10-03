@@ -1,15 +1,18 @@
 import * as assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
 import { NewImageElement } from '../interfaces/final-object.interface';
 import { test, type TestContext } from 'node:test';
 import type { PrivateHubSession } from './private-hub-session';
 import type { PrivateHubBrowser as PrivateHubBrowserInstance, PrivateHubLifecycle } from './private-hub-browser';
+import { PrivateSourcePlayback } from './private-source-playback';
 import * as conversionDestination from './private-conversion-destination';
 
 const app = Object.assign(new EventEmitter(), { isReady: () => true, quits: 0, quit() { this.quits++; } });
 const powerMonitor = new EventEmitter();
 const dialog = { showOpenDialog: async (_window: unknown, _options: unknown) => ({ canceled: true, filePaths: [] as string[] }),
+  showMessageBox: async (_window: unknown, _options: unknown) => ({ response: 1 }),
   showSaveDialog: async (_window: unknown, _options: unknown) => ({ canceled: true, filePath: undefined as string | undefined }) };
 const invokeHandlers = new Map<string, (...args: any[]) => unknown>();
 const ipcMain = Object.assign(new EventEmitter(), {
@@ -34,7 +37,7 @@ class MockSession extends EventEmitter {
   spellcheck: boolean;
   offline: boolean;
   permissions: (...args: any[]) => void;
-  permissionCheck: () => boolean;
+  permissionCheck: (...args: any[]) => boolean;
   devicePermission: () => boolean;
   display: (...args: any[]) => void;
   request: (...args: any[]) => void;
@@ -49,7 +52,7 @@ class MockSession extends EventEmitter {
   setPreloads(value: string[]): void { this.preloads = value; }
   setSpellCheckerEnabled(value: boolean): void { this.spellcheck = value; }
   setPermissionRequestHandler(value: (...args: any[]) => void): void { this.permissions = value; }
-  setPermissionCheckHandler(value: () => boolean): void { this.permissionCheck = value; }
+  setPermissionCheckHandler(value: (...args: any[]) => boolean): void { this.permissionCheck = value; }
   setDevicePermissionHandler(value: () => boolean): void { this.devicePermission = value; }
   setDisplayMediaRequestHandler(value: (...args: any[]) => void): void { this.display = value; }
   enableNetworkEmulation(value: { offline: boolean }): void { this.offline = value.offline; }
@@ -116,6 +119,7 @@ const NodeModule = require('node:module');
 const originalLoad = NodeModule._load;
 let PrivateHubBrowser: typeof import('./private-hub-browser').PrivateHubBrowser;
 let nativeMenus: typeof import('./private-native-menu');
+let galleryRequests: typeof import('./private-gallery-request');
 let isPrivateBrowserDisposedFailure: typeof import('./private-hub-browser').isPrivateBrowserDisposedFailure;
 try {
   NodeModule._load = function(request: string, ...args: unknown[]) {
@@ -123,6 +127,7 @@ try {
     return originalLoad.call(this, request, ...args);
   };
   nativeMenus = require('./private-native-menu');
+  galleryRequests = require('./private-gallery-request');
   PrivateHubBrowser = require('./private-hub-browser').PrivateHubBrowser;
   isPrivateBrowserDisposedFailure = require('./private-hub-browser').isPrivateBrowserDisposedFailure;
 } finally { NodeModule._load = originalLoad; }
@@ -156,6 +161,7 @@ function fixture(t: TestContext) {
     readCatalogue: async (generation: number) => { assert.equal(generation, 1); catalogueReads++; return { images: [] }; },
     readProtection: async () => ({ autoLockMinutes: 5 }),
     updateProtection: async (_generation: number, value: unknown) => value,
+    relocateSource: async () => ({ status: 'relocated' }),
     lock: () => {
       bridgeAtLock.push([...invokeHandlers.keys(), ...ipcMain.eventNames().map(String)]);
       locks++; current = false; controller.abort();
@@ -171,6 +177,9 @@ function fixture(t: TestContext) {
     await browser?.close(); assert.equal(powerMonitor.listenerCount('suspend'), 0); assert.equal(app.listenerCount('before-quit'), 0);
     assert.equal(invokeHandlers.size, 0); assert.equal(ipcMain.listenerCount('private-password-cancel'), 0);
     assert.equal(ipcMain.listenerCount('private-gallery-lock'), 0);
+    assert.equal(ipcMain.listenerCount('private-gallery-stop-original'), 0);
+    assert.equal(ipcMain.listenerCount('private-gallery-cancel-source-connection'), 0);
+    assert.equal(ipcMain.listenerCount('private-gallery-cancel-import'), 0);
   });
   return { hub, create, menu, bridgeAtLock, catalogueReads: () => catalogueReads, locks: () => locks,
     delayLock: (completion: Promise<void>) => { lockCompletion = completion; } };
@@ -206,9 +215,13 @@ test('gallery bridge exists before initial navigation and reads the catalogue on
   const { create, catalogueReads } = fixture(t);
   load = async () => {
     assert.deepEqual([...invokeHandlers.keys()].sort(), ['private-credentials-change-password', 'private-credentials-create-unprotected-copy',
-      'private-credentials-touch-id-disable', 'private-credentials-touch-id-enable', 'private-credentials-touch-id-status', 'private-gallery-detail', 'private-gallery-list', 'private-gallery-protection',
-      'private-gallery-regenerate', 'private-gallery-save', 'private-gallery-set-protection']);
+      'private-credentials-touch-id-disable', 'private-credentials-touch-id-enable', 'private-credentials-touch-id-status',
+      'private-gallery-add-source', 'private-gallery-connect-source', 'private-gallery-detail', 'private-gallery-disconnect-source', 'private-gallery-import-progress', 'private-gallery-import-video', 'private-gallery-list', 'private-gallery-play-original', 'private-gallery-protection',
+      'private-gallery-regenerate', 'private-gallery-relocate-source', 'private-gallery-save', 'private-gallery-scan-source', 'private-gallery-set-protection', 'private-gallery-sources']);
     assert.equal(ipcMain.listenerCount('private-gallery-lock'), 1);
+    assert.equal(ipcMain.listenerCount('private-gallery-stop-original'), 1);
+    assert.equal(ipcMain.listenerCount('private-gallery-cancel-source-connection'), 1);
+    assert.equal(ipcMain.listenerCount('private-gallery-cancel-import'), 1);
     assert.equal(ipcMain.listenerCount('private-password-cancel'), 0);
     assert.equal(catalogueReads(), 0);
     const contents = windows[0].webContents;
@@ -249,6 +262,52 @@ test('private source picker belongs to its window and close waits for its stale 
   assert.deepEqual(await generating, { status: 'unavailable' }); await closing;
   assert.equal(browser.status.cleanupFailed, false);
 });
+
+for (const stage of ['picker', 'confirmation'] as const) {
+  test(`relocation native ${stage} is owned, excludes OS recents and cannot save after the window closes`, async t => {
+    const f = fixture(t);
+    const temporary = path.resolve(__dirname, '../tmp');
+    await fs.mkdir(temporary, { recursive: true });
+    const root = await fs.mkdtemp(path.join(temporary, 'browser-relocation-'));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    const previousRoot = path.join(root, 'previous'); const nextRoot = path.join(root, 'next');
+    await fs.mkdir(previousRoot); await fs.mkdir(nextRoot);
+    await fs.writeFile(path.join(nextRoot, 'synthetic.mp4'), 'Synthetic');
+    t.mock.method(f.hub, 'readCatalogue', async () => ({ images: [{ ...NewImageElement(), inputSource: 0,
+      hash: 'source-video', cleanName: 'Synthetic video', fileName: 'synthetic.mp4', fileSize: 9, screens: 3 }],
+      inputDirs: { 0: { path: previousRoot } } }));
+    let writes = 0; t.mock.method(f.hub, 'relocateSource', async () => { writes++; return { status: 'relocated' }; });
+    const browser = await f.create(); const window = windows[0];
+    const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+    const source = await invokeHandlers.get('private-gallery-sources')!(event) as any;
+    let finish!: () => void; let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const held = async () => { started(); await new Promise<void>(resolve => { finish = resolve; }); };
+    t.mock.method(dialog, 'showOpenDialog', async (owner: unknown, options: any) => {
+      assert.equal(owner, window); assert.equal(options.defaultPath, previousRoot);
+      assert.equal(options.title, 'Change source folder location');
+      assert.match(options.message, /no files will be moved/);
+      assert.deepEqual(options.properties, ['openDirectory', 'noResolveAliases', 'dontAddToRecent']);
+      assert.equal(options.securityScopedBookmarks, false);
+      if (stage === 'picker') { await held(); }
+      return { canceled: false, filePaths: [nextRoot] };
+    });
+    t.mock.method(dialog, 'showMessageBox', async (owner: unknown, options: any) => {
+      assert.equal(owner, window); assert.match(options.message, /1 video/); assert.ok(options.detail.includes(nextRoot));
+      assert.deepEqual(options.buttons, ['Save location', 'Cancel']);
+      assert.equal(options.defaultId, 1); assert.equal(options.cancelId, 1); assert.equal(options.noLink, true);
+      if (stage === 'confirmation') { await held(); }
+      return { response: 0 };
+    });
+    const work = invokeHandlers.get('private-gallery-relocate-source')!(event, source.items[0].id);
+    await ready;
+    let closed = false; const closing = browser.close().then(() => { closed = true; });
+    assert.equal(window.destroyed, true); assert.equal(invokeHandlers.size, 0);
+    await Promise.resolve(); assert.equal(closed, false); finish();
+    assert.deepEqual(await work, { status: 'unavailable' }); await closing;
+    assert.equal(writes, 0); assert.equal(browser.status.cleanupFailed, false);
+  });
+}
 
 test('gallery lock removes its bridge before locking storage or destroying the renderer', async t => {
   const { create, bridgeAtLock, locks } = fixture(t);
@@ -966,6 +1025,9 @@ test('creation uses isolated form-only routes and returns credentials only after
     return prepared;
   } });
   assert.equal(f.menu.callbacks.kind, 'conversion');
+  const permissionDetails = { isMainFrame: true, requestingUrl: prompt.window.webContents.getURL() };
+  sessions[0].permissions(prompt.window.webContents, 'fullscreen', (allowed: boolean) => assert.equal(allowed, false), permissionDetails);
+  assert.equal(sessions[0].permissionCheck(prompt.window.webContents, 'fullscreen', 'theatrum://app', permissionDetails), false);
   assert.match(prompt.window.options.webPreferences.preload, /private-conversion-preload.cjs$/);
   assert.deepEqual([...invokeHandlers.keys()].sort(), ['private-conversion-state', 'private-conversion-submit']);
   assert.deepEqual((invokeHandlers.get('private-conversion-state')!(prompt.event) as import('../interfaces/private-conversion').PrivateConversionState).review, conversionReview);
@@ -1031,4 +1093,280 @@ test('failed creation browser cleanup never releases prepared credentials', asyn
   await invokeHandlers.get('private-conversion-submit')!(prompt.event, 'synthetic password', false, true);
   await rejection;
   assert.equal(prompt.window.destroyed, true);
+});
+
+test('private window destruction waits for original playback disposal before restoring native menu', async t => {
+  const { create, menu } = fixture(t);
+  let complete!: () => void; let disposalCalls = 0;
+  const drain = new Promise<void>(resolve => { complete = resolve; });
+  const dispose = PrivateSourcePlayback.prototype.dispose;
+  t.mock.method(PrivateSourcePlayback.prototype, 'dispose', function(this: PrivateSourcePlayback) {
+    disposalCalls++;
+    const stopping = dispose.call(this);
+    return Promise.all([stopping, drain]).then(() => undefined);
+  });
+  const browser = await create();
+  const closed = browser.close();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(windows[0].destroyed, true); assert.ok(disposalCalls >= 1);
+  assert.equal(menu.releases, 0); assert.equal(menu.active, true);
+  complete(); await closed;
+  assert.equal(menu.releases, 1); assert.equal(browser.status.cleanupFailed, false);
+});
+
+test('original playback disposal failure quarantines normal menu restoration', async t => {
+  const { create, menu } = fixture(t);
+  const dispose = PrivateSourcePlayback.prototype.dispose;
+  t.mock.method(PrivateSourcePlayback.prototype, 'dispose', async function(this: PrivateSourcePlayback) {
+    await dispose.call(this); throw new Error('Synthetic original drain failure');
+  });
+  const browser = await create(); await browser.close();
+  assert.equal(menu.releases, 0); assert.equal(menu.quarantines, 1);
+  assert.equal(browser.status.cleanupFailed, true);
+});
+
+
+test('fullscreen is limited to the current private gallery main frame and origin', async t => {
+  const { create } = fixture(t); const browser = await create();
+  const isolated = sessions[0]; const contents = windows[0].webContents;
+  const details = { isMainFrame: true, requestingUrl: 'theatrum://app/index.html' };
+  const request = (sender: unknown = contents, permission = 'fullscreen', info: unknown = details): boolean => {
+    let allowed: boolean | undefined;
+    isolated.permissions(sender, permission, (value: boolean) => { allowed = value; }, info);
+    assert.equal(typeof allowed, 'boolean'); return allowed!;
+  };
+  const check = (sender: unknown = contents, permission = 'fullscreen', origin = 'theatrum://app', info: unknown = details): boolean =>
+    isolated.permissionCheck(sender, permission, origin, info);
+  assert.equal(request(), true); assert.equal(check(), true);
+  for (const sender of [null, {}, new MockContents()]) { assert.equal(request(sender), false); assert.equal(check(sender), false); }
+  for (const permission of ['media', 'display-capture', 'clipboard-read', 'clipboard-sanitized-write', 'pointerLock', 'keyboardLock',
+    'openExternal', 'fileSystem', 'notifications', 'geolocation', 'unknown']) {
+    assert.equal(request(contents, permission), false); assert.equal(check(contents, permission), false);
+  }
+  for (const info of [null, {}, { ...details, isMainFrame: false }, { ...details, requestingUrl: 'theatrum://app/index.html?x=1' },
+    { ...details, requestingUrl: 'theatrum://other/index.html' }, { ...details, requestingUrl: 'https://example.invalid/' }]) {
+    assert.equal(request(contents, 'fullscreen', info), false);
+    assert.equal(check(contents, 'fullscreen', 'theatrum://app', info), false);
+  }
+  for (const origin of ['', 'null', 'theatrum://app/', 'theatrum://other', 'https://app']) {
+    assert.equal(check(contents, 'fullscreen', origin), false);
+  }
+  contents.mainFrame.detached = true; assert.equal(request(), false); assert.equal(check(), false);
+  contents.mainFrame.detached = false;
+  contents.mainFrame.url = 'theatrum://app/other.html'; assert.equal(request(), false); assert.equal(check(), false);
+  contents.mainFrame.url = details.requestingUrl;
+  contents.url = 'theatrum://app/other.html'; assert.equal(request(), false); assert.equal(check(), false);
+  contents.url = details.requestingUrl;
+  await browser.close();
+  assert.equal(request(), false); assert.equal(check(), false);
+});
+
+test('fullscreen is denied before gallery setup completes', async t => {
+  const { create } = fixture(t);
+  load = async () => {
+    const contents = windows[0].webContents;
+    sessions[0].permissions(contents, 'fullscreen', (allowed: boolean) => assert.equal(allowed, false),
+      { isMainFrame: true, requestingUrl: contents.getURL() });
+  };
+  await create();
+});
+
+test('password prompts never receive fullscreen permission', async t => {
+  fixture(t);
+  const controller = new AbortController();
+  const password = PrivateHubBrowser.requestPassword({ signal: controller.signal, isCurrent: () => true });
+  while (!windows[0]?.webContents.url) { await new Promise(resolve => setImmediate(resolve)); }
+  const contents = windows[0].webContents;
+  const details = { isMainFrame: true, requestingUrl: contents.getURL() };
+  sessions[0].permissions(contents, 'fullscreen', (allowed: boolean) => assert.equal(allowed, false), details);
+  assert.equal(sessions[0].permissionCheck(contents, 'fullscreen', 'theatrum://app', details), false);
+  controller.abort(); await password;
+});
+
+
+test('private import picker allows multiple files, excludes recents and drains on window close', async t => {
+  const f = fixture(t);
+  const temporary = path.resolve(__dirname, '../tmp'); await fs.mkdir(temporary, { recursive: true });
+  const sourceRoot = await fs.mkdtemp(path.join(temporary, 'browser-import-'));
+  t.after(() => fs.rm(sourceRoot, { recursive: true, force: true }));
+  t.mock.method(f.hub, 'readCatalogue', async () => ({ images: [], inputDirs: { 0: { path: sourceRoot, watch: false } } }));
+  const browser = await f.create(); const window = windows[0];
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  const sources = await invokeHandlers.get('private-gallery-sources')!(event) as any;
+  let finish!: () => void; let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  t.mock.method(dialog, 'showOpenDialog', async (owner: unknown, options: any) => {
+    assert.equal(owner, window); assert.equal(options.defaultPath, sourceRoot);
+    assert.equal(options.securityScopedBookmarks, false);
+    if (options.title === 'Allow source folder access') { return { canceled: false, filePaths: [sourceRoot] }; }
+    assert.equal(options.title, 'Add videos to private hub');
+    assert.deepEqual(options.properties, ['openFile', 'multiSelections', 'noResolveAliases', 'dontAddToRecent']);
+    started(); await new Promise<void>(resolve => { finish = resolve; });
+    return { canceled: false, filePaths: [path.join(sourceRoot, 'late.mp4')] };
+  });
+  const work = invokeHandlers.get('private-gallery-import-video')!(event, sources.items[0].id);
+  await ready;
+  let closed = false; const closing = browser.close().then(() => { closed = true; });
+  assert.equal(window.destroyed, true); assert.equal(invokeHandlers.size, 0);
+  await Promise.resolve(); assert.equal(closed, false); finish();
+  assert.deepEqual(await work, { status: 'unavailable' }); await closing;
+  assert.equal(browser.status.cleanupFailed, false);
+});
+
+
+test('add-source picker is owned, does not create directories or scan, and drains after closure', async t => {
+  const f = fixture(t); const browser = await f.create(); const window = windows[0];
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  let finish!: () => void; let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  t.mock.method(dialog, 'showOpenDialog', async (owner: unknown, options: any) => {
+    assert.equal(owner, window); assert.equal(options.title, 'Add source folder');
+    assert.equal(options.buttonLabel, 'Add folder'); assert.equal(options.defaultPath, undefined);
+    assert.match(options.message, /No videos will be scanned or added/);
+    assert.match(options.message, /choose Add videos afterward/);
+    assert.deepEqual(options.properties, ['openDirectory', 'noResolveAliases', 'dontAddToRecent']);
+    assert.equal(options.securityScopedBookmarks, false);
+    started(); await new Promise<void>(resolve => { finish = resolve; });
+    return { canceled: false, filePaths: [path.resolve(__dirname, '../tmp/nonexistent-new-root')] };
+  });
+  const work = invokeHandlers.get('private-gallery-add-source')!(event); await ready;
+  let closed = false; const closing = browser.close().then(() => { closed = true; });
+  assert.equal(window.destroyed, true); assert.equal(invokeHandlers.size, 0);
+  await Promise.resolve(); assert.equal(closed, false); finish();
+  assert.deepEqual(await work, { status: 'unavailable' }); await closing;
+  assert.equal(browser.status.cleanupFailed, false);
+});
+
+
+test('private import picker returns an owned copy of all selected files, including an oversized selection', async t => {
+  const f = fixture(t);
+  let choose: NonNullable<Parameters<typeof galleryRequests.registerPrivateGalleryRequest>[0]['chooseImportVideo']> | undefined;
+  const register = galleryRequests.registerPrivateGalleryRequest;
+  t.mock.method(galleryRequests, 'registerPrivateGalleryRequest', options => {
+    choose = options.chooseImportVideo;
+    return register(options);
+  });
+  await f.create(); const window = windows[0];
+  const sourceRoot = path.resolve(__dirname, '../tmp/synthetic-import-root');
+  let filePaths: string[] = [];
+  t.mock.method(dialog, 'showOpenDialog', async (owner: unknown, options: any) => {
+    assert.equal(owner, window); assert.equal(options.defaultPath, sourceRoot);
+    assert.equal(options.title, 'Add videos to private hub'); assert.equal(options.buttonLabel, 'Add videos');
+    assert.match(options.message, /up to 100 videos/); assert.match(options.message, /Each video’s catalogue entry and generated previews will be encrypted/);
+    assert.match(options.message, /Original videos stay in place/);
+    assert.deepEqual(options.properties, ['openFile', 'multiSelections', 'noResolveAliases', 'dontAddToRecent']);
+    assert.equal(options.securityScopedBookmarks, false);
+    return { canceled: false, filePaths };
+  });
+  assert.ok(choose);
+  for (const count of [1, 2, 100, 101]) {
+    filePaths = Array.from({ length: count }, (_, index) => path.join(sourceRoot, `synthetic-${index}.mp4`));
+    const selected = await choose(sourceRoot);
+    assert.deepEqual(selected, filePaths); assert.notEqual(selected, filePaths);
+    filePaths[0] = path.join(sourceRoot, 'changed.mp4');
+    assert.equal(selected![0], path.join(sourceRoot, 'synthetic-0.mp4'));
+  }
+});
+
+test('private import picker returns no files when empty or cancelled and rejects a result after authority revocation', async t => {
+  const f = fixture(t);
+  let choose: NonNullable<Parameters<typeof galleryRequests.registerPrivateGalleryRequest>[0]['chooseImportVideo']> | undefined;
+  const register = galleryRequests.registerPrivateGalleryRequest;
+  t.mock.method(galleryRequests, 'registerPrivateGalleryRequest', options => {
+    choose = options.chooseImportVideo;
+    return register(options);
+  });
+  const controller = new AbortController();
+  await f.create({ signal: controller.signal });
+  const sourceRoot = path.resolve(__dirname, '../tmp/synthetic-import-root');
+  const selected = path.join(sourceRoot, 'synthetic.mp4');
+  let result = { canceled: false, filePaths: [] as string[] };
+  t.mock.method(dialog, 'showOpenDialog', async () => result);
+  assert.ok(choose);
+  assert.equal(await choose(sourceRoot), undefined);
+  result = { canceled: true, filePaths: [selected] };
+  assert.equal(await choose(sourceRoot), undefined);
+  let finish!: (value: typeof result) => void;
+  t.mock.method(dialog, 'showOpenDialog', () => new Promise<typeof result>(resolve => { finish = resolve; }));
+  const pending = choose(sourceRoot);
+  controller.abort();
+  finish({ canceled: false, filePaths: [selected] });
+  await assert.rejects(pending);
+});
+
+
+test('source scan confirmation is count-only, owned by the private window and defaults to Cancel', async t => {
+  const f = fixture(t);
+  let confirm: NonNullable<Parameters<typeof galleryRequests.registerPrivateGalleryRequest>[0]['confirmSourceScan']> | undefined;
+  const register = galleryRequests.registerPrivateGalleryRequest;
+  t.mock.method(galleryRequests, 'registerPrivateGalleryRequest', options => {
+    confirm = options.confirmSourceScan; return register(options);
+  });
+  await f.create(); const window = windows[0]; let response = 1; let count = 1; let more = false;
+  t.mock.method(dialog, 'showMessageBox', async (owner: unknown, options: any) => {
+    assert.equal(owner, window); assert.equal(options.title, 'Import discovered videos?');
+    assert.equal(options.message, `Import ${count} discovered ${count === 1 ? 'video file' : 'video files'}?`);
+    assert.match(options.detail, /contents will be checked during import/);
+    assert.match(options.detail, /Catalogue entries and generated previews will be encrypted/);
+    assert.match(options.detail, /Original videos stay in place/);
+    assert.equal(options.detail.includes('first 100 new files'), more);
+    assert.doesNotMatch(JSON.stringify(options), /root|filePaths|defaultPath|source-folder|secret|\/Users\//);
+    assert.deepEqual(options.buttons, ['Import videos', 'Cancel']);
+    assert.equal(options.defaultId, 1); assert.equal(options.cancelId, 1); assert.equal(options.noLink, true);
+    return { response };
+  });
+  assert.ok(confirm); assert.equal(await confirm(count, more), false);
+  response = 0; assert.equal(await confirm(count, more), true);
+  count = 100; more = true; assert.equal(await confirm(count, more), true);
+});
+
+test('source scan confirmation rejects malformed counts before opening a dialog', async t => {
+  const f = fixture(t);
+  let confirm: NonNullable<Parameters<typeof galleryRequests.registerPrivateGalleryRequest>[0]['confirmSourceScan']> | undefined;
+  const register = galleryRequests.registerPrivateGalleryRequest;
+  t.mock.method(galleryRequests, 'registerPrivateGalleryRequest', options => { confirm = options.confirmSourceScan; return register(options); });
+  await f.create(); assert.ok(confirm);
+  const prompt = t.mock.method(dialog, 'showMessageBox', async () => { assert.fail('Invalid counts cannot reach a native prompt'); });
+  for (const count of [0, -1, 101, NaN, Infinity, 1.5]) { await assert.rejects(confirm(count, false)); }
+  await assert.rejects(confirm(1, 'true' as unknown as boolean));
+  assert.equal(prompt.mock.callCount(), 0);
+});
+
+test('source scan confirmation rejects a late approval after private authority revocation', async t => {
+  const f = fixture(t);
+  let confirm: NonNullable<Parameters<typeof galleryRequests.registerPrivateGalleryRequest>[0]['confirmSourceScan']> | undefined;
+  const register = galleryRequests.registerPrivateGalleryRequest;
+  t.mock.method(galleryRequests, 'registerPrivateGalleryRequest', options => { confirm = options.confirmSourceScan; return register(options); });
+  const controller = new AbortController(); await f.create({ signal: controller.signal }); assert.ok(confirm);
+  let finish!: () => void;
+  t.mock.method(dialog, 'showMessageBox', async () => { await new Promise<void>(resolve => { finish = resolve; }); return { response: 0 }; });
+  const pending = confirm(1, false); controller.abort(); finish(); await assert.rejects(pending);
+});
+
+test('source scan owns and drains native confirmation after its private window closes', async t => {
+  const f = fixture(t);
+  const temporary = path.resolve(__dirname, '../tmp'); await fs.mkdir(temporary, { recursive: true });
+  const root = await fs.mkdtemp(path.join(temporary, 'browser-scan-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, 'synthetic.mp4'), 'Synthetic candidate video');
+  t.mock.method(f.hub, 'readCatalogue', async () => ({ images: [], inputDirs: { 0: { path: root, watch: false } } }));
+  const browser = await f.create(); const window = windows[0];
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  const sources = await invokeHandlers.get('private-gallery-sources')!(event) as any;
+  t.mock.method(dialog, 'showOpenDialog', async (owner: unknown, options: any) => {
+    assert.equal(owner, window); assert.equal(options.title, 'Allow source folder access');
+    return { canceled: false, filePaths: [root] };
+  });
+  let finish!: () => void; let start!: () => void;
+  const ready = new Promise<void>(resolve => { start = resolve; });
+  t.mock.method(dialog, 'showMessageBox', async (owner: unknown, options: any) => {
+    assert.equal(owner, window); assert.equal(options.title, 'Import discovered videos?');
+    start(); await new Promise<void>(resolve => { finish = resolve; }); return { response: 0 };
+  });
+  const work = invokeHandlers.get('private-gallery-scan-source')!(event, sources.items[0].id); await ready;
+  let closed = false; const closing = browser.close().then(() => { closed = true; });
+  assert.equal(window.destroyed, true); assert.equal(invokeHandlers.size, 0);
+  await Promise.resolve(); assert.equal(closed, false); finish();
+  assert.deepEqual(await work, { status: 'unavailable' }); await closing;
+  assert.equal(browser.status.cleanupFailed, false);
 });

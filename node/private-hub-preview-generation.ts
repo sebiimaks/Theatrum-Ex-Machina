@@ -5,7 +5,7 @@ import { createPrivatePreviewSet, privatePreviewSetMemberId, publishPrivatePrevi
   type PrivatePreviewSet } from './private-hub-preview-set';
 import { isPrivateMediaProcessCleanupFailure, streamPrivateMediaProcess } from './private-media-process';
 import { buildPrivatePreviewPlan, parsePrivateProbe, privateProbeCommand, validatePrivateJpeg,
-  type PrivateMediaCommandPlan } from './private-preview-plan';
+  type PrivateMediaCommandPlan, type PrivateVideoMetadata } from './private-preview-plan';
 import { isPrivatePreviewSource, isPrivatePreviewSourceCleanupFailure, type PrivatePreviewSource } from './private-preview-source';
 
 let generating = false;
@@ -20,6 +20,8 @@ export interface PrivatePreviewGenerationOptions {
   signal?: AbortSignal;
   /** Session regeneration must preserve the authenticated catalogue's strip geometry. */
   expectedScreenCount?: number;
+  /** Main-only bounded metadata, delivered after probe and preview-plan validation. */
+  onMetadata?: (metadata: PrivateVideoMetadata) => void;
 }
 
 /**
@@ -32,11 +34,13 @@ export async function generatePrivateHubPreviews(
   store: PrivateHubStore, source: PrivatePreviewSource, settings: ScreenshotSettings,
   options: PrivatePreviewGenerationOptions,
 ): Promise<PrivatePreviewSet> {
-  if (generating || !isPrivatePreviewSource(source) || !options || typeof options.isCurrent !== 'function') { throw unavailable(); }
+  if (generating || !isPrivatePreviewSource(source) || !options || typeof options.isCurrent !== 'function'
+    || (options.onMetadata !== undefined && typeof options.onMetadata !== 'function')) { throw unavailable(); }
   const screenshotSettings = Object.freeze({ ...settings });
   const authorized = options.isCurrent;
   const callerSignal = options.signal;
   const expectedScreenCount = options.expectedScreenCount;
+  const onMetadata = options.onMetadata;
   if (expectedScreenCount !== undefined && (!Number.isSafeInteger(expectedScreenCount) || expectedScreenCount < 1 || expectedScreenCount > 255)) {
     throw unavailable();
   }
@@ -163,9 +167,14 @@ export async function generatePrivateHubPreviews(
     check();
     const probe = await collect(privateProbeCommand());
     let plan: ReturnType<typeof buildPrivatePreviewPlan>;
-    try { check(); plan = buildPrivatePreviewPlan(parsePrivateProbe(probe), screenshotSettings); }
+    let metadata: PrivateVideoMetadata;
+    try { check(); metadata = parsePrivateProbe(probe); plan = buildPrivatePreviewPlan(metadata, screenshotSettings); }
     finally { discard(probe); }
     if (expectedScreenCount !== undefined && plan.screenCount !== expectedScreenCount) { throw unavailable(); }
+    check();
+    onMetadata?.(Object.freeze({ duration: metadata.duration, width: metadata.width, height: metadata.height,
+      fps: metadata.fps, hasAudio: metadata.hasAudio }));
+    check();
     const set = createPrivatePreviewSet(source.hash, plan.width, plan.height, plan.screenCount, !!plan.clip);
     await saveImage(set, 'thumbnail', await image(plan.thumbnail, plan.width, plan.height));
     const frames = async function* (): AsyncGenerator<Buffer> {

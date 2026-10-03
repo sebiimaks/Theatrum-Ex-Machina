@@ -8,6 +8,7 @@ const MAX_SOURCE_DIMENSION = 32_768;
 const MAX_SOURCE_PIXELS = 268_435_456;
 const MAX_FRAMES = 255;
 const VIDEO_RATE = 30;
+const MAX_SOURCE_FPS = 1_000;
 
 export interface PrivateMediaCommandPlan {
   readonly tool: 'ffmpeg' | 'ffprobe';
@@ -20,6 +21,8 @@ export interface PrivateVideoMetadata {
   readonly width: number;
   readonly height: number;
   readonly hasAudio: boolean;
+  /** Zero means the source did not provide a usable average frame rate. */
+  readonly fps: number;
 }
 export interface PrivateFramePlan extends PrivateMediaCommandPlan { readonly timestamp: number; }
 export interface PrivateClipSnippetPlan extends PrivateFramePlan {
@@ -48,6 +51,18 @@ function decimal(value: number): string { return value.toFixed(6).replace(/\.?0+
 function boundedNumber(value: unknown, minimum: number, maximum: number): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= minimum && value <= maximum;
 }
+function frameRate(value: unknown): number {
+  let rate: unknown = value;
+  if (typeof value === 'string') {
+    if (value.length > 64) { return 0; }
+    if (/^\d+(?:\.\d+)?$/.test(value)) { rate = Number(value); }
+    else if (/^\d+\/\d+$/.test(value)) {
+      const [numerator, denominator] = value.split('/').map(Number);
+      rate = Number.isSafeInteger(numerator) && Number.isSafeInteger(denominator) && denominator > 0 ? numerator / denominator : 0;
+    } else { return 0; }
+  }
+  return boundedNumber(rate, 0, MAX_SOURCE_FPS) ? rate : 0;
+}
 function dimensions(width: unknown, height: unknown): width is number {
   return boundedNumber(width, 1, MAX_SOURCE_DIMENSION) && boundedNumber(height, 1, MAX_SOURCE_DIMENSION)
     && Number.isInteger(width) && Number.isInteger(height) && width * height <= MAX_SOURCE_PIXELS;
@@ -67,7 +82,7 @@ function scale(width: number, height: number): string {
 /** Numeric and codec information only: no path, tags, chapters, or packet payloads. */
 export function privateProbeCommand(): PrivateMediaCommandPlan {
   return command('ffprobe', ['-hide_banner', '-loglevel', 'error', '-max_alloc', '268435456', ...source(),
-    '-show_entries', 'format=duration:stream=codec_type,width,height,duration:stream_disposition=attached_pic', '-of', 'json', '-i', 'fd:'], 64 * 1024, 30_000);
+    '-show_entries', 'format=duration:stream=codec_type,width,height,duration,avg_frame_rate:stream_disposition=attached_pic', '-of', 'json', '-i', 'fd:'], 64 * 1024, 30_000);
 }
 
 export function parsePrivateProbe(bytes: Buffer): PrivateVideoMetadata {
@@ -75,7 +90,7 @@ export function parsePrivateProbe(bytes: Buffer): PrivateVideoMetadata {
     if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > 64 * 1024) { throw invalid(); }
     const value = JSON.parse(bytes.toString('utf8')) as {
       format?: { duration?: unknown };
-      streams?: { codec_type?: unknown; width?: unknown; height?: unknown; duration?: unknown; disposition?: { attached_pic?: unknown } }[];
+      streams?: { codec_type?: unknown; width?: unknown; height?: unknown; duration?: unknown; avg_frame_rate?: unknown; disposition?: { attached_pic?: unknown } }[];
     };
     if (!value || !Array.isArray(value.streams) || value.streams.length > 32) { throw invalid(); }
     const streams = value.streams.filter(stream => stream && typeof stream === 'object');
@@ -84,7 +99,7 @@ export function parsePrivateProbe(bytes: Buffer): PrivateVideoMetadata {
     const rawDuration = value.format?.duration ?? video.duration;
     const duration = typeof rawDuration === 'string' && /^\d+(?:\.\d+)?$/.test(rawDuration) ? Number(rawDuration) : rawDuration;
     if (!boundedNumber(duration, 0.001, MAX_DURATION)) { throw invalid(); }
-    return Object.freeze({ duration, width: video.width, height: video.height as number, hasAudio: streams.some(stream => stream.codec_type === 'audio') });
+    return Object.freeze({ duration, width: video.width, height: video.height as number, fps: frameRate(video.avg_frame_rate), hasAudio: streams.some(stream => stream.codec_type === 'audio') });
   } catch { throw invalid(); }
 }
 
@@ -97,7 +112,7 @@ function frame(timestamp: number, width: number, height: number): PrivateFramePl
 /** Plans contain only fixed codecs/filters and bounded numbers; never input/output filesystem paths. */
 export function buildPrivatePreviewPlan(metadata: PrivateVideoMetadata, settings: ScreenshotSettings): PrivatePreviewPlan {
   if (!metadata || !dimensions(metadata.width, metadata.height) || !boundedNumber(metadata.duration, 0.001, MAX_DURATION)
-    || typeof metadata.hasAudio !== 'boolean' || !settings || !HEIGHTS.has(settings.height) || !HEIGHTS.has(settings.clipHeight)
+    || typeof metadata.hasAudio !== 'boolean' || !boundedNumber(metadata.fps, 0, MAX_SOURCE_FPS) || !settings || !HEIGHTS.has(settings.height) || !HEIGHTS.has(settings.clipHeight)
     || typeof settings.fixed !== 'boolean' || !boundedNumber(settings.n, settings.fixed ? 3 : 1, settings.fixed ? 30 : 1440)
     || (settings.fixed && !Number.isInteger(settings.n)) || !Number.isInteger(settings.clipSnippets)
     || !boundedNumber(settings.clipSnippets, 0, 15) || !boundedNumber(settings.clipSnippetLength, 1, 5)) { throw invalid(); }

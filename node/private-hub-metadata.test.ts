@@ -6,7 +6,7 @@ import { NewImageElement, type FinalObject } from '../interfaces/final-object.in
 import { PrivateHubSession } from './private-hub-session';
 import { PrivateHubStore } from './private-hub-store';
 import { writePrivateHubCatalogue } from './private-hub-catalogue';
-import { privateVideoRevision, type PrivateVideoMetadataUpdate } from './private-hub-metadata';
+import { privateVideoRevision, snapshotPrivateVideoMetadataUpdate, type PrivateVideoMetadataUpdate } from './private-hub-metadata';
 import { capturePrivatePreviewSource } from './private-preview-source';
 import { createPrivatePreviewSet } from './private-hub-preview-set';
 import * as previewGeneration from './private-hub-preview-generation';
@@ -348,4 +348,123 @@ test('active preview generation reports metadata busy without queuing or locking
   assert.equal(f.session.isCurrent(f.generation), true);
   finish.resolve(); await generating;
   assert.equal((await f.session.updateVideoMetadata(f.generation, f.update(), current)).status, 'saved');
+});
+
+test('all explicit ratings persist through encrypted transactions and reopen while unrelated values remain exact', async t => {
+  const f = await fixture(t);
+  const expected = structuredClone(f.catalogue);
+  for (const rating of [5, 0, 1, 2, 3, 4]) {
+    const request = { ...f.update(), revision: privateVideoRevision(expected.images[1]),
+      notes: expected.images[1].notes!, tags: [...expected.images[1].tags!], rating };
+    const result = await f.session.updateVideoMetadata(f.generation, request, current);
+    assert.equal(result.status, 'saved');
+    expected.images[1].stars = (rating + 0.5) as typeof expected.images[1]['stars'];
+    assert.deepEqual(await f.readStored(), expected, 'only the selected indexed row rating changes');
+  }
+  const combined = { ...f.update(), revision: privateVideoRevision(expected.images[1]), rating: 5, tags: ['Nature > Birds'] };
+  assert.equal((await f.session.updateVideoMetadata(f.generation, combined, current)).status, 'saved');
+  expected.images[1] = { ...expected.images[1], stars: 5.5, notes: combined.notes, tags: [...combined.tags] };
+  assert.deepEqual(await f.readStored(), expected);
+  await f.session.lock();
+  await f.session.unlock(f.directory, password);
+  assert.deepEqual(await f.readStored(), expected);
+  for (const name of await fs.readdir(f.directory)) {
+    const bytes = await fs.readFile(path.join(f.directory, name));
+    for (const plaintext of [marker, password, 'Nature > Birds', f.catalogue.inputDirs[0].path]) {
+      assert.equal(bytes.includes(Buffer.from(plaintext)), false);
+    }
+  }
+});
+
+test('omitted rating preserves absent and malformed legacy stars exactly on notes and tags edits', async t => {
+  const f = await fixture(t);
+  for (const stars of [undefined, null, '5.5', -1, 0, 7, { future: 'rating' }, 0.5, 5.5]) {
+    const catalogue = structuredClone(f.catalogue);
+    if (stars === undefined) { delete (catalogue.images[1] as unknown as Record<string, unknown>).stars; }
+    else { Object.assign(catalogue.images[1], { stars }); }
+    await f.session.writeCatalogue(f.generation, catalogue);
+    const request = { ...f.update(), revision: privateVideoRevision(catalogue.images[1]), tags: ['New > Tag'] };
+    assert.equal(Object.hasOwn(request, 'rating'), false);
+    assert.equal((await f.session.updateVideoMetadata(f.generation, request, current)).status, 'saved');
+    catalogue.images[1].notes = request.notes; catalogue.images[1].tags = request.tags;
+    assert.deepEqual(await f.readStored(), catalogue);
+  }
+});
+
+test('rating metadata requests reject malformed properties and tag accessors before reading storage', async t => {
+  const f = await fixture(t);
+  let getters = 0;
+  const base = f.update();
+  const values: unknown[] = [undefined, null, '5', true, -1, 6, 0.5, NaN, Infinity, {}, []]
+    .map(rating => ({ ...base, rating }));
+  values.push({ ...base, rating: 5, favourite: true }, { ...base, [Symbol('extra')]: true });
+  values.push(Object.assign(Object.create({ rating: 5 }), base));
+  for (const key of ['index', 'revision', 'notes', 'tags', 'rating']) {
+    const accessor = { ...base };
+    Object.defineProperty(accessor, key, { enumerable: true, get: () => { getters++; return 5; } });
+    values.push(accessor);
+    const hidden = { ...base };
+    Object.defineProperty(hidden, key, { enumerable: false, value: 5 }); values.push(hidden);
+  }
+  const accessorTags = ['tag'];
+  Object.defineProperty(accessorTags, '0', { enumerable: true, get: () => { getters++; return 'tag'; } });
+  const iteratorTags = ['tag'];
+  Object.defineProperty(iteratorTags, Symbol.iterator, { value: () => { getters++; throw new Error('No iterators'); } });
+  for (const tags of [accessorTags, iteratorTags, Object.assign(['tag'], { extra: true }), Array(1)]) {
+    values.push({ ...base, tags, rating: 5 });
+  }
+  const reads = t.mock.method(f.store, 'readRecord', async () => { assert.fail('Invalid requests cannot enter the storage queue'); });
+  for (const value of values) {
+    assert.deepEqual(await f.session.updateVideoMetadata(f.generation, value as PrivateVideoMetadataUpdate, current), { status: 'invalid' });
+  }
+  assert.equal(reads.mock.callCount(), 0); assert.equal(getters, 0);
+  assert.equal(f.session.isCurrent(f.generation), true);
+  const plain = snapshotPrivateVideoMetadataUpdate(base)!;
+  assert.equal(Object.hasOwn(plain, 'rating'), false);
+  assert.equal(snapshotPrivateVideoMetadataUpdate({ ...base, rating: 0 })?.rating, 0);
+});
+
+test('queued rating updates detach the rating scalar and reject concurrent rating changes by full-row revision', async t => {
+  const f = await fixture(t);
+  const held = await holdCatalogueRead(t, f.store);
+  const reading = f.session.readCatalogue(f.generation); await held.ready.promise;
+  const request = { ...f.update(), rating: 5 };
+  const editing = f.session.updateVideoMetadata(f.generation, request, current);
+  request.rating = 0;
+  held.release.resolve(); await reading;
+  assert.equal((await editing).status, 'saved');
+  const saved = await f.readStored(); assert.equal(saved.images[1].stars, 5.5);
+  assert.deepEqual(await f.session.updateVideoMetadata(f.generation, { ...f.update(), rating: 2 }, current), { status: 'conflict' });
+  assert.deepEqual(await f.readStored(), saved);
+});
+
+test('cancelled queued rating edits preserve the existing encrypted catalogue', async t => {
+  const f = await fixture(t);
+  const held = await holdCatalogueRead(t, f.store);
+  const reading = f.session.readCatalogue(f.generation); await held.ready.promise;
+  let authorized = true;
+  const editing = f.session.updateVideoMetadata(f.generation, { ...f.update(), rating: 5 }, () => authorized);
+  const rejected = assert.rejects(editing);
+  authorized = false; held.release.resolve();
+  await Promise.all([reading, rejected]);
+  assert.deepEqual(await f.readStored(), f.catalogue);
+  assert.equal(f.session.isCurrent(f.generation), true);
+});
+
+test('rating publication drains on lock and committed rating is retained on reopen without stale success', async t => {
+  const f = await fixture(t);
+  const committed = deferred(); const release = deferred();
+  const write = f.store.writeRecord.bind(f.store);
+  t.mock.method(f.store, 'writeRecord', async (...args: Parameters<PrivateHubStore['writeRecord']>) => {
+    await write(...args); committed.resolve(); await release.promise;
+  });
+  t.after(() => release.resolve());
+  const editing = f.session.updateVideoMetadata(f.generation, { ...f.update(), rating: 5 }, current);
+  const rejected = assert.rejects(editing);
+  await committed.promise;
+  let drained = false; const locking = f.session.lock().then(() => { drained = true; });
+  await Promise.resolve(); assert.equal(drained, false);
+  release.resolve(); await Promise.all([rejected, locking]);
+  const reopened = await f.session.unlock(f.directory, password);
+  assert.equal(reopened.catalogue.images[1].stars, 5.5);
 });

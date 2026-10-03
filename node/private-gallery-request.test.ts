@@ -12,6 +12,8 @@ import { PrivateHubStore } from './private-hub-store';
 import { exportPrivateHubToPlaintext, isPrivateHubPlaintextExportCleanupFailure } from './private-hub-plaintext-export';
 import { privateVideoRevision } from './private-hub-metadata';
 import { createPrivatePreviewSet } from './private-hub-preview-set';
+import { PrivateSourcePlayback } from './private-source-playback';
+import * as sourceScan from './private-source-scan';
 import { capturePrivatePreviewSource, isPrivatePreviewSourceCleanupFailure } from './private-preview-source';
 
 type Handler = (event: any, ...args: unknown[]) => Promise<any>;
@@ -46,7 +48,7 @@ const image = (index: number): ImageElement => ({ ...NewImageElement(), hash: `h
   locations: [{ inputSource: 0, fileName: 'private-source.mp4', partialPath: '/private' }] });
 function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENTRY,
   chooseSourceDirectory?: (root: string) => Promise<string | undefined>,
-  copyDestination: (() => Promise<string | undefined>) | null = async () => '/synthetic-copy') {
+  copyDestination: (() => Promise<string | undefined>) | null = async () => '/synthetic-copy', playback?: PrivateSourcePlayback) {
   const contents = new Contents(); contents.url = initialUrl; contents.mainFrame.url = initialUrl;
   const controller = new AbortController();
   let current = true;
@@ -75,11 +77,24 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
     assert.equal(source.isCurrent(), true);
     return createPrivatePreviewSet(source.hash, 256, 144, 3, true);
   };
+  let relocating: PrivateHubSession['relocateSource'] = async (_generation, review, current) => {
+    assert.equal(current(), true); assert.equal(review.isCurrent(), true); return { status: 'relocated' };
+  };
+  let importing: PrivateHubSession['importVideo'] = async () => ({ status: 'imported', index: 2 });
+  let adding: PrivateHubSession['addSource'] = async (_generation, review, current) => {
+    assert.equal(current(), true); assert.equal(review.isCurrent(), true); return { status: 'added' };
+  };
+  let choosingNewSource: () => Promise<string | undefined> = async () => undefined;
+  let choosingImport: (root: string) => Promise<string | readonly string[] | undefined> = async () => undefined;
+  let choosingLocation: (root: string) => Promise<string | undefined> = async () => undefined;
+  let confirmingLocation: (root: string, videoCount: number) => Promise<boolean> = async () => true;
+  let confirmingScan: (count: number, more: boolean) => Promise<boolean> = async () => true;
   let writing: PrivateHubSession['updateVideoMetadata'] = async (generation, request, current) => {
     assert.equal(generation, 7); assert.equal(current(), true);
     const selected = images[request.index];
     if (!selected || privateVideoRevision(selected) !== request.revision) { return { status: 'conflict' }; }
-    images[request.index] = { ...selected, notes: request.notes, tags: [...request.tags] };
+    images[request.index] = { ...selected, notes: request.notes, tags: [...request.tags],
+      ...(Object.hasOwn(request, 'rating') ? { stars: (request.rating! + 0.5) as ImageElement['stars'] } : {}) };
     return { status: 'saved', image: images[request.index] };
   };
   const hub = {
@@ -91,6 +106,9 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
       edits.push(args[1]); return writing(...args);
     },
     generatePreviews: (...args: Parameters<PrivateHubSession['generatePreviews']>) => generating(...args),
+    addSource: (...args: Parameters<PrivateHubSession['addSource']>) => adding(...args),
+    importVideo: (...args: Parameters<PrivateHubSession['importVideo']>) => importing(...args),
+    relocateSource: (...args: Parameters<PrivateHubSession['relocateSource']>) => relocating(...args),
     readProtection: () => readingProtection(),
     touchIdStatus: async () => 'disabled',
     enableTouchId: async () => 'enabled',
@@ -100,7 +118,12 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
     createUnprotectedCopy: (...args: Parameters<PrivateHubSession['createUnprotectedCopy']>) => copying(...args),
   } as unknown as PrivateHubSession;
   const options = { contents: contents as unknown as WebContents, hub, generation: 7,
-    isCurrent: () => current, onLock: () => lockAction(), chooseSourceDirectory,
+    isCurrent: () => current, onLock: () => lockAction(), chooseSourceDirectory, playback,
+    chooseSourceLocation: (root: string) => choosingLocation(root),
+    chooseImportVideo: (root: string) => choosingImport(root),
+    chooseNewSourceDirectory: () => choosingNewSource(),
+    confirmSourceLocation: (root: string, videoCount: number) => confirmingLocation(root, videoCount),
+    confirmSourceScan: (count: number, more: boolean) => confirmingScan(count, more),
     onProtectionChanged: (value: unknown) => applyingProtection(value),
     chooseUnprotectedCopyDestination: copyDestination ? () => choosingCopyDestination!() : undefined };
   const dispose = register(options);
@@ -110,6 +133,9 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
     else { await dispose(); }
     assert.equal(handlers.size, 0); assert.equal(ipcMain.listenerCount(channels.lock), 0);
     assert.equal(ipcMain.listenerCount(channels.cancelUnprotectedCopy), 0);
+    assert.equal(ipcMain.listenerCount(channels.cancelSourceConnection), 0);
+    assert.equal(ipcMain.listenerCount(channels.stopOriginal), 0);
+    assert.equal(ipcMain.listenerCount(channels.cancelImport), 0);
   });
   const list = handlers.get(channels.list)!;
   const detail = handlers.get(channels.detail)!;
@@ -117,6 +143,25 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
   const regenerate = handlers.get(channels.regenerate)!;
   const event = { sender: contents, senderFrame: contents.mainFrame };
   return { contents, controller, options, event, list, detail, save, regenerate, dispose, edits,
+    playOriginal: handlers.get(channels.playOriginal)!,
+    stopOriginal: (...args: unknown[]) => ipcMain.emit(channels.stopOriginal, event, ...args),
+    addSource: handlers.get(channels.addSource)!,
+    adding: (next: typeof adding) => { adding = next; },
+    chooseNewSource: (next: typeof choosingNewSource) => { choosingNewSource = next; },
+    sources: handlers.get(channels.sources)!, connectSource: handlers.get(channels.connectSource)!,
+    disconnectSource: handlers.get(channels.disconnectSource)!,
+    relocateSource: handlers.get(channels.relocateSource)!,
+    importVideo: handlers.get(channels.importVideo)!,
+    scanSource: handlers.get(channels.scanSource)!,
+    confirmScan: (next: typeof confirmingScan) => { confirmingScan = next; },
+    importProgress: handlers.get(channels.importProgress)!,
+    importing: (next: typeof importing) => { importing = next; },
+    chooseImport: (next: typeof choosingImport) => { choosingImport = next; },
+    cancelImport: (...args: unknown[]) => ipcMain.emit(channels.cancelImport, event, ...args),
+    relocate: (next: typeof relocating) => { relocating = next; },
+    chooseLocation: (next: typeof choosingLocation) => { choosingLocation = next; },
+    confirmLocation: (next: typeof confirmingLocation) => { confirmingLocation = next; },
+    cancelSource: (...args: unknown[]) => ipcMain.emit(channels.cancelSourceConnection, event, ...args),
     changePassword: handlers.get(channels.changePassword)!,
     createUnprotectedCopy: handlers.get(channels.createUnprotectedCopy)!,
     copying: (next: typeof copying) => { copying = next; },
@@ -155,7 +200,7 @@ test('pages only display metadata with opaque selection IDs and excludes every s
   assert.equal((await f.page()).items[0].id, item.id);
 });
 
-async function sourceFixture(t: TestContext) {
+async function sourceFixture(t: TestContext, playback?: PrivateSourcePlayback) {
   const temporary = path.resolve(__dirname, '../tmp');
   await fs.mkdir(temporary, { recursive: true });
   const root = await fs.mkdtemp(path.join(temporary, 'gallery-source-'));
@@ -164,7 +209,7 @@ async function sourceFixture(t: TestContext) {
   await fs.writeFile(path.join(root, images[0].fileName), 'Synthetic source descriptor contents');
   let picks = 0;
   let choosing = async (_root: string): Promise<string | undefined> => root;
-  const f = fixture(t, images, ENTRY, requested => { picks++; assert.equal(requested, root); return choosing(requested); });
+  const f = fixture(t, images, ENTRY, requested => { picks++; assert.equal(requested, root); return choosing(requested); }, undefined, playback);
   let catalogue = { images, inputDirs: { 0: { path: root } } } as unknown as FinalObject;
   f.read(async () => catalogue);
   const id = (await f.page()).items[0].id;
@@ -174,6 +219,38 @@ async function sourceFixture(t: TestContext) {
     catalogue: (next: FinalObject) => { catalogue = next; },
     run: (revision = item.revision) => f.regenerate(f.event, { id, revision }),
   };
+}
+
+async function relocationFixture(t: TestContext, playback?: PrivateSourcePlayback) {
+  const temporary = path.resolve(__dirname, '../tmp');
+  await fs.mkdir(temporary, { recursive: true });
+  const root = await fs.mkdtemp(path.join(temporary, 'gallery-relocation-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const previousRoot = path.join(root, 'previous'); const nextRoot = path.join(root, 'next');
+  await fs.mkdir(previousRoot); await fs.mkdir(nextRoot);
+  const content = 'Synthetic relocation source';
+  for (const directory of [previousRoot, nextRoot]) { await fs.writeFile(path.join(directory, 'synthetic.mp4'), content); }
+  const images = [{ ...image(0), fileName: 'synthetic.mp4', partialPath: '', locations: undefined,
+    fileSize: Buffer.byteLength(content), screens: 3 }];
+  let catalogue = { images, inputDirs: { 0: { path: previousRoot, watch: true } } } as unknown as FinalObject;
+  let picks = 0; let confirmations = 0; let writes = 0;
+  const f = fixture(t, images, ENTRY, async root => root, undefined, playback);
+  f.read(async () => catalogue);
+  f.chooseLocation(async old => { assert.equal(old, previousRoot); picks++; return nextRoot; });
+  f.confirmLocation(async (next, count) => { assert.equal(next, nextRoot); assert.equal(count, 1); confirmations++; return true; });
+  f.relocate(async (_generation, review, current) => {
+    assert.equal(current(), true); assert.equal(review.matchesCatalogue(catalogue), true);
+    assert.equal(await review.validate(), true);
+    writes++; catalogue = { ...catalogue, inputDirs: { ...catalogue.inputDirs,
+      0: { ...catalogue.inputDirs[0], path: review.newRoot } } };
+    return { status: 'relocated' };
+  });
+  const videoId = (await f.page()).items[0].id;
+  const sourceId = (await f.sources(f.event)).items[0].id;
+  return { ...f, root, previousRoot, nextRoot, videoId, sourceId,
+    picks: () => picks, confirmations: () => confirmations, writes: () => writes,
+    catalogue: () => catalogue, replaceCatalogue: (value: FinalObject) => { catalogue = value; },
+    run: () => f.relocateSource(f.event, sourceId) };
 }
 
 function failSourceDescriptorClose(t: TestContext, file: string): () => Promise<void> {
@@ -1210,4 +1287,1433 @@ test('Touch ID bridge revokes native lifetime immediately and waits for late enr
   let drained = false; const disposal = f.dispose().then(() => { drained = true; });
   assert.equal(signal.aborted, true); await Promise.resolve(); assert.equal(drained, false);
   release('enabled'); assert.deepEqual(await work, { outcome: 'unavailable' }); await disposal;
+});
+
+
+test('source relocation saves only the reviewed location, expires every selection and requires explicit reconnection', async t => {
+  const f = await relocationFixture(t);
+  assert.equal((await f.connectSource(f.event, f.sourceId)).status, 'connected');
+  const previous = f.catalogue();
+  assert.deepEqual(await f.run(), { status: 'relocated' });
+  assert.equal(f.picks(), 1); assert.equal(f.confirmations(), 1); assert.equal(f.writes(), 1);
+  assert.deepEqual(f.catalogue().images, previous.images);
+  assert.equal(f.catalogue().inputDirs[0].watch, true);
+  assert.equal(f.catalogue().inputDirs[0].path, f.nextRoot);
+  assert.deepEqual(await f.detail(f.event, f.videoId), { status: 'unavailable' });
+  assert.deepEqual(await f.connectSource(f.event, f.sourceId), { status: 'unavailable' });
+  const next = (await f.sources(f.event)).items[0];
+  assert.equal(next.connected, false); assert.notEqual(next.id, f.sourceId);
+  assert.notEqual((await f.page()).items[0].id, f.videoId);
+});
+
+test('relocation rejects foreign frames, malformed IDs and missing native controls before opening a picker', async t => {
+  const f = await relocationFixture(t);
+  for (const args of [[], [null], [{}], [f.previousRoot], ['a'.repeat(32)], [f.sourceId, 'extra']]) {
+    assert.deepEqual(await f.relocateSource(f.event, ...args), { status: 'unavailable' });
+  }
+  assert.deepEqual(await f.relocateSource({ ...f.event, senderFrame: { ...f.contents.mainFrame } }, f.sourceId), { status: 'unavailable' });
+  const picker = f.options.chooseSourceLocation;
+  f.options.chooseSourceLocation = undefined!;
+  assert.deepEqual(await f.run(), { status: 'unavailable' });
+  f.options.chooseSourceLocation = picker; f.options.confirmSourceLocation = undefined!;
+  assert.deepEqual(await f.run(), { status: 'unavailable' });
+  assert.equal(f.picks(), 0); assert.equal(f.writes(), 0);
+});
+
+for (const stage of ['picker', 'confirmation'] as const) {
+  test(`relocation ${stage} cancellation preserves catalogue and drains late native results`, async t => {
+    const f = await relocationFixture(t);
+    let finish!: () => void; let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const held = async () => { started(); await new Promise<void>(resolve => { finish = resolve; }); };
+    if (stage === 'picker') { f.chooseLocation(async () => { await held(); return f.nextRoot; }); }
+    else { f.confirmLocation(async () => { await held(); return true; }); }
+    const work = f.run(); await ready;
+    assert.deepEqual(await f.sources(f.event), { status: 'busy' });
+    assert.deepEqual(await f.page(), { status: 'busy' });
+    assert.deepEqual(await f.run(), { status: 'busy' });
+    assert.deepEqual(await f.disconnectSource(f.event, f.sourceId), { status: 'busy' });
+    f.cancelSource('extra');
+    ipcMain.emit(channels.cancelSourceConnection, { ...f.event, senderFrame: { ...f.contents.mainFrame } });
+    f.cancelSource(); finish();
+    assert.deepEqual(await work, { status: 'cancelled' });
+    assert.equal(f.writes(), 0); assert.equal(f.catalogue().inputDirs[0].path, f.previousRoot);
+    assert.equal((await f.detail(f.event, f.videoId)).status, 'ready');
+  });
+
+  test(`relocation ${stage} drains on disposal and does not commit after its owner is revoked`, async t => {
+    const f = await relocationFixture(t);
+    let finish!: () => void; let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const held = async () => { started(); await new Promise<void>(resolve => { finish = resolve; }); };
+    if (stage === 'picker') { f.chooseLocation(async () => { await held(); return f.nextRoot; }); }
+    else { f.confirmLocation(async () => { await held(); return true; }); }
+    const work = f.run(); await ready;
+    let disposed = false; const disposal = f.dispose().then(() => { disposed = true; });
+    await Promise.resolve(); assert.equal(disposed, false); finish();
+    assert.deepEqual(await work, { status: 'unavailable' }); await disposal;
+    assert.equal(f.writes(), 0); assert.equal(f.confirmations(), 0);
+  });
+}
+
+test('relocation detects changed source identity before and after the picker without confirming', async t => {
+  const f = await relocationFixture(t);
+  const original = f.catalogue();
+  const changed = { ...original, inputDirs: { 0: { path: f.nextRoot, watch: true } } } as FinalObject;
+  f.replaceCatalogue(changed);
+  assert.deepEqual(await f.run(), { status: 'conflict' }); assert.equal(f.picks(), 0);
+  f.replaceCatalogue(original);
+  f.chooseLocation(async () => { f.replaceCatalogue(changed); return f.nextRoot; });
+  assert.deepEqual(await f.run(), { status: 'conflict' });
+  assert.equal(f.writes(), 0); assert.equal(f.confirmations(), 0);
+});
+
+test('relocation refuses unmatched files and native cancellation without changing grants or catalogue', async t => {
+  const f = await relocationFixture(t);
+  await f.connectSource(f.event, f.sourceId);
+  f.chooseLocation(async () => undefined);
+  assert.deepEqual(await f.run(), { status: 'cancelled' });
+  f.chooseLocation(async () => f.nextRoot);
+  f.confirmLocation(async () => false);
+  assert.deepEqual(await f.run(), { status: 'cancelled' });
+  f.confirmLocation(async () => { assert.fail('Mismatching source must not reach confirmation'); });
+  await fs.writeFile(path.join(f.nextRoot, 'synthetic.mp4'), 'wrong size');
+  assert.deepEqual(await f.run(), { status: 'source-unavailable' });
+  assert.equal(f.writes(), 0); assert.equal((await f.sources(f.event)).items[0].connected, true);
+});
+
+test('relocation rejects late catalogue conflict and discards a cancelled successful publication while expiring IDs', async t => {
+  const f = await relocationFixture(t);
+  f.relocate(async () => ({ status: 'conflict' }));
+  assert.deepEqual(await f.run(), { status: 'conflict' });
+  assert.deepEqual(await f.detail(f.event, f.videoId), { status: 'unavailable' });
+  const sourceId = (await f.sources(f.event)).items[0].id;
+  f.relocate(async () => { f.cancelSource(); return { status: 'relocated' }; });
+  assert.deepEqual(await f.relocateSource(f.event, sourceId), { status: 'cancelled' });
+  assert.deepEqual(await f.detail(f.event, f.videoId), { status: 'unavailable' });
+  assert.deepEqual(await f.connectSource(f.event, f.sourceId), { status: 'unavailable' });
+});
+
+test('relocation retires cached grants and IDs when publication succeeds but cancellation rejects completion', async t => {
+  const f = await relocationFixture(t);
+  await f.connectSource(f.event, f.sourceId);
+  const original = f.catalogue();
+  f.relocate(async (_generation, review) => {
+    f.replaceCatalogue({ ...original, inputDirs: { 0: { ...original.inputDirs[0], path: review.newRoot } } });
+    f.cancelSource();
+    throw new Error('Synthetic rejected completion after publication');
+  });
+  assert.deepEqual(await f.run(), { status: 'cancelled' });
+  assert.equal(f.catalogue().inputDirs[0].path, f.nextRoot);
+  assert.deepEqual(await f.detail(f.event, f.videoId), { status: 'unavailable' });
+  assert.deepEqual(await f.connectSource(f.event, f.sourceId), { status: 'unavailable' });
+  assert.equal((await f.sources(f.event)).items[0].connected, false);
+  // Restoring the former catalogue location must not revive its old session grant.
+  f.replaceCatalogue(original);
+  assert.equal((await f.sources(f.event)).items[0].connected, false);
+});
+
+test('relocation errors remain generic and helper review is disposed after a rejected storage operation', async t => {
+  const f = await relocationFixture(t);
+  let reviewed: import('./private-source-relocation').PrivateSourceRelocationReview | undefined;
+  f.relocate(async (_generation, review) => { reviewed = review; throw new Error('/private/catalogue/path'); });
+  assert.deepEqual(await f.run(), { status: 'source-unavailable' });
+  assert.ok(reviewed); assert.equal(reviewed.isCurrent(), false);
+  assert.equal(f.writes(), 0);
+});
+
+test('source folders return only generic labels, counts and opaque IDs without probing ungranted paths', async t => {
+  const f = fixture(t);
+  const catalogue = { images: [image(0), { ...image(1), locations: [
+    { inputSource: 0, fileName: 'one.mp4', partialPath: '/' },
+    { inputSource: 0, fileName: 'two.mp4', partialPath: '/' },
+    { inputSource: 7, fileName: 'three.mp4', partialPath: '/' },
+  ] }, { ...image(2), deleted: true }, { ...image(3), cleanName: '*FOLDER*' }], inputDirs: {
+    0: { path: '/secret/source' }, 1: { path: '/' }, 2: { path: 'relative' }, 7: { path: '/other/source' },
+  } } as unknown as FinalObject;
+  f.read(async () => catalogue);
+  const nativeFs: typeof import('node:fs') = require('node:fs');
+  const stat = t.mock.method(nativeFs, 'lstatSync', () => { throw new Error('No source probes expected'); });
+  const result = await f.sources(f.event);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.items.length, 2);
+  assert.deepEqual(result.items.map((item: any) => [item.title, item.videoCount, item.connected]),
+    [['Source folder 1', 2, false], ['Source folder 2', 1, false]]);
+  assert.match(result.items[0].id, /^[a-f0-9]{32}$/);
+  assert.deepEqual(Object.keys(result.items[0]).sort(), ['connected', 'id', 'title', 'videoCount']);
+  assert.doesNotMatch(JSON.stringify(result), /secret|other|inputDirs|inputSource|sourcePath|root|index|identity/);
+  assert.deepEqual(await f.sources(f.event), result, 'IDs remain stable within one unchanged source table');
+  assert.equal(stat.mock.callCount(), 0);
+  assert.equal(f.edits.length, 0);
+});
+
+test('source actions require issued IDs, exact arguments and the active main frame', async t => {
+  const f = await sourceFixture(t);
+  const listed = await f.sources(f.event);
+  const id = listed.items[0].id;
+  const foreign = { sender: f.contents, senderFrame: { ...f.contents.mainFrame } };
+  for (const action of [f.sources, f.connectSource, f.disconnectSource]) {
+    assert.deepEqual(await action(foreign, id), { status: 'unavailable' });
+  }
+  for (const args of [[], ['/secret/path'], [{ id }], [id, 'extra'], ['f'.repeat(32)], [f.id]]) {
+    assert.deepEqual(await f.connectSource(f.event, ...args), { status: 'unavailable' });
+    assert.deepEqual(await f.disconnectSource(f.event, ...args), { status: 'unavailable' });
+  }
+  assert.deepEqual(await f.sources(f.event, undefined), { status: 'unavailable' });
+  assert.equal(f.picks(), 0);
+});
+
+test('explicit source connection caches only the selected saved folder and disconnect revokes it', async t => {
+  const f = await sourceFixture(t);
+  const id = (await f.sources(f.event)).items[0].id;
+  const connected = await f.connectSource(f.event, id);
+  assert.deepEqual(connected, { status: 'connected', item: { id, title: 'Source folder 1', videoCount: 1, connected: true } });
+  assert.equal(f.picks(), 1);
+  assert.equal((await f.sources(f.event)).items[0].connected, true);
+  assert.equal((await f.connectSource(f.event, id)).status, 'connected');
+  assert.equal(f.picks(), 1);
+  const disconnected = await f.disconnectSource(f.event, id);
+  assert.equal(disconnected.status, 'disconnected'); assert.equal(disconnected.item.connected, false);
+  assert.equal((await f.sources(f.event)).items[0].connected, false);
+  assert.equal((await f.connectSource(f.event, id)).status, 'connected');
+  assert.equal(f.picks(), 2);
+  assert.equal(f.edits.length, 0);
+});
+
+test('connection uses the shared operation gate and cancellation ignores foreign and malformed messages', async t => {
+  const f = await sourceFixture(t);
+  const id = (await f.sources(f.event)).items[0].id;
+  let finish!: (value: string) => void;
+  let began!: () => void;
+  const started = new Promise<void>(resolve => { began = resolve; });
+  f.choose(() => { began(); return new Promise(resolve => { finish = resolve; }); });
+  const connecting = f.connectSource(f.event, id);
+  await started;
+  const reads = f.reads();
+  assert.deepEqual(await f.sources(f.event), { status: 'busy' });
+  assert.deepEqual(await f.disconnectSource(f.event, id), { status: 'busy' });
+  assert.deepEqual(await f.connectSource(f.event, id), { status: 'busy' });
+  assert.deepEqual(await f.protection(f.event), { status: 'busy' });
+  assert.deepEqual(await f.page(), { status: 'busy' });
+  assert.equal(f.reads(), reads);
+  ipcMain.emit(channels.cancelSourceConnection, { sender: f.contents, senderFrame: { ...f.contents.mainFrame } });
+  f.cancelSource('extra');
+  finish(f.root);
+  assert.equal((await connecting).status, 'connected');
+});
+
+for (const ending of ['cancel', 'lock', 'navigate', 'abort', 'dispose'] as const) {
+  test(`late source selection after ${ending} cannot grant access and disposal drains its native picker`, async t => {
+    const f = await sourceFixture(t);
+    const id = (await f.sources(f.event)).items[0].id;
+    let finish!: (value: string) => void;
+    let began!: () => void;
+    const started = new Promise<void>(resolve => { began = resolve; });
+    f.choose(() => { began(); return new Promise(resolve => { finish = resolve; }); });
+    const connecting = f.connectSource(f.event, id);
+    await started;
+    if (ending === 'cancel') { f.cancelSource(); }
+    if (ending === 'lock') { f.lock(); }
+    if (ending === 'navigate') { f.contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true, url: ENTRY + '#new' }); }
+    if (ending === 'abort') { f.controller.abort(); }
+    let drained = false;
+    const disposal = ending === 'cancel' ? undefined : f.dispose().then(() => { drained = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(drained, false);
+    finish(f.root);
+    assert.deepEqual(await connecting, { status: ending === 'cancel' ? 'cancelled' : 'unavailable' });
+    await disposal;
+    if (ending === 'cancel') {
+      assert.equal((await f.sources(f.event)).items[0].connected, false);
+      f.choose(async () => f.root);
+      assert.equal((await f.connectSource(f.event, id)).status, 'connected');
+      assert.equal(f.picks(), 2, 'cancelled picker did not cache a grant');
+    }
+  });
+}
+
+test('changed saved source identity conflicts before selection and after a late native picker result', async t => {
+  const f = await sourceFixture(t);
+  const id = (await f.sources(f.event)).items[0].id;
+  const original = { images: f.images, inputDirs: { 0: { path: f.root } } } as unknown as FinalObject;
+  const changed = { images: f.images, inputDirs: { 0: { path: f.root + '-replaced' } } } as unknown as FinalObject;
+  f.catalogue(changed);
+  assert.deepEqual(await f.connectSource(f.event, id), { status: 'conflict' });
+  assert.equal(f.picks(), 0);
+  f.catalogue(original);
+  f.choose(async () => { f.catalogue(changed); return f.root; });
+  assert.deepEqual(await f.connectSource(f.event, id), { status: 'conflict' });
+  f.catalogue(original);
+  assert.equal((await f.sources(f.event)).items[0].connected, false, 'conflicting late grant was revoked');
+  f.choose(async () => f.root);
+  assert.equal((await f.connectSource(f.event, id)).status, 'connected');
+  assert.equal(f.picks(), 2);
+  f.catalogue(changed);
+  const replacement = (await f.sources(f.event)).items[0];
+  assert.notEqual(replacement.id, id);
+  assert.deepEqual(await f.connectSource(f.event, id), { status: 'unavailable' });
+});
+
+test('source enumeration bounds the saved table and catalogue and never launches native selection', async t => {
+  const f = fixture(t);
+  for (const catalogue of [
+    { images: [], inputDirs: Object.fromEntries(Array.from({ length: 257 }, (_, i) => [i, { path: `/saved/${i}` }])) },
+    { images: Array(100_001), inputDirs: {} },
+  ]) {
+    f.read(async () => catalogue as FinalObject);
+    assert.deepEqual(await f.sources(f.event), { status: 'unavailable' });
+  }
+});
+
+test('source selection reports cancellation, wrong folder and missing folder without native diagnostics', async t => {
+  const f = await sourceFixture(t);
+  const id = (await f.sources(f.event)).items[0].id;
+  f.choose(async () => undefined);
+  assert.deepEqual(await f.connectSource(f.event, id), { status: 'cancelled' });
+  f.choose(async () => f.root + '-other');
+  assert.deepEqual(await f.connectSource(f.event, id), { status: 'wrong-folder' });
+  f.choose(async () => { throw new Error('/secret/native/path'); });
+  assert.deepEqual(await f.connectSource(f.event, id), { status: 'unavailable' });
+  f.choose(async () => f.root);
+  await fs.rm(f.root, { recursive: true, force: true });
+  assert.deepEqual(await f.connectSource(f.event, id), { status: 'source-unavailable' });
+});
+
+
+test('duplicate saved roots share connection state and regeneration uses an explicit source grant', async t => {
+  const f = await sourceFixture(t);
+  f.catalogue({ images: f.images, inputDirs: { 0: { path: f.root }, 3: { path: f.root } } } as unknown as FinalObject);
+  const listed = await f.sources(f.event);
+  assert.equal(listed.items.length, 2);
+  await f.connectSource(f.event, listed.items[0].id);
+  assert.deepEqual((await f.sources(f.event)).items.map((item: any) => item.connected), [true, true]);
+  assert.equal((await f.run()).status, 'generated');
+  assert.equal(f.picks(), 1, 'regeneration reused the explicitly connected source');
+  await f.disconnectSource(f.event, listed.items[1].id);
+  assert.deepEqual((await f.sources(f.event)).items.map((item: any) => item.connected), [false, false]);
+});
+
+test('cancelling during post-picker catalogue verification revokes a grant before another action can reuse it', async t => {
+  const f = await sourceFixture(t);
+  const id = (await f.sources(f.event)).items[0].id;
+  const catalogue = { images: f.images, inputDirs: { 0: { path: f.root } } } as unknown as FinalObject;
+  f.choose(async () => {
+    f.read(async () => { f.cancelSource(); return catalogue; });
+    return f.root;
+  });
+  assert.deepEqual(await f.connectSource(f.event, id), { status: 'cancelled' });
+  f.read(async () => catalogue);
+  assert.equal((await f.sources(f.event)).items[0].connected, false);
+  f.choose(async () => f.root);
+  assert.equal((await f.connectSource(f.event, id)).status, 'connected');
+  assert.equal(f.picks(), 2);
+});
+
+test('source methods do not read catalogues while another private operation owns the gate', async t => {
+  const f = await sourceFixture(t);
+  const id = (await f.sources(f.event)).items[0].id;
+  let finish!: () => void;
+  f.readProtection(() => new Promise(resolve => { finish = () => resolve({ autoLockMinutes: 5 }); }));
+  const operation = f.protection(f.event);
+  const reads = f.reads();
+  assert.deepEqual(await f.sources(f.event), { status: 'busy' });
+  assert.deepEqual(await f.connectSource(f.event, id), { status: 'busy' });
+  assert.deepEqual(await f.disconnectSource(f.event, id), { status: 'busy' });
+  assert.equal(f.reads(), reads); assert.equal(f.picks(), 0);
+  finish(); await operation;
+});
+
+
+async function playbackFixture(t: TestContext) {
+  const playback = new PrivateSourcePlayback({ signal: new AbortController().signal,
+    isCurrent: () => true, onFailure: () => undefined });
+  const f = await sourceFixture(t, playback);
+  return { ...f, playback, play: (revision = f.item.revision) => f.playOriginal(f.event, { id: f.id, revision }),
+    response: (url: string) => playback.createResponse(new Request(url)) };
+}
+
+test('original playback grants only the saved source and returns an opaque URL without catalogue writes', async t => {
+  const f = await playbackFixture(t);
+  assert.equal(f.item.playable, true);
+  const before = JSON.stringify(f.images);
+  const result = await f.play();
+  assert.equal(result.status, 'ready'); assert.match(result.url, /^theatrum:\/\/app\/original\/[a-f0-9]{64}$/);
+  assert.equal(await (await f.response(result.url)).text(), 'Synthetic source descriptor contents');
+  assert.doesNotMatch(JSON.stringify(result), /synthetic|gallery-source|fileName|partialPath|inputSource|hash-/);
+  assert.equal(JSON.stringify(f.images), before); assert.equal(f.edits.length, 0); assert.equal(f.picks(), 1);
+  f.stopOriginal();
+  assert.equal((await f.response(result.url)).status, 404, 'stop retires capability synchronously');
+  assert.equal((await f.play()).status, 'ready'); assert.equal(f.picks(), 1, 'session source grant can be reused');
+});
+
+test('duplicate preview hashes and absent strip geometry do not disable original playback', async t => {
+  const f = await playbackFixture(t);
+  f.images[0].screens = 0;
+  f.images.push({ ...f.images[0], cleanName: 'Duplicate hash', fileName: 'other.mp4' });
+  const item = (await f.detail(f.event, f.id)).item;
+  assert.equal(item.regenerable, false); assert.equal(item.playable, true);
+  assert.equal((await f.play(item.revision)).status, 'ready');
+});
+
+test('unsupported original containers return a fixed status without probing or prompting', async t => {
+  const f = await playbackFixture(t);
+  f.images[0].fileName = 'synthetic.mkv';
+  const page = await f.page();
+  assert.deepEqual(await f.detail(f.event, page.items[0].id), { status: 'unavailable' }, 'old identity is retired');
+  assert.deepEqual(await f.play(), { status: 'conflict' });
+  assert.equal(f.picks(), 0);
+  await f.dispose();
+  const playback = new PrivateSourcePlayback({ signal: new AbortController().signal, isCurrent: () => true, onFailure: () => undefined });
+  const fresh = fixture(t, f.images, ENTRY, async () => { assert.fail('unsupported sources never prompt'); }, undefined, playback);
+  fresh.read(async () => ({ images: f.images, inputDirs: { 0: { path: f.root } } } as unknown as FinalObject));
+  const id = (await fresh.page()).items[0].id;
+  const item = (await fresh.detail(fresh.event, id)).item;
+  assert.equal(item.playable, false);
+  assert.deepEqual(await fresh.playOriginal(fresh.event, { id, revision: item.revision }), { status: 'unsupported' });
+  await fresh.dispose();
+});
+
+test('original start rejects malformed requests and unissued IDs before source authority', async t => {
+  const f = await playbackFixture(t);
+  for (const value of [null, {}, { id: f.id, revision: f.item.revision, path: f.root },
+    { id: 'f'.repeat(32), revision: f.item.revision }, { id: f.id, revision: 'bad' }]) {
+    assert.deepEqual(await f.playOriginal(f.event, value), { status: 'unavailable' });
+  }
+  assert.deepEqual(await f.playOriginal({ ...f.event, senderFrame: { ...f.contents.mainFrame } },
+    { id: f.id, revision: f.item.revision }), { status: 'unavailable' });
+  assert.equal(f.picks(), 0);
+  f.images[0].notes = 'Changed after review';
+  assert.deepEqual(await f.play(), { status: 'conflict' }); assert.equal(f.picks(), 0);
+});
+
+test('cancel, wrong folder and unavailable original return bounded statuses', async t => {
+  const f = await playbackFixture(t);
+  f.choose(async () => undefined); assert.deepEqual(await f.play(), { status: 'cancelled' });
+  f.choose(async () => path.dirname(f.root)); assert.deepEqual(await f.play(), { status: 'wrong-folder' });
+  f.choose(async () => f.root);
+  await fs.unlink(path.join(f.root, 'synthetic.mp4'));
+  assert.deepEqual(await f.play(), { status: 'source-unavailable' });
+});
+
+for (const ending of ['stop', 'lock', 'dispose', 'abort', 'navigate', 'replace-frame']) {
+  test(`an original source picker cannot resume playback after ${ending}`, async t => {
+    const f = await playbackFixture(t);
+    let finish!: (value: string) => void; let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    f.choose(() => { started(); return new Promise(resolve => { finish = resolve; }); });
+    const work = f.play(); await ready;
+    assert.deepEqual(await f.page(), { status: 'busy' });
+    assert.deepEqual(await f.play(), { status: 'busy' });
+    let drain: Promise<void> | undefined;
+    if (ending === 'stop') { f.stopOriginal(); }
+    if (ending === 'lock') { f.lock(); }
+    if (ending === 'dispose') { drain = f.dispose(); }
+    if (ending === 'abort') { f.controller.abort(); }
+    if (ending === 'navigate') { f.contents.emit('did-start-navigation', { isMainFrame: true, url: ENTRY }); }
+    if (ending === 'replace-frame') { f.contents.mainFrame = new Contents().mainFrame; }
+    let drained = false;
+    if (drain) { void drain.then(() => { drained = true; }); await Promise.resolve(); assert.equal(drained, false); }
+    finish(f.root);
+    assert.deepEqual(await work, { status: ending === 'stop' ? 'cancelled' : 'unavailable' });
+    await drain;
+    assert.equal((await f.response('theatrum://app/original/' + 'a'.repeat(64))).status, 404);
+  });
+}
+
+test('untrusted or malformed stop cannot cancel an original picker', async t => {
+  const f = await playbackFixture(t);
+  f.choose(async () => {
+    ipcMain.emit(channels.stopOriginal, { ...f.event, senderFrame: { ...f.contents.mainFrame } });
+    f.stopOriginal('extra');
+    return f.root;
+  });
+  assert.equal((await f.play()).status, 'ready');
+});
+
+for (const change of ['catalogue-source', 'catalogue-row']) {
+  test(`original playback revalidates ${change} after its native picker`, async t => {
+    const f = await playbackFixture(t);
+    f.choose(async () => {
+      if (change === 'catalogue-source') {
+        f.catalogue({ images: f.images, inputDirs: { 0: { path: path.dirname(f.root) } } } as unknown as FinalObject);
+      } else { f.images[0].notes = 'Updated while picker was open'; }
+      return f.root;
+    });
+    assert.deepEqual(await f.play(), { status: 'conflict' });
+  });
+}
+
+for (const operation of ['list', 'detail', 'sources', 'connect', 'disconnect', 'save', 'regenerate', 'protection', 'set-protection']) {
+  test(`${operation} retires an original capability before its work`, async t => {
+    const f = await playbackFixture(t);
+    const source = (await f.sources(f.event)).items[0];
+    const active = await f.play(); assert.equal(active.status, 'ready');
+    let work: Promise<unknown>;
+    if (operation === 'list') { work = f.page(); }
+    else if (operation === 'detail') { work = f.detail(f.event, f.id); }
+    else if (operation === 'sources') { work = f.sources(f.event); }
+    else if (operation === 'connect') { work = f.connectSource(f.event, source.id); }
+    else if (operation === 'disconnect') { work = f.disconnectSource(f.event, source.id); }
+    else if (operation === 'save') { work = f.save(f.event, { id: f.id, revision: f.item.revision, notes: 'Updated', tags: [] }); }
+    else if (operation === 'regenerate') { work = f.run(); }
+    else if (operation === 'protection') { work = f.protection(f.event); }
+    else { work = f.setProtection(f.event, { autoLockMinutes: 15 }); }
+    await work;
+    assert.equal((await f.response(active.url)).status, 404);
+  });
+}
+
+test('source relocation retires an active original before the native location picker', async t => {
+  const playback = new PrivateSourcePlayback({ signal: new AbortController().signal, isCurrent: () => true, onFailure: () => undefined });
+  const f = await relocationFixture(t, playback);
+  const item = (await f.detail(f.event, f.videoId)).item;
+  const active = await f.playOriginal(f.event, { id: f.videoId, revision: item.revision });
+  assert.equal(active.status, 'ready');
+  f.chooseLocation(async () => {
+    assert.equal((await playback.createResponse(new Request(active.url))).status, 404);
+    return f.nextRoot;
+  });
+  assert.deepEqual(await f.run(), { status: 'relocated' });
+});
+
+test('replacement of a connected folder revokes active playback and requires a fresh grant', async t => {
+  const f = await playbackFixture(t);
+  const active = await f.play();
+  const previous = f.root + '-original';
+  await fs.rename(f.root, previous);
+  t.after(() => fs.rm(previous, { recursive: true, force: true }));
+  await fs.mkdir(f.root);
+  await fs.writeFile(path.join(f.root, 'synthetic.mp4'), 'Replacement source');
+  assert.equal((await f.response(active.url)).status, 404);
+  const next = await f.play();
+  assert.equal(next.status, 'ready'); assert.equal(f.picks(), 2);
+  assert.equal(await (await f.response(next.url)).text(), 'Replacement source');
+});
+
+test('original descriptor cleanup failure quarantines the gallery and its disposer', async t => {
+  const f = await playbackFixture(t);
+  const restore = failSourceDescriptorClose(t, path.join(f.root, 'synthetic.mp4'));
+  f.expectQuarantinedDisposal();
+  try {
+    assert.deepEqual(await f.play(), { status: 'unavailable' });
+    assert.ok(f.locks() >= 1);
+    assert.deepEqual(await f.page(), { status: 'unavailable' });
+    await assert.rejects(f.dispose(), /Private gallery cleanup unavailable/);
+  } finally { await restore(); }
+});
+
+test('playback manager cleanup rejection blocks source mutations and private gallery disposal', async t => {
+  const f = await playbackFixture(t);
+  const active = await f.play(); assert.equal(active.status, 'ready');
+  const nativeStop = f.playback.stop.bind(f.playback);
+  const mock = t.mock.method(f.playback, 'stop', () => {
+    void nativeStop().catch(() => undefined);
+    return Promise.reject(new Error('Private cleanup detail'));
+  });
+  f.expectQuarantinedDisposal();
+  try {
+    assert.deepEqual(await f.setProtection(f.event, { autoLockMinutes: 15 }), { status: 'unavailable' });
+    assert.equal(f.appliedProtection.length, 0); assert.ok(f.locks() >= 1);
+    await assert.rejects(f.dispose(), /Private gallery cleanup unavailable/);
+  } finally { mock.mock.restore(); await nativeStop(); }
+});
+
+
+test('original requests never probe an ungranted source before the native picker accepts it', async t => {
+  const f = await playbackFixture(t);
+  const nativeFs: typeof import('node:fs') = require('node:fs');
+  const stat = nativeFs.lstatSync;
+  let approved = false; let probes = 0;
+  t.mock.method(nativeFs, 'lstatSync', (...args: Parameters<typeof stat>) => {
+    if (typeof args[0] === 'string' && args[0].startsWith(f.root)) {
+      probes++; assert.equal(approved, true, 'native approval precedes source filesystem access');
+    }
+    return stat(...args);
+  });
+  f.choose(async () => { assert.equal(probes, 0); approved = true; return f.root; });
+  assert.equal((await f.play()).status, 'ready'); assert.ok(probes > 0);
+});
+
+test('a late manager start cannot deliver its ready token after Stop, and disposal waits for it', async t => {
+  const f = await playbackFixture(t);
+  const start = f.playback.start.bind(f.playback);
+  let finish!: () => void; let began!: (url: string) => void;
+  const ready = new Promise<string>(resolve => { began = resolve; });
+  t.mock.method(f.playback, 'start', async (...args) => {
+    const url = await start(...args);
+    began(url); await new Promise<void>(resolve => { finish = resolve; }); return url;
+  });
+  const work = f.play(); const url = await ready;
+  f.stopOriginal();
+  assert.equal((await f.response(url)).status, 404);
+  let drained = false;
+  const disposal = f.dispose().then(() => { drained = true; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(drained, false);
+  finish();
+  assert.deepEqual(await work, { status: 'unavailable' });
+  await disposal;
+});
+
+test('source-affecting operations await the retired playback cleanup before writing', async t => {
+  const f = await playbackFixture(t);
+  const active = await f.play();
+  const stop = f.playback.stop.bind(f.playback);
+  let finish!: () => void;
+  let calls = 0;
+  const mock = t.mock.method(f.playback, 'stop', () => {
+    const drain = stop();
+    if (++calls !== 1) { return drain; }
+    return drain.then(() => new Promise<void>(resolve => { finish = resolve; }));
+  });
+  const work = f.setProtection(f.event, { autoLockMinutes: 15 });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(f.appliedProtection.length, 0);
+  assert.equal((await f.response(active.url)).status, 404);
+  assert.deepEqual(await f.page(), { status: 'busy' });
+  finish();
+  assert.equal((await work).status, 'saved'); assert.equal(f.appliedProtection.length, 1);
+  mock.mock.restore();
+});
+
+
+function batchResult(total: number, imported: number, duplicates = 0, failed = 0,
+  outcome: 'completed' | 'cancelled' | 'stopped' = 'completed') {
+  return { status: 'finished', outcome, total, processed: imported + duplicates + failed, imported, duplicates, failed };
+}
+
+async function importFixture(t: TestContext, playback?: PrivateSourcePlayback) {
+  const f = await sourceFixture(t, playback);
+  const selected = path.join(f.root, 'new-video.mp4');
+  await fs.writeFile(selected, 'Synthetic imported video');
+  let picks = 0;
+  f.chooseImport(async root => { assert.equal(root, f.root); picks++; return selected; });
+  let writes = 0;
+  let captured: import('./private-preview-source').PrivatePreviewSource | undefined;
+  f.importing(async (_generation, source, location, options) => {
+    writes++; captured = source;
+    assert.equal(options.isCurrent(), true); assert.equal(source.isCurrent(), true);
+    assert.equal(location.root, f.root); assert.equal(location.fileName, 'new-video.mp4');
+    assert.equal(location.partialPath, ''); assert.match(location.hash, /^[a-f0-9]{64}$/);
+    return { status: 'imported', index: 1 };
+  });
+  const sourceId = (await f.sources(f.event)).items[0].id;
+  return { ...f, sourceId, selected, picks: () => picks, writes: () => writes, captured: () => captured,
+    runImport: () => f.importVideo(f.event, sourceId) };
+}
+
+test('import uses native selected source authority, closes capture and retires cached catalogue IDs', async t => {
+  const f = await importFixture(t);
+  const result = await f.runImport();
+  assert.deepEqual(result, batchResult(1, 1));
+  assert.equal(f.picks(), 1); assert.equal(f.writes(), 1); assert.equal(f.captured()?.isCurrent(), false);
+  assert.deepEqual(await f.detail(f.event, f.id), { status: 'unavailable' });
+  assert.deepEqual(await f.connectSource(f.event, f.sourceId), { status: 'unavailable' });
+  assert.notEqual((await f.page()).items[0].id, f.id);
+  assert.doesNotMatch(JSON.stringify(result), /root|path|file|hash|index/);
+});
+
+test('import validates frame, ID, arity and native capability before picking', async t => {
+  const f = await importFixture(t);
+  for (const args of [[], ['bad'], [f.sourceId, 'extra'], [{ id: f.sourceId }], ['a'.repeat(32)]]) {
+    assert.deepEqual(await f.importVideo(f.event, ...args), { status: 'unavailable' });
+  }
+  assert.deepEqual(await f.importVideo({ ...f.event, senderFrame: { ...f.contents.mainFrame } }, f.sourceId), { status: 'unavailable' });
+  f.options.chooseImportVideo = undefined!;
+  assert.deepEqual(await f.runImport(), { status: 'unavailable' });
+  assert.equal(f.picks(), 0); assert.equal(f.writes(), 0);
+});
+
+for (const selected of ['relative.mp4', '/outside-synthetic-root/file.mp4', 'ROOT', 'PARENT', 'DOT', 'NUL']) {
+  test(`import refuses ${selected} before source capture`, async t => {
+    const f = await importFixture(t);
+    const value = selected === 'ROOT' ? f.root : selected === 'PARENT' ? f.root + '/../outside.mp4'
+      : selected === 'DOT' ? f.root + '/./new-video.mp4' : selected === 'NUL' ? f.selected + '\0' : selected;
+    f.chooseImport(async () => value);
+    assert.deepEqual(await f.runImport(), { status: 'invalid' }); assert.equal(f.writes(), 0);
+  });
+}
+
+test('import rejects symlink sources without submitting a session write', async t => {
+  const f = await importFixture(t);
+  const link = path.join(f.root, 'linked.mp4'); await fs.symlink(f.selected, link);
+  f.chooseImport(async () => link);
+  assert.deepEqual(await f.runImport(), batchResult(1, 0, 0, 1)); assert.equal(f.writes(), 0);
+});
+
+test('import detects remapped source after native selection', async t => {
+  const f = await importFixture(t);
+  f.chooseImport(async () => {
+    f.catalogue({ images: f.images, inputDirs: { 0: { path: f.root + '-changed', watch: false } } } as unknown as FinalObject);
+    return f.selected;
+  });
+  assert.deepEqual(await f.runImport(), batchResult(1, 0, 0, 0, 'stopped')); assert.equal(f.writes(), 0);
+});
+
+for (const revoke of ['cancel', 'dispose', 'lock'] as const) {
+  test(`import ${revoke} drains a late file picker without reading or publishing`, async t => {
+    const f = await importFixture(t);
+    let finish!: () => void; let start!: () => void;
+    const ready = new Promise<void>(resolve => { start = resolve; });
+    f.chooseImport(async () => { start(); await new Promise<void>(resolve => { finish = resolve; }); return f.selected; });
+    const work = f.runImport(); await ready;
+    assert.deepEqual(await f.page(), { status: 'busy' }); assert.deepEqual(await f.runImport(), { status: 'busy' });
+    let drained = false; let disposal: Promise<void> | undefined;
+    if (revoke === 'cancel') {
+      f.cancelImport('extra');
+      ipcMain.emit(channels.cancelImport, { ...f.event, senderFrame: { ...f.contents.mainFrame } });
+      f.cancelImport();
+    } else if (revoke === 'lock') { f.controller.abort(); }
+    else { disposal = f.dispose().then(() => { drained = true; }); }
+    await Promise.resolve(); assert.equal(drained, false); finish();
+    assert.deepEqual(await work, { status: revoke === 'cancel' ? 'cancelled' : 'unavailable' });
+    await disposal; assert.equal(f.writes(), 0);
+  });
+}
+
+test('import cancellation after admitted publication expires old IDs and closes captured descriptors', async t => {
+  const f = await importFixture(t);
+  let captured: import('./private-preview-source').PrivatePreviewSource | undefined;
+  f.importing(async (_generation, source) => { captured = source; f.cancelImport(); return { status: 'imported', index: 1 }; });
+  assert.deepEqual(await f.runImport(), batchResult(1, 1, 0, 0, 'cancelled'));
+  assert.equal(captured?.isCurrent(), false);
+  assert.deepEqual(await f.detail(f.event, f.id), { status: 'unavailable' });
+  assert.notEqual((await f.page()).items[0].id, f.id);
+});
+
+test('import failure stays generic, closes the capture and permits refreshed catalogue reads', async t => {
+  const f = await importFixture(t);
+  let captured: import('./private-preview-source').PrivatePreviewSource | undefined;
+  f.importing(async (_generation, source) => { captured = source; throw new Error('/private/source/path'); });
+  assert.deepEqual(await f.runImport(), batchResult(1, 0, 0, 1));
+  assert.equal(captured?.isCurrent(), false); assert.equal((await f.page()).status, 'ready');
+});
+
+test('import retires active original playback before choosing a file', async t => {
+  const playback = new PrivateSourcePlayback({ signal: new AbortController().signal, isCurrent: () => true, onFailure: () => undefined });
+  const f = await importFixture(t, playback);
+  const playing = await f.playOriginal(f.event, { id: f.id, revision: f.item.revision });
+  assert.equal(playing.status, 'ready');
+  f.chooseImport(async () => {
+    assert.equal((await playback.createResponse(new Request(playing.url))).status, 404); return f.selected;
+  });
+  assert.deepEqual(await f.runImport(), batchResult(1, 1));
+});
+
+
+async function sourceAdditionFixture(t: TestContext, playback?: PrivateSourcePlayback) {
+  const f = await sourceFixture(t, playback);
+  const nextRoot = await fs.mkdtemp(path.resolve(__dirname, '../tmp/gallery-source-add-'));
+  t.after(() => fs.rm(nextRoot, { recursive: true, force: true }));
+  let catalogue = { images: f.images, inputDirs: { 0: { path: f.root, watch: true } } } as unknown as FinalObject;
+  f.read(async () => catalogue);
+  let picks = 0; let writes = 0;
+  f.chooseNewSource(async () => { picks++; return nextRoot; });
+  let captured: import('./private-source-addition').PrivateSourceAdditionReview | undefined;
+  f.adding(async (_generation, review, current) => {
+    assert.equal(current(), true); assert.equal(review.matchesCatalogue(catalogue), true);
+    assert.equal(await review.validate(), true); assert.equal(review.newRoot, nextRoot);
+    captured = review; writes++;
+    catalogue = { ...catalogue, inputDirs: { ...catalogue.inputDirs, [review.sourceIndex]: { path: nextRoot, watch: false } } };
+    return { status: 'added' };
+  });
+  const sourceId = (await f.sources(f.event)).items[0].id;
+  return { ...f, nextRoot, sourceId, picks: () => picks, writes: () => writes, captured: () => captured,
+    saved: () => catalogue, replace: (next: FinalObject) => { catalogue = next; }, runAdd: () => f.addSource(f.event) };
+}
+
+test('adding a source saves only its reviewed location, retires IDs and leaves it disconnected', async t => {
+  const f = await sourceAdditionFixture(t);
+  assert.deepEqual(await f.runAdd(), { status: 'added' });
+  assert.equal(f.picks(), 1); assert.equal(f.writes(), 1); assert.equal(f.captured()?.isCurrent(), false);
+  const result = await f.sources(f.event);
+  assert.deepEqual(result.items.map((item: any) => [item.title, item.videoCount, item.connected]),
+    [['Source folder 1', 1, false], ['Source folder 2', 0, false]]);
+  assert.deepEqual(f.saved().inputDirs[1], { path: f.nextRoot, watch: false });
+  assert.equal(f.saved().images.length, 1);
+  assert.equal(f.picks(), 1, 'saving never invokes a separate access picker');
+  assert.deepEqual(await f.detail(f.event, f.id), { status: 'unavailable' });
+  assert.deepEqual(await f.connectSource(f.event, f.sourceId), { status: 'unavailable' });
+  assert.doesNotMatch(JSON.stringify(result), /path|inputDirs|nextRoot|gallery-source-add/);
+});
+
+test('add source rejects extra arguments, foreign frames and missing native picker without reading or selecting', async t => {
+  const f = await sourceAdditionFixture(t);
+  const reads = f.reads();
+  for (const args of [['arbitrary/path'], [{}], [undefined]]) {
+    assert.deepEqual(await f.addSource(f.event, ...args), { status: 'unavailable' });
+  }
+  assert.deepEqual(await f.addSource({ ...f.event, senderFrame: { ...f.contents.mainFrame } }), { status: 'unavailable' });
+  f.options.chooseNewSourceDirectory = undefined!;
+  assert.deepEqual(await f.runAdd(), { status: 'unavailable' });
+  assert.equal(f.picks(), 0); assert.equal(f.reads(), reads);
+});
+
+test('add source refuses duplicate, ancestor and descendant selections without catalogue writes', async t => {
+  const f = await sourceAdditionFixture(t);
+  for (const chosen of [f.root, path.dirname(f.root), path.join(f.root, 'child')]) {
+    f.chooseNewSource(async () => chosen);
+    assert.deepEqual(await f.runAdd(), { status: chosen === f.root ? 'duplicate' : 'invalid' });
+  }
+  assert.equal(f.writes(), 0);
+});
+
+test('add source refuses the source limit before native selection', async t => {
+  const f = await sourceAdditionFixture(t);
+  f.replace({ ...f.saved(), inputDirs: Object.fromEntries(Array.from({ length: 256 }, (_, index) =>
+    [index, { path: f.root + '-' + index, watch: false }])) });
+  assert.deepEqual(await f.runAdd(), { status: 'limit' }); assert.equal(f.picks(), 0); assert.equal(f.writes(), 0);
+});
+
+test('add source native cancellation and symlink refusal leave the catalogue unchanged', async t => {
+  const f = await sourceAdditionFixture(t); const before = f.saved();
+  f.chooseNewSource(async () => undefined);
+  assert.deepEqual(await f.runAdd(), { status: 'cancelled' });
+  const link = path.join(f.nextRoot, 'linked-root'); await fs.symlink(f.root, link);
+  f.chooseNewSource(async () => link);
+  const result = await f.runAdd();
+  assert.equal(result.status, 'source-unavailable');
+  assert.equal(f.saved(), before); assert.equal(f.writes(), 0);
+});
+
+for (const revoke of ['cancel', 'dispose', 'lock'] as const) {
+  test(`add source ${revoke} drains late picker selection without creating catalogue authority`, async t => {
+    const f = await sourceAdditionFixture(t);
+    let finish!: () => void; let start!: () => void;
+    const ready = new Promise<void>(resolve => { start = resolve; });
+    f.chooseNewSource(async () => { start(); await new Promise<void>(resolve => { finish = resolve; }); return f.nextRoot; });
+    const work = f.runAdd(); await ready;
+    assert.deepEqual(await f.sources(f.event), { status: 'busy' }); assert.deepEqual(await f.runAdd(), { status: 'busy' });
+    assert.deepEqual(await f.run(), { status: 'busy' });
+    let disposal: Promise<void> | undefined; let drained = false;
+    if (revoke === 'cancel') {
+      f.cancelSource('extra');
+      ipcMain.emit(channels.cancelSourceConnection, { ...f.event, senderFrame: { ...f.contents.mainFrame } });
+      f.cancelSource();
+    } else if (revoke === 'lock') { f.controller.abort(); }
+    else { disposal = f.dispose().then(() => { drained = true; }); }
+    await Promise.resolve(); assert.equal(drained, false); finish();
+    assert.deepEqual(await work, { status: revoke === 'cancel' ? 'cancelled' : 'unavailable' });
+    await disposal; assert.equal(f.writes(), 0);
+  });
+}
+
+test('add source retires cached identities after a cancelled successful publication', async t => {
+  const f = await sourceAdditionFixture(t);
+  f.adding(async () => { f.cancelSource(); return { status: 'added' }; });
+  assert.deepEqual(await f.runAdd(), { status: 'cancelled' });
+  assert.deepEqual(await f.detail(f.event, f.id), { status: 'unavailable' });
+  assert.notEqual((await f.page()).items[0].id, f.id);
+});
+
+test('add source errors are generic and dispose the main-owned review', async t => {
+  const f = await sourceAdditionFixture(t);
+  let review: import('./private-source-addition').PrivateSourceAdditionReview | undefined;
+  f.adding(async (_generation, value) => { review = value; throw new Error('/sensitive/private/folder'); });
+  assert.deepEqual(await f.runAdd(), { status: 'source-unavailable' });
+  assert.equal(review?.isCurrent(), false); assert.equal((await f.page()).status, 'ready');
+});
+
+test('add source retires original playback before opening its native picker', async t => {
+  const playback = new PrivateSourcePlayback({ signal: new AbortController().signal, isCurrent: () => true, onFailure: () => undefined });
+  const f = await sourceAdditionFixture(t, playback);
+  const playing = await f.playOriginal(f.event, { id: f.id, revision: f.item.revision });
+  assert.equal(playing.status, 'ready');
+  f.chooseNewSource(async () => {
+    assert.equal((await playback.createResponse(new Request(playing.url))).status, 404); return f.nextRoot;
+  });
+  assert.deepEqual(await f.runAdd(), { status: 'added' });
+});
+
+
+test('adding a root never restores an old grant after main-owned catalogue replacement', async t => {
+  const f = await sourceAdditionFixture(t);
+  assert.equal((await f.connectSource(f.event, f.sourceId)).status, 'connected');
+  f.replace({ ...f.saved(), images: [], inputDirs: {} });
+  f.chooseNewSource(async () => f.root);
+  f.adding(async (_generation, review) => {
+    f.replace({ ...f.saved(), inputDirs: { [review.sourceIndex]: { path: review.newRoot, watch: false } } });
+    return { status: 'added' };
+  });
+  assert.deepEqual(await f.runAdd(), { status: 'added' });
+  const sources = await f.sources(f.event);
+  assert.equal(sources.items.length, 1); assert.equal(sources.items[0].connected, false);
+});
+
+test('batch import serializes descriptor lifetimes and reports duplicates and per-file failures', async t => {
+  const f = await importFixture(t);
+  const failing = path.join(f.root, 'broken.mp4');
+  const second = path.join(f.root, 'second.mp4');
+  await fs.writeFile(failing, 'Synthetic invalid media'); await fs.writeFile(second, 'Synthetic video');
+  f.chooseImport(async () => [f.selected, path.join(f.root, 'synthetic.mp4'), failing, second]);
+  const seen: string[] = []; let previous: import('./private-preview-source').PrivatePreviewSource | undefined;
+  f.importing(async (_generation, source, location) => {
+    assert.equal(previous?.isCurrent() ?? false, false, 'previous descriptor is drained before next import');
+    previous = source; seen.push(location.fileName);
+    if (location.fileName === 'broken.mp4') { throw new Error('/PRIVATE-PATH'); }
+    return { status: 'imported', index: seen.length };
+  });
+  const before = await fs.readFile(f.selected);
+  const result = await f.runImport();
+  assert.deepEqual(result, batchResult(4, 2, 1, 1));
+  assert.deepEqual(seen, ['new-video.mp4', 'broken.mp4', 'second.mp4']);
+  assert.equal(previous?.isCurrent(), false);
+  assert.deepEqual(await fs.readFile(f.selected), before);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|path|fileName|root|hash|index/);
+  assert.deepEqual(await f.importProgress(f.event), { status: 'idle' });
+});
+
+for (const kind of ['empty', 'oversized', 'sparse', 'getter', 'outside-last', 'non-string'] as const) {
+  test(`batch rejects ${kind} selection entirely before starting any import`, async t => {
+    const f = await importFixture(t);
+    let selected: string[] = [f.selected];
+    if (kind === 'empty') { selected = []; }
+    if (kind === 'oversized') { selected = Array(101).fill(f.selected); }
+    if (kind === 'sparse') { selected = new Array(2); selected[0] = f.selected; }
+    if (kind === 'getter') { Object.defineProperty(selected, '0', { get: () => { assert.fail('Do not invoke native result accessors'); } }); }
+    if (kind === 'outside-last') { selected.push('/outside-source/private.mp4'); }
+    if (kind === 'non-string') { selected.push(42 as unknown as string); }
+    f.chooseImport(async () => selected);
+    assert.deepEqual(await f.runImport(), { status: kind === 'oversized' ? 'limit' : 'invalid' });
+    assert.equal(f.writes(), 0);
+    assert.deepEqual(await f.importProgress(f.event), { status: 'idle' });
+  });
+}
+
+test('batch snapshots the native array and provides copied numeric progress through the pending gate', async t => {
+  const f = await importFixture(t);
+  const second = path.join(f.root, 'second.mp4'); await fs.writeFile(second, 'Synthetic second');
+  const selected = [f.selected, second]; f.chooseImport(async () => selected);
+  let start!: () => void; const entered = new Promise<void>(yes => { start = yes; });
+  let resume!: () => void; const release = new Promise<void>(yes => { resume = yes; }); t.after(() => resume());
+  const seen: string[] = [];
+  f.importing(async (_generation, _source, location) => {
+    seen.push(location.fileName);
+    if (seen.length === 1) { start(); await release; }
+    return { status: 'imported', index: seen.length };
+  });
+  assert.deepEqual(await f.importProgress(f.event), { status: 'idle' });
+  const work = f.runImport(); await entered;
+  selected[1] = '/outside-root/private.mp4'; selected.push('/outside-root/extra.mp4');
+  const reads = f.reads();
+  const progress = await f.importProgress(f.event);
+  assert.deepEqual(progress, { status: 'running', total: 2, processed: 0, imported: 0, duplicates: 0, failed: 0 });
+  progress.imported = 99;
+  assert.equal((await f.importProgress(f.event)).imported, 0);
+  assert.deepEqual(await f.importProgress(f.event, 'extra'), { status: 'unavailable' });
+  assert.deepEqual(await f.importProgress({ ...f.event, senderFrame: { ...f.contents.mainFrame } }), { status: 'unavailable' });
+  assert.deepEqual(await f.importProgress({ ...f.event, sender: {} }), { status: 'unavailable' });
+  assert.equal(f.reads(), reads, 'progress performs no catalogue or file access');
+  assert.deepEqual(await f.sources(f.event), { status: 'busy' });
+  assert.deepEqual(await f.runImport(), { status: 'busy' });
+  resume();
+  assert.deepEqual(await work, batchResult(2, 2));
+  assert.deepEqual(seen, ['new-video.mp4', 'second.mp4']);
+  assert.deepEqual(await f.importProgress(f.event), { status: 'idle' });
+});
+
+test('batch refuses a repeated path already committed earlier in the same selection', async t => {
+  const f = await importFixture(t);
+  f.chooseImport(async () => [f.selected, f.selected]);
+  let writes = 0;
+  f.importing(async (_generation, _source, location) => {
+    writes++;
+    f.images.push({ ...NewImageElement(), ...location, locations: undefined, cleanName: 'Imported' });
+    return { status: 'imported', index: f.images.length - 1 };
+  });
+  assert.deepEqual(await f.runImport(), batchResult(2, 1, 1));
+  assert.equal(writes, 1);
+});
+
+for (const stop of ['cancel', 'remap', 'replace-root', 'conflict'] as const) {
+  test(`batch ${stop} retains known completion and starts no later file`, async t => {
+    const f = await importFixture(t);
+    const second = path.join(f.root, 'second.mp4'); await fs.writeFile(second, 'Synthetic second');
+    f.chooseImport(async () => [f.selected, second]);
+    const moved = f.root + '-old';
+    t.after(async () => { try { await fs.rename(moved, f.root); } catch { /* Original location retained unless replacement was exercised. */ } });
+    let writes = 0;
+    f.importing(async () => {
+      writes++;
+      if (stop === 'cancel') { f.cancelImport(); }
+      if (stop === 'remap') { f.catalogue({ images: f.images, inputDirs: { 0: { path: f.root + '-moved' } } } as unknown as FinalObject); }
+      if (stop === 'replace-root') { await fs.rename(f.root, moved); await fs.mkdir(f.root); }
+      return stop === 'conflict' ? { status: 'conflict' } : { status: 'imported', index: 1 };
+    });
+    const result = await f.runImport();
+    assert.deepEqual(result, batchResult(2, stop === 'conflict' ? 0 : 1, 0, 0, stop === 'cancel' ? 'cancelled' : 'stopped'));
+    assert.equal(writes, 1);
+    if (stop === 'replace-root') { await fs.rmdir(f.root); await fs.rename(moved, f.root); }
+  });
+}
+
+test('batch disposal drains the active file and rejects all late progress and completion', async t => {
+  const f = await importFixture(t);
+  const second = path.join(f.root, 'second.mp4'); await fs.writeFile(second, 'Synthetic second');
+  f.chooseImport(async () => [f.selected, second]);
+  let start!: () => void; const entered = new Promise<void>(yes => { start = yes; });
+  let resume!: () => void; const release = new Promise<void>(yes => { resume = yes; }); t.after(() => resume());
+  let writes = 0; let captured: import('./private-preview-source').PrivatePreviewSource | undefined;
+  f.importing(async (_generation, source) => { writes++; captured = source; start(); await release; throw new Error('cancelled'); });
+  const work = f.runImport(); await entered;
+  let disposed = false; const disposal = f.dispose().then(() => { disposed = true; });
+  await Promise.resolve(); assert.equal(disposed, false);
+  assert.deepEqual(await f.importProgress(f.event), { status: 'unavailable' });
+  resume(); assert.deepEqual(await work, { status: 'unavailable' }); await disposal;
+  assert.equal(writes, 1); assert.equal(captured?.isCurrent(), false);
+});
+
+test('batch source cleanup failure quarantines the session instead of continuing', async t => {
+  const f = await importFixture(t);
+  const second = path.join(f.root, 'second.mp4'); await fs.writeFile(second, 'Synthetic second');
+  f.chooseImport(async () => [f.selected, second]);
+  const restore = failSourceDescriptorClose(t, f.selected);
+  f.expectQuarantinedDisposal();
+  try {
+    assert.deepEqual(await f.runImport(), { status: 'unavailable' });
+    assert.equal(f.writes(), 0); assert.ok(f.locks() > 0);
+    assert.deepEqual(await f.importProgress(f.event), { status: 'unavailable' });
+    await assert.rejects(f.dispose(), /Private gallery cleanup unavailable/);
+  } finally { await restore(); }
+});
+
+test('batch finalizer failure suppresses a completed acknowledgement and never starts the next file', async t => {
+  const f = await importFixture(t);
+  const second = path.join(f.root, 'second.mp4'); await fs.writeFile(second, 'Synthetic second');
+  f.chooseImport(async () => [f.selected, second]);
+  let restore: (() => Promise<void>) | undefined; let writes = 0;
+  f.expectQuarantinedDisposal();
+  f.importing(async (_generation, source) => {
+    writes++;
+    restore = failSourceDescriptorClose(t, f.selected);
+    await source.open();
+    return { status: 'imported', index: 1 };
+  });
+  try {
+    assert.deepEqual(await f.runImport(), { status: 'unavailable' });
+    assert.equal(writes, 1); assert.ok(f.locks() > 0);
+    assert.deepEqual(await f.importProgress(f.event), { status: 'unavailable' });
+    await assert.rejects(f.dispose(), /Private gallery cleanup unavailable/);
+  } finally { await restore?.(); }
+});
+
+const gallerySorts = ['catalogue', 'name', 'date-added', 'last-played', 'rating', 'duration', 'file-size'] as const;
+const galleryDirections = ['asc', 'desc'] as const;
+function sortableImages(): ImageElement[] {
+  return [
+    { cleanName: 'Video 10', dateAdded: 30, lastPlayed: 30, stars: 3.5, duration: 30, fileSize: 300 },
+    { cleanName: 'Video 2', dateAdded: 10, lastPlayed: 10, stars: 1.5, duration: 10, fileSize: 100 },
+    { cleanName: 'VIDEO 2', dateAdded: 10, lastPlayed: 10, stars: 1.5, duration: 10, fileSize: 100 },
+    { cleanName: 'Video 1', dateAdded: 20, lastPlayed: 20, stars: 2.5, duration: 20, fileSize: 200 },
+    { cleanName: 'Video 20', dateAdded: 0, lastPlayed: 0, stars: NaN, duration: 0, fileSize: 0 },
+  ].map((values, index) => Object.assign(image(index), values));
+}
+for (const sort of gallerySorts) {
+  for (const direction of galleryDirections) {
+    test(`gallery ${sort} ${direction} ordering preserves stable ties, missing values and cached identities`, async t => {
+      const images = sortableImages(); const f = fixture(t, images);
+      const initial = await f.page();
+      const indices = sort === 'catalogue' ? direction === 'asc' ? [0, 1, 2, 3, 4] : [4, 3, 2, 1, 0]
+        : sort === 'name' ? direction === 'asc' ? [3, 1, 2, 0, 4] : [4, 0, 1, 2, 3]
+        : direction === 'asc' ? [1, 2, 3, 0, 4] : [0, 3, 1, 2, 4];
+      const page = await f.list(f.event, { query: '', offset: 0, sort, direction });
+      assert.equal(page.status, 'ready'); assert.equal(page.total, 5);
+      assert.deepEqual(page.items.map((item: any) => item.title), indices.map(index => images[index].cleanName));
+      assert.deepEqual(page.items.map((item: any) => item.id), indices.map(index => initial.items[index].id));
+      assert.deepEqual((await f.page()).items.map((item: any) => item.id), initial.items.map((item: any) => item.id), 'sorting never mutates catalogue order');
+      assert.equal(f.reads(), 1); assert.equal(f.edits.length, 0);
+      assert.deepEqual(Object.keys(page.items[0]).sort(), Object.keys(initial.items[0]).sort(), 'sort metrics stay main-only');
+    });
+  }
+}
+
+for (const sort of ['date-added', 'last-played', 'file-size', 'duration', 'rating'] as const) {
+  test(`${sort} rejects malformed and default metrics and keeps unknowns last in either direction`, async t => {
+    const key = { 'date-added': 'dateAdded', 'last-played': 'lastPlayed', 'file-size': 'fileSize', duration: 'duration', rating: 'stars' }[sort];
+    const unknown: unknown[] = [undefined, null, '20', NaN, Infinity, -1, 0, Number.MAX_VALUE];
+    if (sort !== 'duration') { unknown.push(1.25); }
+    if (sort === 'date-added' || sort === 'last-played') { unknown.push(8.64e15 + 1); }
+    if (sort === 'rating') { unknown.push(1, 6.5); }
+    const known = sort === 'rating' ? [0.5, 5.5] : sort === 'duration' ? [0.25, 2] : [1, 2];
+    const images = [...known, ...unknown].map((value, index) => Object.assign(image(index), { [key]: value }));
+    const f = fixture(t, images);
+    for (const direction of galleryDirections) {
+      const page = await f.list(f.event, { query: '', offset: 0, sort, direction });
+      const expected = [...(direction === 'asc' ? [0, 1] : [1, 0]), ...unknown.map((_value, index) => index + 2)];
+      assert.deepEqual(page.items.map((item: any) => item.title), expected.map(index => images[index].cleanName));
+    }
+  });
+}
+
+test('recent includes only valid positive last-played timestamps and intersects search without probing originals', async t => {
+  const values: unknown[] = [0, undefined, null, '1', -1, NaN, Infinity, 1.25, 8.64e15 + 1, 1, 8.64e15];
+  const images = values.map((lastPlayed, index) => Object.assign(image(index), { lastPlayed, tags: ['Recent subject'] }));
+  const f = fixture(t, images, ENTRY, async () => { assert.fail('Collection browsing cannot prompt for originals'); });
+  const recent = await f.list(f.event, { query: '  RECENT SUBJECT ', offset: 0, collection: 'recent', sort: 'last-played', direction: 'desc' });
+  assert.equal(recent.total, 2); assert.deepEqual(recent.items.map((item: any) => item.title), ['Video 10', 'Video 9']);
+  const filtered = await f.list(f.event, { query: 'video 9', offset: 0, collection: 'recent' });
+  assert.equal(filtered.total, 1); assert.equal(filtered.items[0].id, recent.items[1].id);
+  assert.equal((await f.list(f.event, { query: 'missing', offset: 0, collection: 'recent' })).total, 0);
+  assert.equal(f.reads(), 1); assert.equal(f.edits.length, 0);
+});
+
+test('favourites use exact saved rating and search intersection precedes sorting and 48-row pagination', async t => {
+  const images = Array.from({ length: 123 }, (_value, index) => Object.assign(image(index), {
+    cleanName: `Clip ${index}`, stars: index % 2 === 0 ? 5.5 : 4.5, tags: index < 120 ? ['Chosen'] : ['Other'],
+  }));
+  const f = fixture(t, images);
+  const request = { query: 'chosen', collection: 'favourites', sort: 'name', direction: 'desc' };
+  const first = await f.list(f.event, { ...request, offset: 0 });
+  const second = await f.list(f.event, { ...request, offset: 48 });
+  const expected = Array.from({ length: 60 }, (_value, index) => `Clip ${118 - index * 2}`);
+  assert.equal(first.total, 60); assert.equal(second.total, 60);
+  assert.equal(first.items.length, 48); assert.equal(second.items.length, 12);
+  assert.deepEqual([...first.items, ...second.items].map(item => item.title), expected);
+  assert.equal(new Set([...first.items, ...second.items].map(item => item.id)).size, 60);
+  assert.deepEqual((await f.list(f.event, { ...request, offset: 96 })).items, []);
+  assert.equal(f.reads(), 1);
+});
+
+for (const sort of gallerySorts) {
+  test(`${sort} pagination is stable across page boundaries with repeated keys`, async t => {
+    const images = Array.from({ length: 103 }, (_value, index) => Object.assign(image(index), {
+      cleanName: `Group ${index % 3}`, dateAdded: index % 3 + 1, lastPlayed: index % 3 + 1,
+      duration: index % 3 + 1, fileSize: index % 3 + 1, stars: index % 3 + 0.5,
+    }));
+    const f = fixture(t, images);
+    const initial = await f.page();
+    for (const direction of galleryDirections) {
+      const pages = [];
+      for (const offset of [0, 48, 96]) {
+        pages.push(await f.list(f.event, { query: '', offset, sort, direction }));
+      }
+      assert.deepEqual(pages.map(page => page.total), [103, 103, 103]);
+      const items = pages.flatMap(page => page.items);
+      assert.equal(items.length, 103); assert.equal(new Set(items.map(item => item.id)).size, 103);
+      const expected = Array.from({ length: 103 }, (_value, index) => index).sort((a, b) =>
+        sort === 'catalogue' ? (direction === 'asc' ? 1 : -1) * (a - b)
+          : (direction === 'asc' ? 1 : -1) * (a % 3 - b % 3) || a - b);
+      const reference = new Map<number, string>(initial.items.map((item: any, index: number) => [index, item.id]));
+      for (const [position, index] of expected.entries()) {
+        if (reference.has(index)) { assert.equal(items[position].id, reference.get(index)); }
+      }
+      assert.deepEqual(items.map(item => item.title), expected.map(index => images[index].cleanName));
+    }
+  });
+}
+
+test('empty collections preserve exact zero totals and legacy query defaults', async t => {
+  const f = fixture(t, []);
+  for (const collection of ['all', 'favourites', 'recent']) {
+    assert.deepEqual(await f.list(f.event, { query: '', offset: 0, collection, sort: 'name', direction: 'desc' }),
+      { status: 'ready', total: 0, offset: 0, items: [] });
+  }
+  assert.deepEqual(await f.page(), { status: 'ready', total: 0, offset: 0, items: [] });
+});
+
+test('list query rejects unknown keys, symbols, accessors, prototypes and invalid sort options without invoking getters', async t => {
+  const f = fixture(t);
+  let getters = 0;
+  const bad: unknown[] = [
+    { query: '', offset: 0, collection: 'other' }, { query: '', offset: 0, collection: undefined },
+    { query: '', offset: 0, collection: 1 }, { query: '', offset: 0, sort: 'private-path' },
+    { query: '', offset: 0, sort: undefined }, { query: '', offset: 0, sort: {} },
+    { query: '', offset: 0, direction: 'ASC' }, { query: '', offset: 0, direction: undefined },
+    { query: '', offset: 0, [Symbol('hidden')]: true },
+    Object.assign(Object.create({ collection: 'all' }), { query: '', offset: 0 }),
+    Object.assign(Object.create({ query: '' }), { offset: 0 }),
+  ];
+  for (const key of ['query', 'offset', 'collection', 'sort', 'direction']) {
+    const accessor = { query: '', offset: 0 };
+    Object.defineProperty(accessor, key, { enumerable: true, get: () => { getters++; return key === 'offset' ? 0 : ''; } });
+    bad.push(accessor);
+    const hidden = { query: '', offset: 0 };
+    Object.defineProperty(hidden, key, { enumerable: false, value: key === 'offset' ? 0 : '' });
+    bad.push(hidden);
+  }
+  for (const value of bad) { assert.deepEqual(await f.list(f.event, value), { status: 'unavailable' }); }
+  assert.equal(getters, 0); assert.equal(f.reads(), 0);
+  assert.equal((await f.list(f.event, Object.assign(Object.create(null), { query: '', offset: 0 }))).status, 'ready');
+});
+
+test('sorting and collection requests cannot deliver cached results after authority expires', async t => {
+  const f = fixture(t, sortableImages());
+  await f.page(); f.stale();
+  assert.deepEqual(await f.list(f.event, { query: '', offset: 0, collection: 'recent', sort: 'last-played', direction: 'desc' }),
+    { status: 'unavailable' });
+  assert.equal(f.reads(), 1);
+});
+
+test('metadata refresh updates collection and sort keys without replacing existing selection IDs', async t => {
+  const images = sortableImages(); const f = fixture(t, images);
+  const initial = await f.list(f.event, { query: '', offset: 0, sort: 'last-played', direction: 'desc' });
+  const id = initial.items[1].id;
+  const detail = await f.detail(f.event, id);
+  f.write(async (_generation, request, current) => {
+    assert.equal(current(), true);
+    images[request.index] = { ...images[request.index], tags: ['Saved collection tag'], notes: request.notes,
+      stars: 5.5, lastPlayed: 50, dateAdded: 50, duration: 50, fileSize: 500 };
+    return { status: 'saved', image: images[request.index] };
+  });
+  const saved = await f.save(f.event, { id, revision: detail.item.revision, tags: ['Saved collection tag'], notes: 'Updated notes' });
+  assert.equal(saved.status, 'saved'); assert.equal(saved.item.id, id);
+  for (const sort of ['date-added', 'last-played', 'rating', 'duration', 'file-size']) {
+    const page = await f.list(f.event, { query: 'saved collection', offset: 0, collection: 'favourites', sort, direction: 'desc' });
+    assert.equal(page.total, 1); assert.equal(page.items[0].id, id);
+    const all = await f.list(f.event, { query: '', offset: 0, sort, direction: 'desc' });
+    assert.equal(all.items[0].id, id);
+  }
+});
+
+test('rating save updates favourites and rating order while preserving selection identity', async t => {
+  const images = [image(0), { ...image(1), stars: 3.5 as const }, { ...image(2), stars: 3.5 as const }];
+  const f = fixture(t, images);
+  const initial = await f.page(); const id = initial.items[0].id;
+  let selected = (await f.detail(f.event, id)).item;
+  const request = { id, revision: selected.revision, notes: selected.notes, tags: selected.tags, rating: 2 };
+  let saved = await f.save(f.event, request);
+  assert.equal(saved.status, 'saved'); assert.equal(saved.item.id, id);
+  assert.equal(saved.item.rating, 2); assert.equal(saved.item.favourite, false);
+  assert.equal((f.edits[0] as any).rating, 2); assert.equal(images[0].stars, 2.5);
+  assert.equal((await f.list(f.event, { query: '', offset: 0, collection: 'favourites' })).total, 0);
+  const sorted = await f.list(f.event, { query: '', offset: 0, sort: 'rating', direction: 'desc' });
+  assert.deepEqual(sorted.items.map((item: any) => item.id), [initial.items[1].id, initial.items[2].id, id]);
+  assert.deepEqual(await f.save(f.event, request), { status: 'conflict' });
+  selected = saved.item;
+  saved = await f.save(f.event, { id, revision: selected.revision, notes: 'Rated favourite', tags: ['Favourite tag'], rating: 5 });
+  assert.equal(saved.status, 'saved'); assert.equal(saved.item.favourite, true); assert.equal(saved.item.rating, 5);
+  const favourites = await f.list(f.event, { query: 'favourite tag', offset: 0, collection: 'favourites' });
+  assert.equal(favourites.total, 1); assert.equal(favourites.items[0].id, id);
+  saved = await f.save(f.event, { id, revision: saved.item.revision, notes: 'Unrated', tags: ['Favourite tag'], rating: 0 });
+  assert.equal(saved.item.rating, 0); assert.equal(saved.item.favourite, false); assert.equal(images[0].stars, 0.5);
+});
+
+test('legacy notes and tags save omits rating from the storage request and preserves raw stars', async t => {
+  const images: ImageElement[] = [Object.assign(image(0), { stars: 'legacy unknown rating' })];
+  const f = fixture(t, images); const id = (await f.page()).items[0].id;
+  const selected = (await f.detail(f.event, id)).item;
+  const saved = await f.save(f.event, { id, revision: selected.revision, notes: 'Legacy notes edit', tags: selected.tags });
+  assert.equal(saved.status, 'saved'); assert.equal(Object.hasOwn(f.edits[0] as object, 'rating'), false);
+  assert.equal(images[0].stars, 'legacy unknown rating');
+});
+
+test('rating saves reject unknown fields, invalid scalars and accessors without invoking storage or getters', async t => {
+  const f = fixture(t); const id = (await f.page()).items[0].id;
+  const selected = (await f.detail(f.event, id)).item;
+  const base = { id, revision: selected.revision, notes: selected.notes, tags: selected.tags };
+  let getters = 0;
+  const invalid: unknown[] = [undefined, null, '5', true, -1, 6, 0.5, NaN, Infinity, {}, []].map(rating => ({ ...base, rating }));
+  invalid.push({ ...base, rating: 5, favourite: true }, { ...base, [Symbol('rating')]: 5 },
+    Object.assign(Object.create({ rating: 5 }), base));
+  for (const key of ['id', 'revision', 'notes', 'tags', 'rating']) {
+    const accessor = { ...base };
+    Object.defineProperty(accessor, key, { enumerable: true, get: () => { getters++; return 5; } });
+    invalid.push(accessor);
+    const hidden = { ...base };
+    Object.defineProperty(hidden, key, { enumerable: false, value: 5 }); invalid.push(hidden);
+  }
+  const tags = ['tag'];
+  Object.defineProperty(tags, '0', { enumerable: true, get: () => { getters++; return 'tag'; } });
+  invalid.push({ ...base, tags, rating: 5 });
+  const iterator = ['tag'];
+  Object.defineProperty(iterator, Symbol.iterator, { value: () => { getters++; throw new Error('No iterator'); } });
+  invalid.push({ ...base, tags: iterator, rating: 5 });
+  for (const value of invalid) { assert.deepEqual(await f.save(f.event, value), { status: 'invalid' }); }
+  assert.equal(getters, 0); assert.equal(f.edits.length, 0);
+});
+
+test('concurrent stored rating conflicts with a stale editor until explicit detail refresh', async t => {
+  const images = [image(0)]; const f = fixture(t, images);
+  const id = (await f.page()).items[0].id;
+  const selected = (await f.detail(f.event, id)).item;
+  images[0].stars = 1.5;
+  const request = { id, revision: selected.revision, notes: selected.notes, tags: selected.tags, rating: 4 };
+  assert.deepEqual(await f.save(f.event, request), { status: 'conflict' });
+  assert.equal(images[0].stars, 1.5);
+  const refreshed = (await f.detail(f.event, id)).item;
+  assert.equal(refreshed.rating, 1); assert.equal(refreshed.id, id);
+  assert.equal((await f.save(f.event, { ...request, revision: refreshed.revision })).status, 'saved');
+  assert.equal(images[0].stars, 4.5);
+});
+
+
+async function scanFixture(t: TestContext) {
+  const f = await sourceFixture(t);
+  const selected = path.join(f.root, 'discovered-video.mp4');
+  await fs.writeFile(selected, 'Synthetic discovered video');
+  let confirmations = 0; let writes = 0;
+  f.confirmScan(async (count, more) => { confirmations++; assert.equal(count, 1); assert.equal(more, false); return true; });
+  const captured: import('./private-preview-source').PrivatePreviewSource[] = [];
+  f.importing(async (_generation, source, location, options) => {
+    writes++; captured.push(source);
+    assert.equal(options.isCurrent(), true); assert.equal(source.isCurrent(), true);
+    f.images.push({ ...NewImageElement(), ...location, locations: undefined, cleanName: 'Discovered video' });
+    return { status: 'imported', index: f.images.length - 1 };
+  });
+  const sourceId = (await f.sources(f.event)).items[0].id;
+  return { ...f, selected, sourceId, writes: () => writes, confirmations: () => confirmations, captured,
+    runScan: () => f.scanSource(f.event, sourceId) };
+}
+
+test('source scan requires a native grant and count-only confirmation before encrypted import', async t => {
+  const f = await scanFixture(t);
+  let granted = false; let confirmed = false; let enumerations = 0;
+  const opendir = fs.opendir;
+  t.mock.method(fs, 'opendir', (async (...args: Parameters<typeof fs.opendir>) => {
+    assert.equal(granted, true, 'directory enumeration starts only after the native source grant');
+    enumerations++; return opendir(...args);
+  }) as typeof fs.opendir);
+  f.choose(async root => { granted = true; return root; });
+  f.confirmScan(async (...args) => {
+    assert.deepEqual(args, [1, false]); confirmed = true;
+    assert.equal(f.writes(), 0); assert.deepEqual(await f.importProgress(f.event), { status: 'idle' }); return true;
+  });
+  const original = await fs.readFile(f.selected);
+  assert.deepEqual(await f.runScan(), batchResult(1, 1));
+  assert.equal(confirmed, true); assert.ok(enumerations > 0); assert.equal(f.writes(), 1);
+  assert.equal(f.captured[0].isCurrent(), false); assert.deepEqual(await fs.readFile(f.selected), original);
+  const sources = await f.sources(f.event);
+  assert.deepEqual(await f.scanSource(f.event, sources.items[0].id), { status: 'nothing-new' });
+  assert.deepEqual(await f.importProgress(f.event), { status: 'idle' });
+});
+
+test('source scan validates frame, opaque source ID, arity and native confirmation capability before probing', async t => {
+  const f = await scanFixture(t);
+  const opendir = t.mock.method(fs, 'opendir', async () => { assert.fail('Do not probe invalid source requests'); });
+  for (const args of [[], ['bad'], [f.sourceId, 'extra'], [{ id: f.sourceId }], ['a'.repeat(32)]]) {
+    assert.deepEqual(await f.scanSource(f.event, ...args), { status: 'unavailable' });
+  }
+  assert.deepEqual(await f.scanSource({ ...f.event, senderFrame: { ...f.contents.mainFrame } }, f.sourceId), { status: 'unavailable' });
+  f.options.confirmSourceScan = undefined!;
+  assert.deepEqual(await f.runScan(), { status: 'unavailable' });
+  assert.equal(opendir.mock.callCount(), 0); assert.equal(f.picks(), 0); assert.equal(f.writes(), 0);
+});
+
+test('cancelled access permission never enumerates a source or asks for import confirmation', async t => {
+  const f = await scanFixture(t); f.choose(async () => undefined);
+  const opendir = t.mock.method(fs, 'opendir', async () => { assert.fail('Cancelled permission cannot enumerate'); });
+  assert.deepEqual(await f.runScan(), { status: 'cancelled' });
+  assert.equal(opendir.mock.callCount(), 0); assert.equal(f.confirmations(), 0); assert.equal(f.writes(), 0);
+});
+
+test('source scan rechecks a saved source changed while the grant picker was open before enumeration', async t => {
+  const f = await scanFixture(t);
+  const opendir = t.mock.method(fs, 'opendir', async () => { assert.fail('Changed saved source cannot enumerate'); });
+  f.choose(async () => {
+    f.catalogue({ images: f.images, inputDirs: { 0: { path: f.root + '-changed' } } } as unknown as FinalObject);
+    return f.root;
+  });
+  assert.deepEqual(await f.runScan(), { status: 'conflict' });
+  assert.equal(opendir.mock.callCount(), 0); assert.equal(f.confirmations(), 0); assert.equal(f.writes(), 0);
+});
+
+test('declining a discovered batch performs no source-content reads or catalogue writes', async t => {
+  const f = await scanFixture(t); f.confirmScan(async () => false);
+  const open = t.mock.method(fs, 'open', async () => { assert.fail('A declined review cannot open media content'); });
+  const result = await f.runScan();
+  assert.deepEqual(result, { status: 'cancelled' }); assert.equal(open.mock.callCount(), 0); assert.equal(f.writes(), 0);
+  assert.doesNotMatch(JSON.stringify(result), /root|path|discovered|fileName|hash|index/);
+});
+
+for (const revoke of ['cancel', 'dispose', 'lock'] as const) {
+  test(`source scan ${revoke} drains a late native confirmation and never imports`, async t => {
+    const f = await scanFixture(t);
+    let start!: () => void; const ready = new Promise<void>(resolve => { start = resolve; });
+    let finish!: () => void;
+    f.confirmScan(async () => { start(); await new Promise<void>(resolve => { finish = resolve; }); return true; });
+    const work = f.runScan(); await ready;
+    assert.deepEqual(await f.page(), { status: 'busy' }); assert.deepEqual(await f.runScan(), { status: 'busy' });
+    assert.deepEqual(await f.importVideo(f.event, f.sourceId), { status: 'busy' });
+    assert.deepEqual(await f.importProgress(f.event), { status: 'idle' });
+    let drained = false; let disposal: Promise<void> | undefined;
+    if (revoke === 'cancel') { f.cancelImport(); }
+    else if (revoke === 'lock') { f.controller.abort(); }
+    else { disposal = f.dispose().then(() => { drained = true; }); }
+    await Promise.resolve(); assert.equal(drained, false); finish();
+    assert.deepEqual(await work, { status: revoke === 'cancel' ? 'cancelled' : 'unavailable' });
+    await disposal; assert.equal(f.writes(), 0);
+  });
+}
+
+for (const changed of ['file', 'ignored', 'root'] as const) {
+  test(`source scan detects ${changed} changes made during confirmation before importing`, async t => {
+    const f = await scanFixture(t);
+    f.confirmScan(async () => {
+      if (changed === 'file') { await fs.writeFile(f.selected, 'Changed reviewed bytes'); }
+      else {
+        f.catalogue({ images: f.images, inputDirs: { 0: { path: changed === 'root' ? f.root + '-changed' : f.root,
+          ...(changed === 'ignored' ? { ignoredSubdirectories: ['excluded'] } : {}) } } } as unknown as FinalObject);
+      }
+      return true;
+    });
+    const result = await f.runScan();
+    assert.deepEqual(result, { status: changed === 'file' ? 'source-unavailable' : 'conflict' });
+    assert.equal(f.writes(), 0);
+  });
+}
+
+test('source scan imports serially, preserves its review across own appends and shares numeric progress/cancellation', async t => {
+  const f = await scanFixture(t);
+  const second = path.join(f.root, 'second-video.mp4'); await fs.writeFile(second, 'Second synthetic discovered video');
+  f.confirmScan(async (count, more) => { assert.equal(count, 2); assert.equal(more, false); return true; });
+  let start!: () => void; const ready = new Promise<void>(resolve => { start = resolve; });
+  let resume!: () => void; const release = new Promise<void>(resolve => { resume = resolve; }); t.after(() => resume());
+  let writes = 0; let previous: import('./private-preview-source').PrivatePreviewSource | undefined;
+  f.importing(async (_generation, source, location) => {
+    assert.equal(previous?.isCurrent() ?? false, false); previous = source; writes++;
+    if (writes === 2) { start(); await release; f.cancelImport(); throw new Error('Cancelled'); }
+    f.images.push({ ...NewImageElement(), ...location, locations: undefined, cleanName: 'Discovered' });
+    return { status: 'imported', index: f.images.length - 1 };
+  });
+  const work = f.runScan(); await ready;
+  const progress = await f.importProgress(f.event);
+  assert.deepEqual(progress, { status: 'running', total: 2, processed: 1, imported: 1, duplicates: 0, failed: 0 });
+  assert.doesNotMatch(JSON.stringify(progress), /root|path|fileName|discovered|hash|index/);
+  resume(); assert.deepEqual(await work, batchResult(2, 1, 0, 0, 'cancelled'));
+  assert.equal(previous?.isCurrent(), false); assert.equal(f.images.length, 2);
+});
+
+test('source scan review prevents changed later files from being captured after an earlier publication', async t => {
+  const f = await scanFixture(t);
+  const second = path.join(f.root, 'second-video.mp4'); await fs.writeFile(second, 'Second synthetic discovered video');
+  f.confirmScan(async () => true); let writes = 0;
+  f.importing(async (_generation, _source, location) => {
+    writes++; assert.equal(location.fileName, path.basename(f.selected));
+    await fs.writeFile(second, 'Changed after the reviewed batch was confirmed');
+    return { status: 'imported', index: 1 };
+  });
+  assert.deepEqual(await f.runScan(), batchResult(2, 1, 0, 0, 'stopped')); assert.equal(writes, 1);
+});
+
+test('source scan review remains part of source authority throughout descriptor capture and import', async t => {
+  const f = await scanFixture(t); let writes = 0;
+  f.importing(async (_generation, source, _location, options) => {
+    writes++; await fs.writeFile(f.selected, 'Changed during admitted import');
+    assert.equal(options.isCurrent(), false); assert.equal(source.isCurrent(), false);
+    return { status: 'conflict' };
+  });
+  assert.deepEqual(await f.runScan(), batchResult(1, 0, 0, 0, 'stopped')); assert.equal(writes, 1);
+});
+
+for (const status of ['cancelled', 'invalid', 'limit', 'source-unavailable'] as const) {
+  test(`source scan maps ${status} discovery failure without native confirmation`, async t => {
+    const f = await scanFixture(t);
+    t.mock.method(sourceScan, 'reviewPrivateSourceScan', async () => ({ status }));
+    assert.deepEqual(await f.runScan(), { status: status === 'limit' ? 'scan-limit' : status });
+    assert.equal(f.confirmations(), 0); assert.equal(f.writes(), 0);
+  });
+}
+
+test('unconfirmed source scan directory cleanup quarantines the private session', async t => {
+  const f = await scanFixture(t); const opendir = fs.opendir;
+  t.mock.method(fs, 'opendir', (async (...args: Parameters<typeof fs.opendir>) => {
+    const directory = await opendir(...args); const close = directory.close.bind(directory);
+    directory.close = async () => { await close(); throw new Error('/PRIVATE-SCAN-PATH'); };
+    return directory;
+  }) as typeof fs.opendir);
+  f.expectQuarantinedDisposal();
+  assert.deepEqual(await f.runScan(), { status: 'unavailable' });
+  assert.equal(f.confirmations(), 0); assert.equal(f.writes(), 0); assert.ok(f.locks() > 0);
+  assert.deepEqual(await f.importProgress(f.event), { status: 'unavailable' });
+  await assert.rejects(f.dispose(), /Private gallery cleanup unavailable/);
 });

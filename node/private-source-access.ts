@@ -90,6 +90,24 @@ export class PrivateSourceAccess {
     return !grant.revoked && this.#grants.get(grant.root) === grant;
   }
 
+  /** Check only an existing session grant; unknown roots are never probed. */
+  isConnected(root: string): boolean {
+    const requested = rootPath(root);
+    if (!requested || !this.ownerCurrent()) { return false; }
+    const grant = this.#grants.get(requested);
+    return !!grant && this.grantCurrent(grant) && this.ownerCurrent();
+  }
+
+  /** Revoke a cached grant without reading the source or changing the catalogue. */
+  disconnect(root: string): void {
+    const requested = rootPath(root);
+    if (!requested) { return; }
+    const grant = this.#grants.get(requested);
+    if (!grant) { return; }
+    grant.revoked = true;
+    this.#grants.delete(requested);
+  }
+
   authorize(root: string, signal: AbortSignal, isCurrent: () => boolean): Promise<PrivateSourceAccessResult> {
     const requested = rootPath(root);
     let operationRevoked = false;

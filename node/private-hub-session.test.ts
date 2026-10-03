@@ -927,7 +927,8 @@ test('generation refuses a known hash paired with a different file, root, or sou
   }
   assert.equal(generation.mock.callCount(), 0);
   const real = await f.capture();
-  const lookalike = { hash, signal: real.signal, open: real.open, close: real.close, isCurrent: () => true };
+  const lookalike = { hash, byteLength: real.byteLength, birthtime: real.birthtime, mtime: real.mtime,
+    signal: real.signal, open: real.open, close: real.close, isCurrent: () => true };
   await assert.rejects(f.session.generatePreviews(f.generation, lookalike));
   await assert.rejects(f.session.generatePreviews(f.generation, real, { signal: {} as AbortSignal }));
   assert.equal(real.signal.aborted, false, 'invalid options must not consume a caller-owned source');

@@ -6,7 +6,10 @@ const unavailable = () => ({ status: 'unavailable' });
 let locked = false;
 let pending;
 let cancellationSent = false;
-const validId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+let originalEpoch = 0;
+let invocationEpoch = 0;
+let importProgressPending = false;
+const validId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.exec(value)?.[0] === value;
 const string = (value, limit) => typeof value === 'string' && value.length <= limit;
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const autoLockMinutes = value => [0, 1, 5, 15, 30].includes(value);
@@ -73,11 +76,25 @@ function item(value, details) {
     if (!string(value.notes, 65_536) || !url(value.clipUrl, 'clips', 'mp4') || !url(value.posterUrl, 'clips', 'jpg')
       || !url(value.filmstripUrl, 'filmstrips', 'jpg')
       || typeof value.truncated !== 'boolean' || typeof value.editable !== 'boolean' || typeof value.regenerable !== 'boolean'
+      || typeof value.playable !== 'boolean'
       || !validId(value.revision)) { return; }
     Object.assign(result, { notes: value.notes, clipUrl: value.clipUrl, posterUrl: value.posterUrl, filmstripUrl: value.filmstripUrl, truncated: value.truncated,
-      editable: value.editable, regenerable: value.regenerable, revision: value.revision });
+      editable: value.editable, regenerable: value.regenerable, playable: value.playable, revision: value.revision });
   }
   return result;
+}
+function sourceItem(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !validId(value.id)
+    || typeof value.title !== 'string' || /^Source folder (?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-6])$/.exec(value.title)?.[0] !== value.title
+    || !Number.isSafeInteger(value.videoCount) || value.videoCount < 0 || value.videoCount > 100_000
+    || typeof value.connected !== 'boolean') { return; }
+  return { id: value.id, title: value.title, videoCount: value.videoCount, connected: value.connected };
+}
+function importCounts(value) {
+  const { total, processed, imported, duplicates, failed } = value;
+  if (![total, processed, imported, duplicates, failed].every(count => Number.isSafeInteger(count) && count >= 0 && count <= 100)
+    || total < 1 || processed !== imported + duplicates + failed || processed > total) { return; }
+  return { total, processed, imported, duplicates, failed };
 }
 function response(value, mode) {
   if (!value || typeof value !== 'object') { return unavailable(); }
@@ -89,7 +106,47 @@ function response(value, mode) {
     return ['copied', 'incorrect-password', 'cancelled', 'failed', 'invalid', 'busy', 'unavailable'].includes(value.status)
       ? { status: value.status } : unavailable();
   }
+  if (mode === 'addSource') {
+    const status = value.status;
+    return !Array.isArray(value) && ['added', 'cancelled', 'conflict', 'invalid', 'duplicate', 'limit', 'source-unavailable', 'busy', 'unavailable'].includes(status)
+      ? { status } : unavailable();
+  }
+  if (mode === 'importVideo' || mode === 'scanSource' || mode === 'importProgress') {
+    if (Array.isArray(value)) { return unavailable(); }
+    const status = value.status;
+    if (mode === 'importProgress' && ['idle', 'unavailable'].includes(status)) { return { status }; }
+    if (['importVideo', 'scanSource'].includes(mode) && ['cancelled', 'conflict', 'invalid', 'duplicate', 'limit', 'nothing-new', 'scan-limit', 'source-unavailable', 'wrong-folder', 'busy', 'unavailable'].includes(status)) { return { status }; }
+    const counts = importCounts(value);
+    if (!counts) { return unavailable(); }
+    if (mode === 'importProgress') { return status === 'running' ? { status, ...counts } : unavailable(); }
+    const outcome = value.outcome;
+    return status === 'finished' && ['completed', 'cancelled', 'stopped'].includes(outcome)
+      && (outcome !== 'completed' || counts.processed === counts.total) ? { status, outcome, ...counts } : unavailable();
+  }
   if (value.status === 'busy') { return { status: 'busy' }; }
+  if (mode === 'playOriginal') {
+    if (['cancelled', 'conflict', 'source-unavailable', 'wrong-folder', 'unsupported'].includes(value.status)) { return { status: value.status }; }
+    return value.status === 'ready' && typeof value.url === 'string'
+      && /^theatrum:\/\/app\/original\/[a-f0-9]{64}$/.exec(value.url)?.[0] === value.url
+      ? { status: 'ready', url: value.url } : unavailable();
+  }
+  if (mode === 'relocateSource') {
+    return ['relocated', 'cancelled', 'conflict', 'invalid', 'source-unavailable'].includes(value.status)
+      ? { status: value.status } : unavailable();
+  }
+  if (mode === 'sources') {
+    if (value.status !== 'ready' || !Array.isArray(value.items) || value.items.length > 256) { return unavailable(); }
+    const items = value.items.map(sourceItem);
+    return items.every(Boolean) && new Set(items.map(item => item.id)).size === items.length
+      ? { status: 'ready', items } : unavailable();
+  }
+  if (mode === 'connectSource' || mode === 'disconnectSource') {
+    const failures = mode === 'connectSource' ? ['cancelled', 'conflict', 'wrong-folder', 'source-unavailable'] : ['conflict'];
+    if (failures.includes(value.status)) { return { status: value.status }; }
+    const status = mode === 'connectSource' ? 'connected' : 'disconnected';
+    const item = value.status === status ? sourceItem(value.item) : undefined;
+    return item && item.connected === (mode === 'connectSource') ? { status, item } : unavailable();
+  }
   if (mode === 'protection' || mode === 'setProtection') {
     const status = mode === 'protection' ? 'ready' : 'saved';
     return value.status === status && autoLockMinutes(value.autoLockMinutes)
@@ -120,15 +177,18 @@ async function invoke(channel, argument, mode) {
   if (locked) { return unavailable(); }
   if (pending) { return { status: 'busy' }; }
   pending = mode;
+  invocationEpoch++;
+  const playbackEpoch = originalEpoch;
   cancellationSent = false;
   try {
     // Electron copies invoke arguments synchronously. Release our owned password
     // references while the main process performs the slower credential work.
-    const work = ipcRenderer.invoke(channel, ...(mode === 'protection' ? [] : [argument]));
+    const work = ipcRenderer.invoke(channel, ...(['protection', 'sources', 'addSource'].includes(mode) ? [] : [argument]));
     if (mode === 'changePassword') { clearPasswordChange(argument); argument = undefined; }
     if (mode === 'createUnprotectedCopy') { clearUnprotectedCopy(argument); argument = undefined; }
     const value = await work;
     if (locked) { return unavailable(); }
+    if (mode === 'playOriginal' && playbackEpoch !== originalEpoch) { return { status: 'cancelled' }; }
     const result = response(value, mode);
     if (mode === 'changePassword' && result.status === 'changed') { locked = true; }
     return result;
@@ -137,12 +197,14 @@ async function invoke(channel, argument, mode) {
     if (mode === 'changePassword') { clearPasswordChange(argument); }
     if (mode === 'createUnprotectedCopy') { clearUnprotectedCopy(argument); }
     pending = undefined;
+    invocationEpoch++;
   }
 }
 async function invokeTouchId(channel, mode, argument) {
   const unavailable = () => ({ outcome: 'unavailable' });
   if (locked || pending) { return unavailable(); }
   pending = mode;
+  invocationEpoch++;
   try {
     const work = ipcRenderer.invoke(channel, ...(argument ? [argument] : []));
     clearUnprotectedCopy(argument);
@@ -162,6 +224,40 @@ async function invokeTouchId(channel, mode, argument) {
   finally { clearUnprotectedCopy(argument); pending = undefined; }
 }
 contextBridge.exposeInMainWorld('privateGallery', Object.freeze({
+  sources: async (...args) => args.length === 0
+    ? invoke('private-gallery-sources', undefined, 'sources') : unavailable(),
+  addSource: async (...args) => args.length === 0
+    ? invoke('private-gallery-add-source', undefined, 'addSource') : unavailable(),
+  connectSource: async (...args) => args.length === 1 && validId(args[0])
+    ? invoke('private-gallery-connect-source', args[0], 'connectSource') : unavailable(),
+  disconnectSource: async (...args) => args.length === 1 && validId(args[0])
+    ? invoke('private-gallery-disconnect-source', args[0], 'disconnectSource') : unavailable(),
+  relocateSource: async (...args) => args.length === 1 && validId(args[0])
+    ? invoke('private-gallery-relocate-source', args[0], 'relocateSource') : unavailable(),
+  importProgress: async (...args) => {
+    if (args.length !== 0 || locked || importProgressPending || (pending && !['importVideo', 'scanSource'].includes(pending))) { return unavailable(); }
+    const epoch = invocationEpoch;
+    importProgressPending = true;
+    try {
+      const value = await ipcRenderer.invoke('private-gallery-import-progress');
+      return !locked && epoch === invocationEpoch ? response(value, 'importProgress') : unavailable();
+    } catch { return unavailable(); }
+    finally { importProgressPending = false; }
+  },
+  scanSource: async (...args) => args.length === 1 && validId(args[0])
+    ? invoke('private-gallery-scan-source', args[0], 'scanSource') : unavailable(),
+  importVideo: async (...args) => args.length === 1 && validId(args[0])
+    ? invoke('private-gallery-import-video', args[0], 'importVideo') : unavailable(),
+  cancelImport: (...args) => {
+    if (locked || !['importVideo', 'scanSource'].includes(pending) || cancellationSent || args.length !== 0) { return; }
+    cancellationSent = true;
+    try { ipcRenderer.send('private-gallery-cancel-import'); } catch { /* Ownership may already have ended. */ }
+  },
+  cancelSourceConnection: (...args) => {
+    if (locked || !['connectSource', 'relocateSource', 'addSource'].includes(pending) || cancellationSent || args.length !== 0) { return; }
+    cancellationSent = true;
+    try { ipcRenderer.send('private-gallery-cancel-source-connection'); } catch { /* Ownership may already have ended. */ }
+  },
   protection: async (...args) => args.length === 0
     ? invoke('private-gallery-protection', undefined, 'protection') : unavailable(),
   setProtection: async (...args) => {
@@ -177,12 +273,21 @@ contextBridge.exposeInMainWorld('privateGallery', Object.freeze({
   list: async (...args) => {
     try {
       const value = args[0];
-      if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value)
-        || Object.keys(value).sort().join(',') !== 'offset,query' || !string(value.query, 200)
-        || !Number.isSafeInteger(value.offset) || value.offset < 0 || value.offset > 100_000 || value.offset % 48 !== 0) {
-        return unavailable();
+      if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value)) { return unavailable(); }
+      const keys = Reflect.ownKeys(value);
+      if (!keys.includes('query') || !keys.includes('offset')
+        || keys.some(key => !['query', 'offset', 'collection', 'sort', 'direction'].includes(key))) { return unavailable(); }
+      const request = {};
+      for (const key of keys) {
+        const property = Object.getOwnPropertyDescriptor(value, key);
+        if (!property || !Object.hasOwn(property, 'value')) { return unavailable(); }
+        request[key] = property.value;
       }
-      return await invoke('private-gallery-list', { query: value.query, offset: value.offset }, 'list');
+      if (!string(request.query, 200) || !Number.isSafeInteger(request.offset) || request.offset < 0 || request.offset > 100_000
+        || request.offset % 48 !== 0 || (Object.hasOwn(request, 'collection') && !['all', 'favourites', 'recent'].includes(request.collection))
+        || (Object.hasOwn(request, 'sort') && !['catalogue', 'name', 'date-added', 'last-played', 'rating', 'duration', 'file-size'].includes(request.sort))
+        || (Object.hasOwn(request, 'direction') && !['asc', 'desc'].includes(request.direction))) { return unavailable(); }
+      return await invoke('private-gallery-list', request, 'list');
     } catch { return unavailable(); }
   },
   detail: async (...args) => args.length === 1 && validId(args[0])
@@ -190,15 +295,48 @@ contextBridge.exposeInMainWorld('privateGallery', Object.freeze({
   save: async (...args) => {
     try {
       const value = args[0];
-      if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value)
-        || Object.keys(value).sort().join(',') !== 'id,notes,revision,tags'
-        || !validId(value.id) || !validId(value.revision) || !string(value.notes, 65_536)
-        || !Array.isArray(value.tags) || value.tags.length > 128 || !value.tags.every(tag => string(tag, 512))) {
-        return unavailable();
+      if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value)) { return unavailable(); }
+      const keys = Reflect.ownKeys(value);
+      if (!['id', 'notes', 'revision', 'tags'].every(key => keys.includes(key))
+        || keys.some(key => !['id', 'notes', 'revision', 'tags', 'rating'].includes(key))) { return unavailable(); }
+      const request = {};
+      for (const key of keys) {
+        const property = Object.getOwnPropertyDescriptor(value, key);
+        if (!property?.enumerable || !Object.hasOwn(property, 'value')) { return unavailable(); }
+        request[key] = property.value;
       }
-      return await invoke('private-gallery-save', { id: value.id, revision: value.revision,
-        notes: value.notes, tags: value.tags.slice() }, 'save');
+      if (!validId(request.id) || !validId(request.revision) || !string(request.notes, 65_536)
+        || (Object.hasOwn(request, 'rating') && (!Number.isInteger(request.rating) || request.rating < 0 || request.rating > 5))
+        || !Array.isArray(request.tags)) { return unavailable(); }
+      const length = Object.getOwnPropertyDescriptor(request.tags, 'length')?.value;
+      if (!Number.isInteger(length) || length < 0 || length > 128 || Reflect.ownKeys(request.tags).length !== length + 1) { return unavailable(); }
+      const tags = [];
+      for (let index = 0; index < length; index++) {
+        const property = Object.getOwnPropertyDescriptor(request.tags, String(index));
+        if (!property?.enumerable || !Object.hasOwn(property, 'value') || !string(property.value, 512)) { return unavailable(); }
+        tags.push(property.value);
+      }
+      request.tags = tags;
+      return await invoke('private-gallery-save', request, 'save');
     } catch { return unavailable(); }
+  },
+  playOriginal: async (...args) => {
+    try {
+      const value = args[0];
+      if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value)) { return unavailable(); }
+      const keys = Reflect.ownKeys(value);
+      if (keys.length !== 2 || !keys.includes('id') || !keys.includes('revision')) { return unavailable(); }
+      const id = Object.getOwnPropertyDescriptor(value, 'id');
+      const revision = Object.getOwnPropertyDescriptor(value, 'revision');
+      if (!id || !revision || !Object.hasOwn(id, 'value') || !Object.hasOwn(revision, 'value')
+        || !validId(id.value) || !validId(revision.value)) { return unavailable(); }
+      return await invoke('private-gallery-play-original', { id: id.value, revision: revision.value }, 'playOriginal');
+    } catch { return unavailable(); }
+  },
+  stopOriginal: (...args) => {
+    if (locked || args.length !== 0) { return; }
+    originalEpoch++;
+    try { ipcRenderer.send('private-gallery-stop-original'); } catch { /* The owner may already be gone. */ }
   },
   regenerate: async (...args) => {
     try {

@@ -10,6 +10,11 @@
   const TAG_LENGTH = 512;
   const byId = id => document.getElementById(id);
   const search = byId('gallery-search');
+  const collectionControl = byId('gallery-collection');
+  const sortControl = byId('gallery-sort');
+  const directionControl = byId('gallery-sort-direction');
+  const collectionValues = ['all', 'favourites', 'recent'];
+  const sortValues = ['catalogue', 'name', 'date-added', 'last-played', 'rating', 'duration', 'file-size'];
   const grid = byId('gallery-grid');
   const galleryStatus = byId('gallery-status');
   const summary = byId('result-summary');
@@ -25,6 +30,9 @@
   const detailsTitle = byId('details-title');
   const detailsFacts = byId('details-facts');
   const detailsRating = byId('details-rating');
+  const ratingEditor = byId('details-rating-editor');
+  const ratingInput = byId('details-rating-input');
+  const ratingExisting = byId('details-rating-existing');
   const detailsTags = byId('details-tags');
   const detailsNotes = byId('details-notes');
   const tagDraft = byId('tag-draft');
@@ -39,6 +47,9 @@
   const posterPlaceholder = byId('detail-placeholder');
   const video = byId('preview-video');
   const play = byId('play-preview');
+  const playOriginalButton = byId('play-original');
+  const stopPlaybackButton = byId('stop-video');
+  const playbackStatus = byId('playback-status');
   const filmstripToggle = byId('toggle-filmstrip');
   const filmstripPanel = byId('filmstrip-panel');
   const filmstripImage = byId('detail-filmstrip');
@@ -60,6 +71,15 @@
   const protectionClose = byId('close-protection');
   const protectionStatus = byId('protection-status');
   const protectionValues = ['0', '1', '5', '15', '30'];
+  const sourcesToggle = byId('source-folders-toggle');
+  const sourcesPanel = byId('source-folders-panel');
+  const sourcesList = byId('source-folders-list');
+  const sourcesStatus = byId('source-folders-status');
+  const sourceAdd = byId('add-source-folder');
+  const sourcesRefresh = byId('refresh-source-folders');
+  const sourcesClose = byId('close-source-folders');
+  const sourceCancel = byId('cancel-source-connection');
+  const importCancel = byId('cancel-video-import');
   const passwordToggle = byId('change-password-toggle');
   const passwordForm = byId('change-password-form');
   const currentPasswordInput = byId('current-password');
@@ -102,9 +122,21 @@
     list: bridge.list.bind(bridge), detail: bridge.detail.bind(bridge), lock: bridge.lock.bind(bridge),
     save: typeof bridge.save === 'function' ? bridge.save.bind(bridge) : undefined,
     regenerate: typeof bridge.regenerate === 'function' ? bridge.regenerate.bind(bridge) : undefined,
+    playOriginal: typeof bridge.playOriginal === 'function' ? bridge.playOriginal.bind(bridge) : undefined,
+    stopOriginal: typeof bridge.stopOriginal === 'function' ? bridge.stopOriginal.bind(bridge) : undefined,
     cancelRegeneration: typeof bridge.cancelRegeneration === 'function' ? bridge.cancelRegeneration.bind(bridge) : undefined,
     protection: typeof bridge.protection === 'function' ? bridge.protection.bind(bridge) : undefined,
     setProtection: typeof bridge.setProtection === 'function' ? bridge.setProtection.bind(bridge) : undefined,
+    sources: typeof bridge.sources === 'function' ? bridge.sources.bind(bridge) : undefined,
+    addSource: typeof bridge.addSource === 'function' ? bridge.addSource.bind(bridge) : undefined,
+    connectSource: typeof bridge.connectSource === 'function' ? bridge.connectSource.bind(bridge) : undefined,
+    disconnectSource: typeof bridge.disconnectSource === 'function' ? bridge.disconnectSource.bind(bridge) : undefined,
+    importProgress: typeof bridge.importProgress === 'function' ? bridge.importProgress.bind(bridge) : undefined,
+    scanSource: typeof bridge.scanSource === 'function' ? bridge.scanSource.bind(bridge) : undefined,
+    importVideo: typeof bridge.importVideo === 'function' ? bridge.importVideo.bind(bridge) : undefined,
+    cancelImport: typeof bridge.cancelImport === 'function' ? bridge.cancelImport.bind(bridge) : undefined,
+    relocateSource: typeof bridge.relocateSource === 'function' ? bridge.relocateSource.bind(bridge) : undefined,
+    cancelSourceConnection: typeof bridge.cancelSourceConnection === 'function' ? bridge.cancelSourceConnection.bind(bridge) : undefined,
   } : undefined;
 
   let locked = false;
@@ -112,11 +144,16 @@
   let offset = 0;
   let total = 0;
   let query = '';
+  let collection = 'all';
+  let sort = 'catalogue';
+  let direction = 'asc';
   let listEpoch = 0;
   let detailEpoch = 0;
   let selectedId = '';
   let selectedDetail;
   let draftTags = [];
+  let ratingTouched = false;
+  let draftRating;
   let saving = false;
   let reloading = false;
   let regenerating = false;
@@ -126,6 +163,13 @@
   let protectionPending = '';
   let protectionEpoch = 0;
   let savedProtection;
+  let sourceEpoch = 0;
+  let sourceItems = [];
+  let sourceListReady = false;
+  let sourceCancelling = false;
+  let sourceImportMode = '';
+  let importProgressEpoch = 0;
+  let importProgressTimer;
   let touchIdState = 'unavailable';
   let touchIdEpoch = 0;
   let touchIdComposing = false;
@@ -140,6 +184,9 @@
   let selectionOrigin;
   let clipUrl = '';
   let playEpoch = 0;
+  let originalPending = false;
+  let originalActive = false;
+  let originalCancelling = false;
   let searchTimer;
   let listRetryTimer;
   let detailRetryTimer;
@@ -192,7 +239,7 @@
   }
 
   function dirty() {
-    return editable() && (detailsNotes.value !== selectedDetail.notes || tagDraft.value !== ''
+    return editable() && (ratingTouched || detailsNotes.value !== selectedDetail.notes || tagDraft.value !== ''
       || draftTags.length !== selectedDetail.tags.length
       || draftTags.some((tag, index) => tag !== selectedDetail.tags[index]));
   }
@@ -210,6 +257,7 @@
     saveButton.textContent = saving ? 'Saving…' : 'Save changes';
     discardButton.textContent = conflict ? 'Discard and reload' : 'Discard';
     byId('tag-entry').hidden = !enabled;
+    ratingEditor.hidden = !enabled;
     lockWarning.hidden = !(dirty() || saving || reloading);
     lockWarning.textContent = saving ? 'Locking clears these drafts. A save already in progress may finish.'
       : 'Locking clears unsaved edits.';
@@ -247,9 +295,11 @@
     protectionRetry.disabled = blocked;
     protectionClose.disabled = locked || (!!protectionPending && protectionPending !== 'password');
     search.disabled = locked || !!protectionPending;
+    ratingInput.disabled = !editable() || locked || saving || reloading || regenerating || !!protectionPending
+      || editorComposition.size > 0 || browseProtectionDraft();
     retryGallery.disabled = locked || !!protectionPending;
     retryDetails.disabled = locked || !!protectionPending;
-    play.disabled = locked || regenerating || !!protectionPending || !!video.getAttribute('src');
+    updatePlaybackControls();
     if (locked || regenerating || protectionPending) { closeFilmstrip(); }
     filmstripToggle.disabled = locked || saving || reloading || detailLoading || regenerating || !!protectionPending
       || !selectedDetail || !previewUrl(selectedDetail.filmstripUrl, 'filmstrip');
@@ -258,6 +308,8 @@
     updateCopyControls();
     updateTouchIdControls();
     updatePages(listLoading);
+    updateSourceControls();
+    updateBrowseControls();
   }
 
   function clearPasswordInputs() {
@@ -267,7 +319,7 @@
 
   function passwordBlockedMessage() {
     if (!changePassword) { return 'Password changes are unavailable. Lock this hub and reopen it to try again.'; }
-    if (dirty() || editorComposition.size) { return 'Save or discard your video notes and tags before changing the password.'; }
+    if (dirty() || editorComposition.size) { return 'Save or discard your video notes, tags and rating before changing the password.'; }
     if (protectionBlocked() || protectionPending) { return 'Wait for the current operation to finish, or lock the hub.'; }
     if (savedProtection !== undefined && protectionSelect.value !== String(savedProtection)) {
       return 'Save your auto-lock setting, or restore its saved value, before changing the password.';
@@ -424,7 +476,7 @@
 
   function copyBlockedMessage() {
     if (!createUnprotectedCopy || !cancelUnprotectedCopy) { return 'Unprotected copies are unavailable. Lock this hub and reopen it to try again.'; }
-    if (dirty() || editorComposition.size) { return 'Save or discard your video notes and tags before creating a copy.'; }
+    if (dirty() || editorComposition.size) { return 'Save or discard your video notes, tags and rating before creating a copy.'; }
     if (protectionBlocked() || protectionPending) { return 'Wait for the current operation to finish, or lock the hub.'; }
     if (savedProtection !== undefined && protectionSelect.value !== String(savedProtection)) {
       return 'Save your auto-lock setting, or restore its saved value, before creating a copy.';
@@ -569,7 +621,7 @@
     if (!disableTouchId || (!removing && (touchIdState === 'unavailable' || !enableTouchId))) {
       return 'Touch ID is unavailable in this build or on this Mac. Use your hub password.';
     }
-    if (dirty() || editorComposition.size) { return 'Save or discard your video notes and tags before changing Touch ID.'; }
+    if (dirty() || editorComposition.size) { return 'Save or discard your video notes, tags and rating before changing Touch ID.'; }
     if (protectionBlocked() || protectionPending) { return 'Wait for the current operation to finish, or lock the hub.'; }
     if (savedProtection !== undefined && protectionSelect.value !== String(savedProtection)) {
       return 'Save your auto-lock setting, or restore its saved value, before changing Touch ID.';
@@ -675,6 +727,8 @@
 
   async function loadProtection() {
     if (protectionBlocked() || protectionPending || !api?.protection || !api?.setProtection) { return; }
+    closeSources(false);
+    stopVideo();
     const epoch = ++protectionEpoch;
     protectionPanel.hidden = false;
     protectionButton.setAttribute('aria-expanded', 'true');
@@ -718,6 +772,7 @@
       || !protectionValues.includes(protectionSelect.value) || protectionSelect.value === String(savedProtection)) { return; }
     const epoch = ++protectionEpoch;
     const autoLockMinutes = Number(protectionSelect.value);
+    stopVideo();
     protectionPending = 'saving';
     protectionStatus.textContent = 'Saving encrypted protection setting…';
     updateEditor();
@@ -750,6 +805,433 @@
     (protectionPending === 'password' ? lockButton : protectionButton).focus({ preventScroll: true });
   }
 
+  function sourceOperationPending() {
+    return protectionPending.startsWith('source-');
+  }
+
+  function sourcesAvailable() {
+    return !!api?.sources && !!api?.connectSource && !!api?.disconnectSource && !!api?.cancelSourceConnection;
+  }
+
+  function updateSourceControls() {
+    const blocked = protectionBlocked() || !!protectionPending;
+    sourcesToggle.disabled = blocked || !sourcesAvailable();
+    sourcesRefresh.disabled = blocked || !sourcesAvailable();
+    sourceAdd.disabled = blocked || !sourcesAvailable() || !api?.addSource || !sourceListReady
+      || sourceItems.length >= 256 || dirty() || !!editorComposition.size || conflict;
+    sourcesClose.disabled = locked || sourceOperationPending();
+    sourceCancel.hidden = !['source-connect', 'source-relocate', 'source-add'].includes(protectionPending);
+    sourceCancel.disabled = locked || sourceCancelling;
+    sourceCancel.textContent = sourceCancelling ? 'Cancelling…' : protectionPending === 'source-relocate' ? 'Cancel change'
+      : protectionPending === 'source-add' ? 'Cancel adding folder' : 'Cancel connection';
+    importCancel.hidden = protectionPending !== 'source-import';
+    importCancel.disabled = locked || sourceCancelling;
+    importCancel.textContent = sourceCancelling ? 'Cancelling…' : sourceImportMode === 'scan' ? 'Cancel' : 'Cancel import';
+    importCancel.setAttribute('aria-label', sourceImportMode === 'scan' ? 'Cancel finding or importing videos' : 'Cancel import');
+    sourcesList.setAttribute('aria-busy', String(sourceOperationPending() && !locked));
+    for (const row of sourcesList.children) {
+      for (const button of row.querySelectorAll('button')) {
+        button.disabled = blocked || (button.getAttribute('data-action') === 'relocate-source' && !api?.relocateSource)
+          || (button.getAttribute('data-action') === 'import-video'
+            && (!api?.importVideo || !api?.cancelImport || dirty() || conflict))
+          || (button.getAttribute('data-action') === 'scan-source'
+            && (!api?.scanSource || !api?.cancelImport || dirty() || conflict));
+      }
+    }
+  }
+
+  function validSourceItem(item) {
+    return !!item && typeof item.id === 'string' && /^[a-f0-9]{32}$/.exec(item.id)?.[0] === item.id && typeof item.title === 'string'
+      && /^Source folder ([1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-6])$/.exec(item.title)?.[0] === item.title
+      && Number.isSafeInteger(item.videoCount) && item.videoCount >= 0 && item.videoCount <= 100_000 && typeof item.connected === 'boolean';
+  }
+
+  function validSourceList(result) {
+    return result?.status === 'ready' && Array.isArray(result.items) && result.items.length <= 256
+      && Array.from(result.items).every(validSourceItem) && new Set(result.items.map(item => item.id)).size === result.items.length;
+  }
+
+  function sourceItem(item) {
+    return { id: item.id, title: item.title, videoCount: item.videoCount, connected: item.connected };
+  }
+
+  function renderSources() {
+    sourcesList.replaceChildren();
+    for (const item of sourceItems) {
+      const row = textElement('li', 'source-folder-row', '');
+      const description = textElement('div', 'source-folder-description', '');
+      const title = textElement('h3', 'source-folder-title', item.title);
+      const count = textElement('p', 'source-folder-count', `${item.videoCount.toLocaleString()} ${item.videoCount === 1 ? 'video' : 'videos'}`);
+      const state = textElement('p', 'source-folder-state', item.connected ? 'Connected for this session' : 'Not connected');
+      state.setAttribute('data-connected', String(item.connected));
+      description.append(title, count, state);
+      const button = textElement('button', 'button button-secondary', item.connected ? 'Disconnect' : 'Connect');
+      button.type = 'button';
+      button.setAttribute('data-action', item.connected ? 'disconnect-source' : 'connect-source');
+      button.setAttribute('aria-label', `${item.connected ? 'Disconnect' : 'Connect'} ${item.title}`);
+      button.addEventListener('click', () => { void changeSourceConnection(item); });
+      const relocate = textElement('button', 'button button-secondary source-relocate-button', 'Change location…');
+      relocate.type = 'button';
+      relocate.setAttribute('data-action', 'relocate-source');
+      relocate.setAttribute('aria-label', `Change location of ${item.title}`);
+      relocate.addEventListener('click', () => { void changeSourceLocation(item); });
+      const importButton = textElement('button', 'button button-secondary source-import-button', 'Add videos…');
+      importButton.type = 'button';
+      importButton.setAttribute('data-action', 'import-video');
+      importButton.setAttribute('aria-label', `Add videos from ${item.title}`);
+      importButton.addEventListener('click', () => { void importSourceVideo(item); });
+      const scanButton = textElement('button', 'button button-secondary source-scan-button', 'Find new videos…');
+      scanButton.type = 'button';
+      scanButton.setAttribute('data-action', 'scan-source');
+      scanButton.setAttribute('aria-label', `Find new videos in ${item.title}`);
+      scanButton.setAttribute('aria-describedby', 'source-scan-help');
+      scanButton.addEventListener('click', () => { void importSourceVideo(item, true); });
+      const actions = textElement('div', 'source-folder-actions', '');
+      actions.append(importButton, scanButton, relocate);
+      row.append(description, button, actions);
+      sourcesList.append(row);
+    }
+    updateSourceControls();
+  }
+
+  function closeSources(restoreFocus = true) {
+    if (sourceOperationPending()) { return; }
+    sourceEpoch++;
+    clearImportProgress();
+    sourceItems = [];
+    sourceListReady = false;
+    sourcesList.replaceChildren();
+    sourcesStatus.textContent = '';
+    sourcesPanel.hidden = true;
+    sourcesToggle.setAttribute('aria-expanded', 'false');
+    if (restoreFocus && !locked) { sourcesToggle.focus({ preventScroll: true }); }
+  }
+
+  async function loadSources() {
+    if (protectionBlocked() || protectionPending || !sourcesAvailable()) { return; }
+    closeProtection();
+    stopVideo();
+    const epoch = ++sourceEpoch;
+    sourceItems = [];
+    sourceListReady = false;
+    sourcesList.replaceChildren();
+    sourcesPanel.hidden = false;
+    sourcesToggle.setAttribute('aria-expanded', 'true');
+    sourcesStatus.textContent = 'Checking saved source folders…';
+    protectionPending = 'source-loading';
+    updateEditor();
+    sourcesPanel.focus({ preventScroll: true });
+    let result;
+    try { result = await api.sources(); }
+    catch { result = { status: 'unavailable' }; }
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    protectionPending = '';
+    if (validSourceList(result)) {
+      sourceItems = result.items.map(sourceItem);
+      sourceListReady = true;
+      sourcesStatus.textContent = sourceItems.length ? 'Choose Connect to select the saved folder.' : 'No saved source folders in this hub.';
+      renderSources();
+    } else {
+      sourcesStatus.textContent = result?.status === 'busy' ? 'The hub is busy. Choose Refresh to try again.'
+        : 'Source folders could not be checked. Choose Refresh to try again, or lock the hub.';
+    }
+    updateEditor();
+  }
+
+  async function changeSourceConnection(item) {
+    if (protectionBlocked() || protectionPending || sourcesPanel.hidden || !sourcesAvailable() || !sourceItems.includes(item)) { return; }
+    const epoch = ++sourceEpoch;
+    const connecting = !item.connected;
+    protectionPending = connecting ? 'source-connect' : 'source-disconnect';
+    sourceCancelling = false;
+    sourcesStatus.textContent = connecting ? 'Choose this video source’s saved folder in the folder picker.' : 'Disconnecting source folder…';
+    // Retire a playing preview before opening a native picker; drafts stay intact.
+    stopVideo();
+    play.hidden = !clipUrl;
+    updateEditor();
+    let result;
+    try { result = await (connecting ? api.connectSource(item.id) : api.disconnectSource(item.id)); }
+    catch { result = { status: 'unavailable' }; }
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    const expectedStatus = connecting ? 'connected' : 'disconnected';
+    if (result?.status === expectedStatus && validSourceItem(result.item) && result.item.id === item.id
+      && result.item.title === item.title && result.item.connected === connecting) {
+      // One grant can cover duplicate saved roots. Refresh all rows together.
+      let refreshed;
+      try { refreshed = await api.sources(); }
+      catch { refreshed = { status: 'unavailable' }; }
+      if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+      sourceListReady = validSourceList(refreshed);
+      sourceItems = sourceListReady ? refreshed.items.map(sourceItem) : [];
+      sourcesStatus.textContent = connecting ? 'Source folder connected until this hub locks.' : 'Source folder disconnected.';
+      if (!validSourceList(refreshed)) { sourcesStatus.textContent += ' Choose Refresh to check the saved folders again.'; }
+    } else {
+      const messages = {
+        cancelled: 'Connection cancelled. Choose Connect to try again.',
+        conflict: 'The saved source folders changed. Choose Refresh to load them again.',
+        'wrong-folder': 'That is not the saved source folder. Choose Connect and select its original location.',
+        'source-unavailable': 'The source folder is unavailable. Check that its drive is connected and access is allowed, then try again.',
+        busy: 'The hub is busy. Choose Refresh to try again.',
+      };
+      sourcesStatus.textContent = messages[result?.status] || 'The connection could not be updated. Choose Refresh to check it, or lock the hub.';
+      // Ambiguous failures need a fresh check instead of presenting stale grants.
+      if (!['cancelled', 'wrong-folder', 'source-unavailable'].includes(result?.status)) { sourceItems = []; sourceListReady = false; }
+    }
+    protectionPending = '';
+    sourceCancelling = false;
+    renderSources();
+    updateEditor();
+    const changedRow = sourceItems.findIndex(current => current.id === item.id);
+    (sourcesList.children[changedRow]?.querySelector('button') || sourcesRefresh).focus({ preventScroll: true });
+  }
+
+  async function addSourceFolder() {
+    if (locked || protectionPending || sourcesPanel.hidden || !sourcesAvailable() || !api?.addSource) { return; }
+    if (dirty() || editorComposition.size || conflict) {
+      sourcesStatus.textContent = 'Save or discard your video notes, tags and rating before adding a source folder.';
+      return;
+    }
+    if (!sourceListReady || sourceItems.length >= 256 || protectionBlocked()) { return; }
+    const epoch = ++sourceEpoch;
+    protectionPending = 'source-add';
+    sourceCancelling = false;
+    clearTimeout(searchTimer);
+    sourcesStatus.textContent = 'Choose a source folder to save in this hub. No videos will be added automatically; original files remain unchanged.';
+    stopVideo();
+    play.hidden = !clipUrl;
+    updateEditor();
+    sourceCancel.focus({ preventScroll: true });
+    let result;
+    try { result = await api.addSource(); }
+    catch { result = { status: 'unavailable' }; }
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    // A catalogue save can finish as cancellation arrives. Refresh both lists
+    // for every outcome and retire the old selection and source capabilities.
+    sourceItems = [];
+    sourceListReady = false;
+    sourcesList.replaceChildren();
+    closeDetails();
+    await loadPage(offset, 0, undefined, true);
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    let refreshed;
+    try { refreshed = await api.sources(); }
+    catch { refreshed = { status: 'unavailable' }; }
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    sourceListReady = validSourceList(refreshed);
+    sourceItems = sourceListReady ? refreshed.items.map(sourceItem) : [];
+    const messages = {
+      added: 'Source folder saved and not connected. Choose Connect for playback, or Add videos to import videos. Original files are unchanged.',
+      cancelled: 'Adding the folder was cancelled. Check the saved folders; a save already in progress may finish.',
+      conflict: 'The catalogue changed before the folder could be saved. Review the current folders and try again.',
+      invalid: 'That folder cannot be used. Choose a separate folder that neither contains nor sits inside another saved source folder or the private hub.',
+      duplicate: 'That source folder is already saved in this hub.',
+      limit: 'Adding this folder would exceed a supported catalogue size or source-folder limit. A hub supports up to 256 saved source folders.',
+      'source-unavailable': 'The folder is unavailable. Check that its drive is connected and access is allowed, then try again.',
+      busy: 'The hub is busy. Choose Add folder to try again.',
+    };
+    sourcesStatus.textContent = typeof result?.status === 'string' && Object.hasOwn(messages, result.status)
+      ? messages[result.status] : 'The source folder could not be added. Review the current folders and try again, or lock the hub.';
+    if (!sourceListReady) { sourcesStatus.textContent += ' Choose Refresh to check the saved folders again.'; }
+    protectionPending = '';
+    sourceCancelling = false;
+    renderSources();
+    updateEditor();
+    (sourceAdd.disabled ? sourcesRefresh : sourceAdd).focus({ preventScroll: true });
+  }
+
+  async function changeSourceLocation(item) {
+    if (locked || protectionPending || sourcesPanel.hidden || !api?.relocateSource || !sourceItems.includes(item)) { return; }
+    if (dirty() || editorComposition.size || conflict) {
+      sourcesStatus.textContent = 'Save or discard your video notes, tags and rating before changing a source location.';
+      return;
+    }
+    if (protectionBlocked()) { return; }
+    const epoch = ++sourceEpoch;
+    protectionPending = 'source-relocate';
+    sourceCancelling = false;
+    sourcesStatus.textContent = 'Choose the folder’s new location. The folder will be checked before you confirm its saved location.';
+    stopVideo();
+    play.hidden = !clipUrl;
+    updateEditor();
+    let result;
+    try { result = await api.relocateSource(item.id); }
+    catch { result = { status: 'unavailable' }; }
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    // A save already admitted can finish after cancellation. Refresh authoritative
+    // state for every outcome; old catalogue selection IDs must not be reused.
+    sourceItems = [];
+    sourceListReady = false;
+    sourcesList.replaceChildren();
+    closeDetails();
+    await loadPage(offset, 0, undefined, true);
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    let refreshed;
+    try { refreshed = await api.sources(); }
+    catch { refreshed = { status: 'unavailable' }; }
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    sourceListReady = validSourceList(refreshed);
+    sourceItems = sourceListReady ? refreshed.items.map(sourceItem) : [];
+    const messages = {
+      relocated: 'Source location saved. Connect the folder to regenerate previews.',
+      cancelled: 'Location change cancelled. Check the saved folders; a save already in progress may finish.',
+      conflict: 'The catalogue changed before the location could be saved. Review the current folders and try again.',
+      invalid: 'That location cannot be used. Choose a separate folder that neither contains nor sits inside a saved source folder. This source also needs videos with recorded file sizes.',
+      'source-unavailable': 'The folder could not be verified. Check that every video is present with the same names, subfolders and sizes, and that access is allowed.',
+      busy: 'The hub is busy. Choose Change location to try again.',
+    };
+    sourcesStatus.textContent = typeof result?.status === 'string' && Object.hasOwn(messages, result.status)
+      ? messages[result.status] : 'The source location could not be updated. Review the current folders and try again, or lock the hub.';
+    if (!validSourceList(refreshed)) { sourcesStatus.textContent += ' Choose Refresh to check the saved folders again.'; }
+    protectionPending = '';
+    sourceCancelling = false;
+    renderSources();
+    updateEditor();
+    const changedRow = sourceItems.findIndex(current => current.title === item.title);
+    (sourcesList.children[changedRow]?.querySelector('button') || sourcesRefresh).focus({ preventScroll: true });
+  }
+
+  function importCounts(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { return; }
+    const { total, processed, imported, duplicates, failed } = value;
+    if (![total, processed, imported, duplicates, failed].every(count => Number.isSafeInteger(count) && count >= 0 && count <= 100)
+      || total < 1 || processed !== imported + duplicates + failed || processed > total) { return; }
+    return { total, processed, imported, duplicates, failed };
+  }
+
+  function importSummary(value) {
+    const counts = importCounts(value);
+    if (value?.status !== 'finished' || !counts || !['completed', 'cancelled', 'stopped'].includes(value.outcome)
+      || (value.outcome === 'completed' && counts.processed !== counts.total)) { return ''; }
+    const label = value.outcome === 'completed' ? 'Import complete.' : value.outcome === 'cancelled' ? 'Import cancelled.' : 'Import stopped.';
+    const summary = `${label} ${counts.imported} added, ${counts.duplicates} already in the catalogue, ${counts.failed} failed, ${counts.total - counts.processed} not processed.`;
+    return summary + (value.outcome === 'completed' ? ' Original videos are unchanged.'
+      : ' Saved videos remain in the catalogue; an import already being saved may finish. Review the catalogue.');
+  }
+
+  function clearImportProgress() {
+    importProgressEpoch++;
+    clearTimeout(importProgressTimer);
+    importProgressTimer = undefined;
+  }
+
+  function startImportProgress(sourceRequestEpoch) {
+    clearImportProgress();
+    if (!api?.importProgress) { return; }
+    const epoch = importProgressEpoch;
+    const current = () => !locked && epoch === importProgressEpoch && sourceRequestEpoch === sourceEpoch
+      && protectionPending === 'source-import' && !sourceCancelling && !sourcesPanel.hidden;
+    const poll = async () => {
+      importProgressTimer = undefined;
+      if (!current()) { return; }
+      let result;
+      try { result = await api.importProgress(); } catch { /* Keep the last fixed status until completion. */ }
+      if (!current()) { return; }
+      const counts = importCounts(result);
+      if (result?.status === 'running' && counts) {
+        sourcesStatus.textContent = `Importing videos: ${counts.processed} of ${counts.total} processed. ${counts.imported} added, ${counts.duplicates} already in the catalogue, ${counts.failed} failed.`;
+      }
+      importProgressTimer = setTimeout(poll, 500);
+    };
+    importProgressTimer = setTimeout(poll, 500);
+  }
+
+  async function importSourceVideo(item, scan = false) {
+    const start = scan ? api?.scanSource : api?.importVideo;
+    if (locked || protectionPending || sourcesPanel.hidden || !start || !api?.cancelImport
+      || !sourceItems.includes(item)) { return; }
+    if (dirty() || editorComposition.size || conflict) {
+      sourcesStatus.textContent = 'Save or discard your video notes, tags and rating before adding videos.';
+      return;
+    }
+    if (protectionBlocked()) { return; }
+    const epoch = ++sourceEpoch;
+    protectionPending = 'source-import';
+    sourceImportMode = scan ? 'scan' : 'selection';
+    sourceCancelling = false;
+    clearTimeout(searchTimer);
+    sourcesStatus.textContent = scan ? 'Finding new videos… Review the import before it begins.'
+      : 'Choose up to 100 videos inside this source folder. Each video’s previews will be encrypted before it is added to the catalogue.';
+    stopVideo();
+    play.hidden = !clipUrl;
+    updateEditor();
+    importCancel.focus();
+    startImportProgress(epoch);
+    let result;
+    try { result = await start(item.id); }
+    catch { result = { status: 'unavailable' }; }
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    clearImportProgress();
+    // Cancellation can race catalogue publication. Reload authoritative state
+    // even after a failure; never keep stale selection IDs or claim rollback.
+    sourceItems = [];
+    sourceListReady = false;
+    sourcesList.replaceChildren();
+    closeDetails();
+    await loadPage(offset, 0, undefined, true);
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    let refreshed;
+    try { refreshed = await api.sources(); }
+    catch { refreshed = { status: 'unavailable' }; }
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    sourceListReady = validSourceList(refreshed);
+    sourceItems = sourceListReady ? refreshed.items.map(sourceItem) : [];
+    const messages = {
+      cancelled: `${scan ? 'Scan or import' : 'Import'} cancelled. Saved videos remain in the catalogue; an import already being saved may finish. Review the catalogue.`,
+      conflict: 'The catalogue changed before the video could be added. Review the current catalogue and try again.',
+      invalid: 'The selection could not be imported. Choose supported videos inside this source folder.',
+      limit: 'Choose no more than 100 videos at a time. No videos from this selection were imported.',
+      'nothing-new': 'No new videos found.',
+      'scan-limit': 'The folder scan reached its safety limit. Choose Add videos… to select files.',
+      duplicate: 'This video is already in the catalogue.',
+      'source-unavailable': 'The video or source folder is unavailable. Check that its drive is connected and access is allowed, then try again.',
+      'wrong-folder': `That is not the saved source folder. Choose ${scan ? 'Find new videos' : 'Add videos'} again and select the saved folder when prompted.`,
+      busy: `The hub is busy. Choose ${scan ? 'Find new videos' : 'Add videos'} to try again.`,
+    };
+    sourcesStatus.textContent = importSummary(result) || (typeof result?.status === 'string' && Object.hasOwn(messages, result.status)
+      ? messages[result.status] : 'The videos could not be added. Review the current catalogue and try again, or lock the hub.');
+    if (!validSourceList(refreshed)) { sourcesStatus.textContent += ' Choose Refresh to check the saved folders again.'; }
+    protectionPending = '';
+    sourceCancelling = false;
+    renderSources();
+    updateEditor();
+    const changedRow = sourceItems.findIndex(current => current.title === item.title);
+    sourceImportMode = '';
+    (sourcesList.children[changedRow]?.querySelector(scan ? '[data-action="scan-source"]' : '[data-action="import-video"]') || sourcesRefresh).focus({ preventScroll: true });
+  }
+
+  function cancelVideoImport() {
+    if (locked || protectionPending !== 'source-import' || sourceCancelling || !api?.cancelImport) { return; }
+    sourceCancelling = true;
+    clearImportProgress();
+    sourcesStatus.textContent = sourceImportMode === 'scan'
+      ? 'Stopping the scan or import. Close any open confirmation or folder dialog. An import already being saved may finish.'
+      : 'Stopping the import. Close any open dialog. An import already being saved may finish.';
+    updateSourceControls();
+    try { api.cancelImport(); }
+    catch { sourcesStatus.textContent = sourceImportMode === 'scan'
+      ? 'The scan or import could not be cancelled. Close any open confirmation or folder dialog, or lock the hub.'
+      : 'The import could not be cancelled. Close any open dialog, or lock the hub.'; }
+  }
+
+  function cancelSourceConnection() {
+    if (locked || !['source-connect', 'source-relocate', 'source-add'].includes(protectionPending) || sourceCancelling || !api?.cancelSourceConnection) { return; }
+    sourceCancelling = true;
+    const relocating = protectionPending === 'source-relocate';
+    const adding = protectionPending === 'source-add';
+    sourcesStatus.textContent = adding
+      ? 'Cancelling the new source folder. Close any open dialog. A save already in progress may finish.'
+      : relocating
+      ? 'Cancelling the location change. Close any open dialog. A save already in progress may finish.'
+      : 'Cancelling connection. Close the folder picker if it is still open, or lock the hub.';
+    updateSourceControls();
+    try { api.cancelSourceConnection(); }
+    catch { sourcesStatus.textContent = adding
+      ? 'Adding the folder could not be cancelled. Close any open dialog, or lock the hub.'
+      : relocating
+      ? 'The location change could not be cancelled. Close any open dialog, or lock the hub.'
+      : 'The connection could not be cancelled. Close the folder picker, or lock the hub.'; }
+  }
+
   function canNavigate() {
     if (locked) { return false; }
     if (protectionPending) { return false; }
@@ -770,9 +1252,58 @@
     return true;
   }
 
+  function browseProtectionDraft() {
+    return savedProtection !== undefined && protectionSelect.value !== String(savedProtection);
+  }
+
+  function restoreBrowseControls() {
+    collectionControl.value = collection;
+    sortControl.value = sort;
+    directionControl.setAttribute('data-direction', direction);
+    directionControl.textContent = direction === 'asc' ? '↑ Ascending' : '↓ Descending';
+    directionControl.setAttribute('aria-label', direction === 'asc'
+      ? 'Sort ascending; activate for descending' : 'Sort descending; activate for ascending');
+  }
+
+  function updateBrowseControls() {
+    const blocked = locked || !api || saving || reloading || regenerating || !!protectionPending
+      || dirty() || editorComposition.size > 0 || composing || browseProtectionDraft();
+    collectionControl.disabled = blocked;
+    sortControl.disabled = blocked;
+    directionControl.disabled = blocked;
+  }
+
+  function changeBrowseControl(kind) {
+    const nextCollection = collectionControl.value;
+    const nextSort = sortControl.value;
+    if (!canNavigate() || composing || browseProtectionDraft()) {
+      restoreBrowseControls();
+      if (!locked && browseProtectionDraft()) {
+        protectionStatus.textContent = 'Save your auto-lock setting, or restore its saved value, before changing the catalogue view.';
+      }
+      return;
+    }
+    if (!collectionValues.includes(nextCollection) || !sortValues.includes(nextSort)) { restoreBrowseControls(); return; }
+    if (kind === 'collection') {
+      collection = nextCollection;
+      if (collection === 'recent') { sort = 'last-played'; direction = 'desc'; }
+    } else if (kind === 'sort') {
+      sort = nextSort;
+      direction = ['catalogue', 'name'].includes(sort) ? 'asc' : 'desc';
+    } else { direction = direction === 'asc' ? 'desc' : 'asc'; }
+    restoreBrowseControls();
+    clearTimeout(searchTimer);
+    // Use the visible search text, including an outstanding debounce, with the
+    // new collection/order in one request. loadPage retires images and replies.
+    void loadPage(0);
+  }
+
   function restoreSearch() {
     search.value = query;
-    if (protectionPending) { protectionPanel.focus({ preventScroll: true }); return; }
+    if (protectionPending) {
+      (originalPending ? stopPlaybackButton : sourceOperationPending() ? sourcesPanel : protectionPanel).focus({ preventScroll: true });
+      return;
+    }
     if (!details.hidden && editable()) {
       (tagDraft.value ? tagDraft : detailsNotes).focus({ preventScroll: true });
     }
@@ -817,24 +1348,39 @@
     return true;
   }
 
+  function ratingChoice(item) {
+    // Display-only projection can hide nonstandard legacy stars. Preserve them
+    // unless the user explicitly chooses an integer rating for this save.
+    return Number.isInteger(item?.rating) && item.rating >= 0 && item.rating <= 5
+      && item.favourite === (item.rating === 5) ? String(item.rating) : '';
+  }
+
+  function renderRatingDraft() {
+    ratingInput.value = ratingTouched ? String(draftRating) : ratingChoice(selectedDetail);
+    ratingExisting.hidden = ratingInput.value !== '';
+  }
+
   function applyMetadata(item) {
     closeFilmstrip();
     selectedDetail = { ...item, tags: Array.isArray(item.tags) ? item.tags.filter(tag => typeof tag === 'string') : [] };
     draftTags = [...selectedDetail.tags];
+    ratingTouched = false;
+    draftRating = undefined;
+    renderRatingDraft();
     tagDraft.value = '';
     detailsNotes.value = typeof item.notes === 'string' ? item.notes : '';
     conflict = false;
     detailsTitle.textContent = item.title || 'Untitled video';
     detailsFacts.textContent = `${duration(item.duration)} · ${dimensions(item)}`;
     detailsRating.textContent = Number.isFinite(item.rating) && item.rating > 0 && item.rating <= 5
-      ? `${item.rating} / 5${item.favourite ? ' · Favourite' : ''}` : 'Unrated';
+      ? `Saved: ${item.rating} / 5${item.favourite ? ' · Favourite' : ''}` : 'Saved: Unrated';
     shortened.hidden = item.truncated !== true;
     detailsContent.hidden = false;
     editFooter.hidden = false;
     retryDetails.hidden = true;
     retryDetails.textContent = 'Try again';
     renderTags();
-    editStatus.textContent = editable() ? 'Changes are saved only when you choose Save changes.' : 'Notes and tags are read-only for this video.';
+    editStatus.textContent = editable() ? 'Changes are saved only when you choose Save changes.' : 'Video details are read-only for this video.';
     updateEditor();
   }
 
@@ -847,7 +1393,7 @@
     posterPlaceholder.hidden = false;
     queueImage(poster, posterPlaceholder, posterUrl, 'detail');
     clipUrl = previewUrl(item.clipUrl, 'clip');
-    play.hidden = !clipUrl;
+    updatePlaybackControls();
     // Recreate thumbnail elements and retire every old source before loading
     // the same no-store media routes for the newly published encrypted set.
     void loadPage(offset, 0, undefined, true);
@@ -943,9 +1489,13 @@
     }
     const id = selectedId;
     const epoch = detailEpoch;
-    const request = { id, revision: selectedDetail.revision, notes: detailsNotes.value, tags: [...draftTags] };
+    const request = { id, revision: selectedDetail.revision, notes: detailsNotes.value, tags: [...draftTags],
+      ...(ratingTouched ? { rating: draftRating } : {}) };
+    // Catalogue writes retire main-process source authority. Clear the player
+    // first so buffered originals cannot outlive that transition in the view.
+    if (originalActive) { stopVideo(); }
     saving = true;
-    editStatus.textContent = 'Saving encrypted notes and tags…';
+    editStatus.textContent = 'Saving encrypted video details…';
     updateEditor();
     let result;
     try { result = await api.save(request); }
@@ -955,14 +1505,14 @@
     if (result?.status === 'saved' && result.item?.id === id && typeof result.item.title === 'string') {
       applyMetadata(result.item);
       editStatus.textContent = 'Changes saved.';
-      // Tags can change the current search results. Refresh their projection
+      // Tags and ratings can change collections, ordering and search results. Refresh their projection
       // while retaining the selected detail view and any playing preview.
       void loadPage(offset, 0, undefined, true);
       return;
     }
     conflict = result?.status === 'conflict';
-    editStatus.textContent = conflict ? 'These notes or tags changed elsewhere. Your edits are still here. Choose Discard and reload to load the latest saved version.'
-      : result?.status === 'invalid' ? 'Changes could not be saved. Check your notes and tag names; your edits are still here.'
+    editStatus.textContent = conflict ? 'These video details changed elsewhere. Your edits are still here. Choose Discard and reload to load the latest saved version.'
+      : result?.status === 'invalid' ? 'Changes could not be saved. Check your notes, tag names and rating; your edits are still here.'
         : result?.status === 'busy' ? 'The hub is busy. Your edits are still here; try saving again.'
           : 'Changes could not be saved. Your edits are still here; try again or lock the hub.';
     updateEditor();
@@ -973,8 +1523,9 @@
     if (editorComposition.size) { editStatus.textContent = 'Finish entering text before discarding.'; return; }
     const id = selectedId;
     const epoch = detailEpoch;
+    if (originalActive) { stopVideo(); }
     reloading = true;
-    editStatus.textContent = 'Loading the latest saved notes and tags…';
+    editStatus.textContent = 'Loading the latest saved video details…';
     updateEditor();
     let result;
     try { result = await api.detail(id); }
@@ -983,7 +1534,7 @@
     reloading = false;
     if (result?.status === 'ready' && result.item?.id === id && typeof result.item.title === 'string') {
       applyMetadata(result.item);
-      editStatus.textContent = 'Latest saved notes and tags loaded.';
+      editStatus.textContent = 'Latest saved video details loaded.';
       generationStatus.textContent = '';
       void loadPage(offset, 0, undefined, true);
     } else {
@@ -1072,16 +1623,44 @@
     }
   }
 
+  function updatePlaybackControls() {
+    const busy = locked || saving || reloading || detailLoading || regenerating || !!protectionPending;
+    const playing = !!video.getAttribute('src');
+    play.hidden = !clipUrl || playing || originalPending;
+    play.disabled = busy || playing;
+    playOriginalButton.hidden = selectedDetail?.playable !== true || !api?.playOriginal || !api?.stopOriginal
+      || !/^[a-f0-9]{32}$/.test(selectedDetail?.revision) || playing || originalPending;
+    playOriginalButton.disabled = busy || playing || conflict;
+    stopPlaybackButton.hidden = !playing && !originalPending;
+    stopPlaybackButton.disabled = locked || originalCancelling;
+    stopPlaybackButton.textContent = originalPending ? (originalCancelling ? 'Cancelling…' : 'Cancel')
+      : originalActive ? 'Stop video' : 'Stop preview';
+  }
+
   function stopVideo() {
     playEpoch++;
+    if (originalPending || originalActive) {
+      try { api?.stopOriginal?.(); } catch { /* Lock remains available if the bridge has gone away. */ }
+    }
+    originalPending = false;
+    originalActive = false;
+    originalCancelling = false;
+    if (protectionPending === 'original') { protectionPending = ''; }
+    playbackStatus.textContent = '';
+    // Returning from fullscreen is presentation cleanup only. Revoke and clear
+    // media immediately even if Chromium cannot finish the transition.
+    if (document.fullscreenElement === video) {
+      try { void Promise.resolve(document.exitFullscreen()).catch(() => {}); } catch { /* The window may already be closing. */ }
+    }
     video.onloadeddata = null;
     video.onerror = null;
+    video.onended = null;
     video.pause();
     video.removeAttribute('src');
     video.removeAttribute('poster');
     video.load();
     video.hidden = true;
-    play.disabled = false;
+    updatePlaybackControls();
   }
 
   function updateFilmstripNavigation() {
@@ -1157,6 +1736,10 @@
     detailsNotes.textContent = '';
     tagDraft.value = '';
     draftTags = [];
+    ratingTouched = false;
+    draftRating = undefined;
+    ratingInput.value = '';
+    ratingExisting.hidden = true;
     selectedDetail = undefined;
     detailLoading = false;
     saving = false;
@@ -1272,8 +1855,9 @@
       updateProtection();
     }
     if (epoch !== listEpoch) { return; }
+    if (originalActive) { stopVideo(); updateEditor(); }
     let result;
-    try { result = await api.list({ query, offset }); }
+    try { result = await api.list({ query, offset, collection, sort, direction }); }
     catch { result = { status: 'unavailable' }; }
     if (locked || epoch !== listEpoch) { return; }
     if (result?.status === 'busy' && attempt < 2) {
@@ -1299,7 +1883,10 @@
     updatePages();
     summary.textContent = `${total.toLocaleString()} ${total === 1 ? 'video' : 'videos'}`;
     if (!result.items.length) {
-      showEmpty(query ? 'No matching videos' : 'No videos yet', query ? 'Try a different video title or tag.' : 'This private catalogue has no videos to display.');
+      if (query) { showEmpty('No matching videos', 'Try a different video title or tag, or choose another collection.'); }
+      else if (collection === 'favourites') { showEmpty('No favourites yet', 'This private catalogue has no videos marked as favourites. Choose All videos to browse the catalogue.'); }
+      else if (collection === 'recent') { showEmpty('No recently played videos', 'This collection uses saved catalogue history. Playback in this test build does not update it. Choose All videos to browse the catalogue.'); }
+      else { showEmpty('No videos yet', 'This private catalogue has no videos to display.'); }
       return;
     }
     renderCards(result.items);
@@ -1345,12 +1932,12 @@
     posterPlaceholder.hidden = false;
     queueImage(poster, posterPlaceholder, previewUrl(item.posterUrl, 'clip'), 'detail');
     clipUrl = previewUrl(item.clipUrl, 'clip');
-    play.hidden = !clipUrl;
+    updatePlaybackControls();
   }
 
   async function playPreview() {
     if (locked || regenerating || protectionPending || !clipUrl || !selectedId || play.disabled) { return; }
-    play.disabled = true;
+    stopVideo();
     const epoch = ++playEpoch;
     const selected = selectedId;
     const current = () => !locked && epoch === playEpoch && selected === selectedId;
@@ -1367,7 +1954,9 @@
     video.onloadeddata = () => {
       if (current()) { video.hidden = false; play.hidden = true; }
     };
+    video.onended = () => { if (current() && !video.loop) { stopVideo(); updateEditor(); } };
     video.src = clipUrl;
+    updatePlaybackControls();
     try {
       await video.play();
       if (current()) { video.hidden = false; play.hidden = true; }
@@ -1375,6 +1964,89 @@
       // that work again, while allowing a newer selected preview to keep playing.
       else if (locked || !video.getAttribute('src')) { video.pause(); }
     } catch { failed(); }
+  }
+
+  async function playOriginal() {
+    if (locked || protectionBlocked() || protectionPending || conflict || playOriginalButton.disabled
+      || selectedDetail?.playable !== true || !api?.playOriginal || !api?.stopOriginal
+      || !/^[a-f0-9]{32}$/.test(selectedDetail?.revision)) { return; }
+    stopVideo();
+    const epoch = playEpoch;
+    const selected = selectedId;
+    const current = () => !locked && epoch === playEpoch && selected === selectedId;
+    originalPending = true;
+    protectionPending = 'original';
+    playbackStatus.textContent = 'Opening video. Choose its saved source folder if asked.';
+    updateEditor();
+    let result;
+    try { result = await api.playOriginal({ id: selected, revision: selectedDetail.revision }); }
+    catch { result = { status: 'unavailable' }; }
+    // A retired request must not revoke a newer playback capability.
+    if (!current()) { return; }
+    const wasCancelled = originalCancelling;
+    if (wasCancelled || result?.status !== 'ready' || typeof result.url !== 'string'
+      || /^theatrum:\/\/app\/original\/[a-f0-9]{64}$/.exec(result.url)?.[0] !== result.url) {
+      stopVideo();
+      const messages = {
+        cancelled: 'Opening video cancelled.',
+        conflict: 'This video changed. Reload its saved details before playing it.',
+        'source-unavailable': 'The source video is unavailable. Connect its folder and try again.',
+        'wrong-folder': 'That is not the saved source folder. Choose Play video and select its original location.',
+        unsupported: 'This video format cannot be played in the private hub. Its preview may still be available.',
+        busy: 'The hub is busy. Try playing this video again shortly.',
+      };
+      playbackStatus.textContent = wasCancelled ? messages.cancelled
+        : typeof result?.status === 'string' && Object.hasOwn(messages, result.status) ? messages[result.status]
+          : 'This video could not be opened. Check its source folder and try again, or lock the hub.';
+      updateEditor();
+      return;
+    }
+    originalPending = false;
+    protectionPending = '';
+    originalActive = true;
+    video.preload = 'none';
+    video.disablePictureInPicture = true;
+    video.disableRemotePlayback = true;
+    const failed = () => {
+      if (!current()) { return; }
+      stopVideo();
+      playbackStatus.textContent = 'This video could not be played. Its format or codec may be unsupported, or the source may be unavailable. Its preview may still be available.';
+      updateEditor();
+    };
+    const show = () => {
+      if (!current()) { return; }
+      video.hidden = false;
+      playbackStatus.textContent = 'Playing original video.';
+      updatePlaybackControls();
+    };
+    video.onerror = failed;
+    video.onloadeddata = show;
+    video.onended = () => { if (current() && !video.loop) { stopVideo(); updateEditor(); } };
+    video.src = result.url;
+    playbackStatus.textContent = 'Loading original video…';
+    updateEditor();
+    try {
+      await video.play();
+      if (current()) { show(); }
+      else if (locked || !video.getAttribute('src')) { video.pause(); }
+    } catch { failed(); }
+  }
+
+  function stopPlayback() {
+    if (locked) { return; }
+    if (originalPending) {
+      if (originalCancelling) { return; }
+      originalCancelling = true;
+      playbackStatus.textContent = 'Cancelling. Close the folder picker if it is still open, or lock the hub.';
+      updatePlaybackControls();
+      try { api?.stopOriginal?.(); }
+      catch { playbackStatus.textContent = 'Cancellation could not be requested. Close the folder picker, or lock the hub.'; }
+      return;
+    }
+    const wasOriginal = originalActive;
+    stopVideo();
+    updateEditor();
+    (wasOriginal ? playOriginalButton : play).focus({ preventScroll: true });
   }
 
   function clearSensitiveView() {
@@ -1387,6 +2059,11 @@
     copyCancelling = false;
     protectionEpoch++;
     protectionPending = '';
+    sourceEpoch++;
+    sourceCancelling = false;
+    sourceImportMode = '';
+    closeSources(false);
+    sourcesList.setAttribute('aria-busy', 'false');
     savedProtection = undefined;
     protectionSelect.value = '';
     protectionStatus.textContent = '';
@@ -1401,6 +2078,11 @@
     search.value = '';
     search.disabled = true;
     query = '';
+    collection = 'all';
+    sort = 'catalogue';
+    direction = 'asc';
+    restoreBrowseControls();
+    updateBrowseControls();
     total = 0;
     offset = 0;
     summary.textContent = '';
@@ -1422,6 +2104,15 @@
     clearSensitiveView();
     try { api?.lock(); } catch { galleryStatus.textContent = 'Private hub unavailable. Close this window.'; }
   });
+  sourcesToggle.addEventListener('click', () => {
+    if (sourcesPanel.hidden) { void loadSources(); }
+    else { closeSources(); }
+  });
+  sourceAdd.addEventListener('click', () => { void addSourceFolder(); });
+  sourcesRefresh.addEventListener('click', () => { void loadSources(); });
+  sourcesClose.addEventListener('click', () => { closeSources(); });
+  sourceCancel.addEventListener('click', cancelSourceConnection);
+  importCancel.addEventListener('click', cancelVideoImport);
   protectionButton.addEventListener('click', () => {
     if (protectionPanel.hidden) { void loadProtection(); }
     else { closeProtection(); }
@@ -1513,8 +2204,8 @@
       : 'Choose Save setting to apply this change.';
     updateProtection();
   });
-  search.addEventListener('compositionstart', () => { composing = true; clearTimeout(searchTimer); });
-  search.addEventListener('compositionend', () => { composing = false; scheduleSearch(); });
+  search.addEventListener('compositionstart', () => { composing = true; clearTimeout(searchTimer); updateBrowseControls(); });
+  search.addEventListener('compositionend', () => { composing = false; updateBrowseControls(); scheduleSearch(); });
   function scheduleSearch() {
     if (locked || composing) { return; }
     clearTimeout(searchTimer);
@@ -1522,6 +2213,9 @@
     searchTimer = setTimeout(() => { void loadPage(0); }, 220);
   }
   search.addEventListener('input', scheduleSearch);
+  collectionControl.addEventListener('change', () => { changeBrowseControl('collection'); });
+  sortControl.addEventListener('change', () => { changeBrowseControl('sort'); });
+  directionControl.addEventListener('click', () => { changeBrowseControl('direction'); });
   previous.addEventListener('click', () => { if (!previous.disabled) { void loadPage(Math.max(0, offset - PAGE_SIZE)); } });
   next.addEventListener('click', () => { if (!next.disabled) { void loadPage(offset + PAGE_SIZE); } });
   retryGallery.addEventListener('click', () => { void loadPage(offset); });
@@ -1530,6 +2224,17 @@
     else if (selectedId) { void showDetails(selectedId, selectionOrigin); }
   });
   byId('close-details').addEventListener('click', () => { if (canNavigate()) { closeDetails(true); } });
+  ratingInput.addEventListener('change', () => {
+    if (locked || saving || reloading || regenerating || protectionPending || editorComposition.size || browseProtectionDraft() || !editable()) {
+      renderRatingDraft(); return;
+    }
+    if (!['0', '1', '2', '3', '4', '5'].includes(ratingInput.value)) { renderRatingDraft(); return; }
+    draftRating = Number(ratingInput.value);
+    ratingTouched = true;
+    renderRatingDraft();
+    editStatus.textContent = conflict ? 'Your edits are still here. Choose Discard and reload to load the latest saved version.' : 'Unsaved changes.';
+    updateEditor();
+  });
   detailsNotes.addEventListener('input', () => {
     if (locked || saving || reloading || regenerating || protectionPending || !editable()) { return; }
     editStatus.textContent = conflict ? 'Your edits are still here. Choose Discard and reload to load the latest saved version.' : 'Unsaved changes.';
@@ -1554,6 +2259,8 @@
   regenerate.addEventListener('click', () => { void regeneratePreviews(); });
   cancelGeneration.addEventListener('click', cancelRegeneration);
   play.addEventListener('click', () => { void playPreview(); });
+  playOriginalButton.addEventListener('click', () => { void playOriginal(); });
+  stopPlaybackButton.addEventListener('click', stopPlayback);
   filmstripToggle.addEventListener('click', toggleFilmstrip);
   filmstripPrevious.addEventListener('click', () => { scrollFilmstrip(-1); });
   filmstripNext.addEventListener('click', () => { scrollFilmstrip(1); });
@@ -1561,8 +2268,12 @@
   window.addEventListener('resize', updateFilmstripNavigation);
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) { return; }
+    // Let Chromium's player consume Escape to leave fullscreen; keep Details
+    // and playback available when the user returns to the gallery.
+    if (document.fullscreenElement) { return; }
     const target = event.target;
     if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) { return; }
+    if (!sourcesPanel.hidden) { event.preventDefault(); closeSources(); return; }
     if (!protectionPanel.hidden) { event.preventDefault(); closeProtection(); return; }
     if (details.hidden) { return; }
     event.preventDefault();
@@ -1591,12 +2302,15 @@
   window.addEventListener('focus', () => { passwordWindowFocused = true; });
   document.addEventListener('visibilitychange', () => { if (document.hidden) { clearPasswordsOnBlur(); } });
   window.addEventListener('pagehide', clearSensitiveView);
+  restoreBrowseControls();
+  updateBrowseControls();
   if (api) { void loadPage(0); }
   else {
     galleryStatus.textContent = '';
     grid.setAttribute('aria-busy', 'false');
     lockState.textContent = 'Unavailable';
     protectionButton.disabled = true;
+    sourcesToggle.disabled = true;
     showEmpty('Private hub unavailable', 'Close this window and open the private hub again.');
   }
 })();

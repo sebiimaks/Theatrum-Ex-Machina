@@ -1,6 +1,6 @@
 # Try password-protected private hubs
 
-Private hubs are available in the macOS development build on `codex/private-hubs`. They are not part of the published 2.0.0 release. Touch ID is deferred; use a hub password for this build.
+Private hubs are available in the macOS development build on `codex/private-hubs`. Touch ID is deferred; use a hub password for this build.
 
 ## Create a private copy
 
@@ -14,13 +14,89 @@ The destination is a folder containing encrypted catalogue and preview records. 
 
 ## Browse, edit and lock
 
-Select a video to inspect its saved previews, notes and tags. Save changes to notes and tags before locking. The private gallery also provides saved filmstrips and preview clips when present, per-video preview regeneration through an explicit source-folder selection, password changes, and automatic-lock settings under **Protection**.
+Select a video to inspect its saved previews, rating, notes and tags. Save changes before locking. The private gallery also provides saved filmstrips and preview clips when present, original-video playback, per-video preview regeneration, password changes, and automatic-lock settings under **Protection**.
 
 Choose **Lock hub** to close the private workspace and return to the ordinary hub. To reopen it, choose **File → Open private hub…**, select the encrypted folder and enter its password. Private hubs are not added to the ordinary recent-catalogue list.
 
 An incorrect password or an unavailable folder returns to the ordinary workspace with a message. Choose **Open private hub…** again to retry. If cleanup cannot be confirmed, restart the app before continuing.
 
-This initial private gallery plays generated preview clips. Original-video playback, importing new videos and relocating source folders remain ordinary-hub operations.
+## Choose collections and sorting
+
+Use **Collection** to choose **All videos**, **Favourites** or **Recently played**. Search titles and tags within the chosen collection. **Recently played** includes only videos with a saved last-played date and initially shows the newest first. It uses the history already stored in the catalogue; playing originals or previews in this test build does not update that history.
+
+Use **Sort by** to choose **Catalogue order**, **Name**, **Date added**, **Last played**, **Rating**, **Duration** or **File size**. The direction button switches between **Ascending** and **Descending**. Missing dates, durations and file sizes stay at the end in either direction. Changing a collection or sort returns to the first page.
+
+Save or discard notes, tag and rating edits before changing the view. Resolve an unsaved automatic-lock setting first as well. These browsing choices do not change the saved catalogue order, playback history or source files, and do not require connecting source folders. Locking clears the search and view choices; reopening starts with **All videos**, **Catalogue order**, **Ascending**.
+
+## Rate videos and manage favourites
+
+Select a video and choose **Rating** in its details. Choose **Unrated** or one to five stars. Five-star videos appear in **Favourites**; choosing a lower rating removes that favourite status.
+
+Choose **Save changes** to store the rating, notes and tags together in the encrypted catalogue, or **Discard** to restore their saved values. Changes refresh the current collection and sort order. If a video leaves Favourites after saving, its details stay open so you can continue editing it. Save or discard a rating draft before navigating elsewhere; locking clears unsaved drafts.
+
+Rating does not require connecting a source folder and does not change original files or playback history. Editing notes or tags alone preserves the saved rating, including older catalogue values.
+
+## Play videos and previews
+
+Select a video, then choose **Play video** to play its original file inside the private window. If its source folder is not connected for this session, select the saved folder in the native picker. A connection already granted through **Source folders**, playback or preview regeneration can be reused. Opening a video does not relocate its source or choose an alternate copy.
+
+**Play preview** plays the generated clip stored in the encrypted hub, when available. It does not need the original source folder. Selecting a catalogue item starts neither kind of playback automatically.
+
+Use the player’s **Full screen** control to expand an original video or a saved preview. Press **Escape** to return to its details. The automatic-lock timeout still applies in fullscreen.
+
+Use **Cancel** while a video is opening, or **Stop video** to close its player. Changing the selected video, closing its details, opening Protection or Source folders, regenerating previews, or saving/discarding metadata also stops original playback. Unsaved notes and tags survive starting or stopping playback; save or discard them before navigating away. **Lock hub** always remains available and clears unsaved edits.
+
+The private player accepts MP4, M4V, MOV, WebM and Ogg video containers. Playback also depends on the codecs supported by the bundled player. An unsupported codec or unavailable source produces an error; the app does not open an external player or convert the original as a fallback. A saved preview may still play.
+
+This test build does not update **Last played** or **Times played** when playing an original or preview. Playback does not keep the hub unlocked: the inactivity timeout still applies. Original files remain unencrypted in their existing folders and can be accessed outside the app. Use **Source folders → Add videos…** to import up to 100 selected videos at a time.
+
+## Connect source folders
+
+Open **Source folders** to see the saved folders and how many catalogue videos reference each one. **Not connected** means the app has no current permission for that folder in this private session; it does not mean the videos or saved previews are missing.
+
+Choose **Connect** and select the existing folder shown by the native picker. After connection, **Play video**, **Add videos…**, **Find new videos…** and **Regenerate previews** can reuse that session access. **Refresh** checks current connections after reconnecting a drive. If a folder has disappeared or been replaced, connect it again. Cancelling a connection keeps the hub open.
+
+**Disconnect** removes the app's permission for that folder in this private session. It does not delete files, change the catalogue or unmount the drive. All connections expire when the private hub locks, and saved encrypted previews remain available without connecting source folders.
+
+Folders use generic numbered labels in the private window; the native picker identifies the saved location. Connect reconnects folders at their saved locations. Use **Change location…** when a folder has moved.
+
+## Add a source folder
+
+Save or discard video edits, open **Source folders**, and choose **Add folder…**. Select an existing folder that is separate from the other saved source folders and the encrypted hub’s own storage folder. The app saves its location in the encrypted catalogue. It does not scan the folder, add videos, enable watching or change its files.
+
+The new folder initially shows **Not connected**. Choose **Connect** to grant access for this session, or **Add videos…** to grant access and select videos to import. Saved folder locations survive locking; permission to use them does not. The private gallery supports up to 256 saved source folders.
+
+**Cancel adding folder** stops the operation once cancellation is observed. Close any open native picker to finish cancellation. A save already in progress may finish, so check the refreshed folder list before retrying.
+
+## Add videos
+
+Save or discard any video edits, open **Source folders**, and choose **Add videos…** beside a saved folder. Connect the folder if prompted, then select up to 100 videos inside it. The app processes them one at a time. For each video, it reads technical metadata and generates encrypted thumbnails, filmstrips and any preview clip enabled by the hub’s existing preview settings. The catalogue entry is saved after its previews.
+
+Progress and the final summary show how many videos were added, already catalogued, failed or not processed. A file already catalogued at the same path is skipped. Separate copies at different paths are treated as separate videos. Unreadable or unsupported files can fail while other selected files continue; a changed source folder or lost access stops the batch. Linked files/folders and ignored subfolders are refused. Every selected path must be inside the saved source folder; an invalid or oversized selection is rejected before importing any videos.
+
+Original videos stay in place and remain unencrypted. Use **Add folder…** to save another source folder first. Choose **Find new videos…** to review new files discovered in a saved folder. Automatic watching is not enabled.
+
+Choose **Cancel import** during **Add videos…**, or **Cancel** during **Find new videos…**, to stop further work once cancellation is observed. Close any open native picker to finish cancellation. Videos already added remain saved. A catalogue save already in progress may complete, so check the refreshed catalogue before retrying. Locking also cancels import and waits for its decoder and file access to finish. The automatic-lock timeout still applies during a batch; progress updates do not keep the hub unlocked. Interrupted work may leave unused encrypted preview records; it does not create readable preview files beside the source.
+
+## Find new videos in a folder
+
+Open **Source folders** and choose **Find new videos…** beside a saved folder. Save or discard video edits first, and connect the folder if prompted. Discovery checks subfolders for supported video extensions, skipping paths already in the catalogue, linked files and folders, ignored subfolders, and folders whose names begin with `vha-`. It reads directory entries and file metadata; it does not decode originals or generate previews during discovery.
+
+Review the number of discovered video candidates in the native confirmation, then choose **Import videos** to begin. **Cancel** is the default. The confirmation shows counts rather than a filename list. Each batch contains up to 100 videos. If the confirmation reports more, finish the batch and choose **Find new videos…** again; saved entries are skipped on later scans. A matching extension does not guarantee that a video can be decoded.
+
+Discovery stops at 10,000 entries, 1,000 directories or 32 nested folder levels. If a safety limit is reached, no batch is imported: use **Add videos…** to select files directly. **No new videos found** means the scan found no new eligible paths.
+
+Confirmed imports use the same encrypted previews, progress counts and per-video saves as **Add videos…**. **Cancel** stops discovery or import once cancellation is observed; close any open native confirmation or folder picker to finish cancellation. Completed entries remain saved, and an active catalogue save may finish. Review the refreshed catalogue before retrying. Locking also cancels the operation, and the automatic-lock timeout still applies. This action does not enable automatic scans or folder watching.
+
+## Update a moved source folder
+
+Save or discard video edits, open **Source folders**, and choose **Change location…** beside the relevant folder. Select its new location in the native picker. Keep the same filenames and subfolder layout. The app checks that every referenced video is present as a regular file and has the size recorded in the catalogue, including videos previously marked missing.
+
+Review the selected path and video count in the native confirmation, then choose **Save location**. This saves the new path in the encrypted catalogue. It does not move videos or change notes, tags, previews, watch settings or missing-file flags. Choose **Connect** afterward to grant access for playback and preview regeneration during the current session. The saved location survives locking; the connection does not.
+
+Choose a separate location that does not overlap another saved source folder or the old location. Linked folders/files, incomplete sets and entries without recorded positive file sizes are refused. Checks compare names, relative paths and sizes; they do not compare video contents. If checking fails, correct the selected folder or use the ordinary hub to repair incomplete file information first.
+
+**Cancel change** stops work once cancellation is observed. A save already in progress may finish, so the panel refreshes the saved state after every outcome. Locking retains its usual cancellation and cleanup behavior.
 
 ## Make an ordinary copy
 
@@ -36,7 +112,7 @@ Creating a private copy does not remove or encrypt the original `.scaena` file, 
 
 Run `npm run electron:mac:private:test` from the privacy worktree to build an unsigned Apple Silicon test app in `release-test-private/mac-arm64/Theatrum Ex Machina.app`. This command does not publish or install it. The output uses a separate directory from earlier test packages.
 
-The current test build is in `release-test-private-metadata-check/mac-arm64/Theatrum Ex Machina.app`. Set `THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-metadata-check` when building or running `npm run test:private-package:host` to use this separate output folder. Folder selection accepts capitalization differences on case-insensitive drives. Catalogue metadata updates are accepted only when the catalogue contents remain unchanged; actual edits still stop conversion. If conversion fails, the message identifies the failed step, such as checking the source, creating encrypted storage, copying previews or verifying the copy.
+The folder-discovery test-build output is `release-test-private-scan/mac-arm64/Theatrum Ex Machina.app`. Set `THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-scan` when building or running `npm run test:private-package:host` to use this separate output folder. Folder selection accepts capitalization differences on case-insensitive drives. Catalogue metadata updates are accepted only when the catalogue contents remain unchanged; actual edits still stop conversion. If conversion fails, the message identifies the failed step, such as checking the source, creating encrypted storage, copying previews or verifying the copy.
 
 Open that local app to review the workflow. Close other running copies of Theatrum Ex Machina first so that macOS does not forward the launch to a different running version. Normal catalogue settings are shared unless a separate portable settings directory is selected when launching; the automated acceptance tests use isolated disposable profiles.
 

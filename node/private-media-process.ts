@@ -65,7 +65,8 @@ const values: Record<string, (value: string) => boolean> = {
   '-movflags': value => ['+frag_keyframe+empty_moov+default_base_moof', '+frag_keyframe+empty_moov+default_base_moof+disable_chpl'].includes(value),
   '-of': value => value === 'json',
   '-show_entries': value => ['format=duration:stream=codec_type,width,height,duration',
-    'format=duration:stream=codec_type,width,height,duration:stream_disposition=attached_pic'].includes(value),
+    'format=duration:stream=codec_type,width,height,duration:stream_disposition=attached_pic',
+    'format=duration:stream=codec_type,width,height,duration,avg_frame_rate:stream_disposition=attached_pic'].includes(value),
   // These four filters do not open files. Disallow filter graphs, movie/subtitle
   // sources, scripts, quotes, escapes and arbitrary filter names entirely.
   '-vf': value => value.split(',').every(filter => /^(?:scale|pad|setsar|tile)=[a-zA-Z0-9_:.=()+*/ -]+$/.test(filter)),

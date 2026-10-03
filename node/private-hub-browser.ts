@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, powerMonitor, session, type Session, type Event } from 'electron';
+import { app, BrowserWindow, dialog, powerMonitor, session, type Session, type Event, type WebContents } from 'electron';
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -10,6 +10,7 @@ import { registerPrivateConversionRequest } from './private-conversion-request';
 import type { PrivateConversionReview, PrivateConversionProgress } from '../interfaces/private-conversion';
 import { registerPrivatePasswordRequest } from './private-password-request';
 import { registerPrivateGalleryRequest } from './private-gallery-request';
+import { PrivateSourcePlayback } from './private-source-playback';
 import { PrivateHubIdleLock } from './private-hub-idle-lock';
 import { acquirePrivateNativeMenu, isPrivateNativeMenuCleanupFailure } from './private-native-menu';
 import type { PrivateHubPreparedOpen, PrivateHubUnlockChoice } from './private-hub-open';
@@ -94,6 +95,7 @@ export class PrivateHubBrowser {
   #disposeConversionRequest?: () => Promise<void>;
   #disposePasswordRequest: (() => Promise<void>) | undefined;
   #disposeGalleryRequest: (() => Promise<void>) | undefined;
+  #playback?: PrivateSourcePlayback;
   #idleLock: PrivateHubIdleLock | undefined;
   #nativeMenu: ReturnType<typeof acquirePrivateNativeMenu> | undefined;
   #session: Session | undefined;
@@ -256,6 +258,20 @@ export class PrivateHubBrowser {
     } catch { this.#cleanupFailed = true; this.retire(); throw unavailable(); }
   }
 
+  /** Fullscreen changes presentation only; it never grants capture or file access. */
+  private allowFullscreen(contents: WebContents | null, permission: string,
+    details: { isMainFrame: boolean; requestingUrl?: string } | undefined): boolean {
+    try {
+      if (permission !== 'fullscreen' || !this.#hub || this.#state !== 'open' || !this.current()
+        || !this.#window || this.#window.isDestroyed() || contents !== this.#window.webContents
+        || contents.isDestroyed() || details?.isMainFrame !== true
+        || details.requestingUrl !== PRIVATE_BROWSER_ENTRY_URL || contents.getURL() !== PRIVATE_BROWSER_ENTRY_URL) { return false; }
+      const frame = contents.mainFrame;
+      return !frame.detached && !frame.isDestroyed() && frame.parent === null
+        && frame.url === PRIVATE_BROWSER_ENTRY_URL && this.current();
+    } catch { return false; }
+  }
+
   private async initialize(): Promise<void> {
     try {
       this.#nativeMenu = acquirePrivateNativeMenu({ kind: this.#conversion ? 'conversion' : this.#submitted ? 'password' : 'hub',
@@ -288,8 +304,11 @@ export class PrivateHubBrowser {
     this.#session = isolated;
     isolated.setPreloads([]);
     isolated.setSpellCheckerEnabled(false);
-    isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-    isolated.setPermissionCheckHandler(() => false);
+    isolated.setPermissionRequestHandler((contents, permission, callback, details) => {
+      callback(this.allowFullscreen(contents, permission, details));
+    });
+    isolated.setPermissionCheckHandler((contents, permission, origin, details) =>
+      origin === 'theatrum://app' && this.allowFullscreen(contents, permission, details));
     isolated.setDevicePermissionHandler(() => false);
     isolated.setDisplayMediaRequestHandler((_request, callback) => callback({}), { useSystemPicker: false });
     isolated.on('will-download', event => event.preventDefault());
@@ -327,9 +346,13 @@ export class PrivateHubBrowser {
       .map(url => isolated.resolveProxy(url)));
     if (routes.some(route => route !== 'PROXY 127.0.0.1:0')) { throw unavailable(); }
     this.assertCurrent();
+    if (this.#hub) {
+      this.#playback = new PrivateSourcePlayback({ signal: this.#signal, isCurrent: this.current,
+        onFailure: () => { this.#cleanupFailed = true; this.retire(); } });
+    }
     const handler = this.#hub
       ? createPrivateBrowserProtocolHandler({
-        hub: this.#hub, generation: this.#generation!, appDirectory: this.#appDirectory, isCurrent: this.current,
+        hub: this.#hub, generation: this.#generation!, playback: this.#playback, appDirectory: this.#appDirectory, isCurrent: this.current,
       })
       : this.#conversion
         ? createPrivateConversionProtocolHandler({ appDirectory: this.#appDirectory, isCurrent: this.current })
@@ -438,7 +461,7 @@ export class PrivateHubBrowser {
       });
     } else {
       this.#disposeGalleryRequest = registerPrivateGalleryRequest({
-        contents, hub: this.#hub!, generation: this.#generation!, isCurrent: this.current, onLock: () => this.retire(),
+        contents, hub: this.#hub!, generation: this.#generation!, playback: this.#playback, isCurrent: this.current, onLock: () => this.retire(),
         onProtectionChanged: settings => this.#idleLock?.setMinutes(settings.autoLockMinutes) === true,
         chooseUnprotectedCopyDestination: async () => {
           this.assertCurrent();
@@ -458,7 +481,7 @@ export class PrivateHubBrowser {
           if (window.isDestroyed()) { throw unavailable(); }
           const result = await dialog.showOpenDialog(window, {
             title: 'Allow source folder access',
-            message: 'Select this video’s saved source folder to regenerate its encrypted previews. This hub uses the selection only until it closes.',
+            message: 'Allow this saved source folder for video playback, importing and preview regeneration until this hub closes.',
             defaultPath: root, buttonLabel: 'Allow access',
             properties: ['openDirectory', 'noResolveAliases', 'dontAddToRecent'],
             securityScopedBookmarks: false,
@@ -466,6 +489,73 @@ export class PrivateHubBrowser {
           this.assertCurrent();
           if (window.isDestroyed() || result.canceled) { return undefined; }
           return result.filePaths.length === 1 ? result.filePaths[0] : undefined;
+        },
+        chooseImportVideo: async root => {
+          this.assertCurrent();
+          if (window.isDestroyed()) { throw unavailable(); }
+          const result = await dialog.showOpenDialog(window, {
+            title: 'Add videos to private hub',
+            message: 'Choose up to 100 videos inside this source folder. Each video’s catalogue entry and generated previews will be encrypted. Original videos stay in place.',
+            defaultPath: root, buttonLabel: 'Add videos',
+            properties: ['openFile', 'multiSelections', 'noResolveAliases', 'dontAddToRecent'], securityScopedBookmarks: false,
+          });
+          this.assertCurrent();
+          if (window.isDestroyed() || result.canceled) { return undefined; }
+          return result.filePaths.length > 0 ? [...result.filePaths] : undefined;
+        },
+        confirmSourceScan: async (count, more) => {
+          this.assertCurrent();
+          if (window.isDestroyed() || !Number.isSafeInteger(count) || count < 1 || count > 100 || typeof more !== 'boolean') {
+            throw unavailable();
+          }
+          const result = await dialog.showMessageBox(window, {
+            type: 'question', title: 'Import discovered videos?',
+            message: `Import ${count} discovered ${count === 1 ? 'video file' : 'video files'}?`,
+            detail: 'These files have supported video extensions and are not already in the catalogue. Their contents will be checked during import. '
+              + 'Catalogue entries and generated previews will be encrypted. Original videos stay in place.'
+              + (more ? '\n\nThis review includes the first 100 new files found. Find new videos again after importing to review more.' : ''),
+            buttons: ['Import videos', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true,
+          });
+          this.assertCurrent();
+          return !window.isDestroyed() && result.response === 0;
+        },
+        chooseNewSourceDirectory: async () => {
+          this.assertCurrent();
+          if (window.isDestroyed()) { throw unavailable(); }
+          const result = await dialog.showOpenDialog(window, {
+            title: 'Add source folder',
+            message: 'Save this folder location in the encrypted catalogue. No videos will be scanned or added. Connect the folder or choose Add videos afterward.',
+            buttonLabel: 'Add folder',
+            properties: ['openDirectory', 'noResolveAliases', 'dontAddToRecent'], securityScopedBookmarks: false,
+          });
+          this.assertCurrent();
+          if (window.isDestroyed() || result.canceled) { return undefined; }
+          return result.filePaths.length === 1 ? result.filePaths[0] : undefined;
+        },
+        chooseSourceLocation: async root => {
+          this.assertCurrent();
+          if (window.isDestroyed()) { throw unavailable(); }
+          const result = await dialog.showOpenDialog(window, {
+            title: 'Change source folder location',
+            message: 'Choose the new location of this saved source folder. This changes the catalogue location only; no files will be moved.',
+            defaultPath: root, buttonLabel: 'Check folder',
+            properties: ['openDirectory', 'noResolveAliases', 'dontAddToRecent'], securityScopedBookmarks: false,
+          });
+          this.assertCurrent();
+          if (window.isDestroyed() || result.canceled) { return undefined; }
+          return result.filePaths.length === 1 ? result.filePaths[0] : undefined;
+        },
+        confirmSourceLocation: async (root, videoCount) => {
+          this.assertCurrent();
+          if (window.isDestroyed()) { throw unavailable(); }
+          const result = await dialog.showMessageBox(window, {
+            type: 'question', title: 'Save source folder location?',
+            message: `Save the new location for ${videoCount} ${videoCount === 1 ? 'video' : 'videos'}?`,
+            detail: `${root}\n\nThe referenced files have matching names, relative paths and sizes; contents were not compared. No files will be moved. Connect this folder separately to allow video playback and preview regeneration.`,
+            buttons: ['Save location', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true,
+          });
+          this.assertCurrent();
+          return !window.isDestroyed() && result.response === 0;
         },
       });
     }
@@ -504,6 +594,9 @@ export class PrivateHubBrowser {
     let galleryDrain: Promise<void> | undefined;
     try { galleryDrain = this.#disposeGalleryRequest?.(); } catch { this.#cleanupFailed = true; }
     this.#disposeGalleryRequest = undefined;
+    let playbackDrain: Promise<void> | undefined;
+    try { playbackDrain = this.#playback?.dispose(); } catch { this.#cleanupFailed = true; }
+    this.#playback = undefined;
     let hubDrain: Promise<void> | undefined;
     try { if (this.#hub?.isCurrent(this.#generation!)) { hubDrain = this.#hub.lock(); } }
     catch { this.#cleanupFailed = true; }
@@ -516,7 +609,8 @@ export class PrivateHubBrowser {
     const isolated = this.#session;
     const cleanup: (() => Promise<unknown>)[] = [() => hubDrain ?? Promise.resolve(),
       () => this.#hubRevokedDrain ?? Promise.resolve(), () => galleryDrain ?? Promise.resolve(),
-      () => passwordDrain ?? Promise.resolve(), () => conversionDrain ?? Promise.resolve()];
+      () => passwordDrain ?? Promise.resolve(), () => conversionDrain ?? Promise.resolve(),
+      () => playbackDrain ?? Promise.resolve()];
     if (isolated) {
       cleanup.push(() => isolated.closeAllConnections(), () => isolated.clearData(),
         () => isolated.clearCache(), () => isolated.clearCodeCaches({}),

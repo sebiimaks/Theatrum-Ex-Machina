@@ -299,3 +299,70 @@ test('conversion protocol serves only its bundled form assets and never media or
   current = false;
   assert.equal((await handler(new Request(PRIVATE_BROWSER_ENTRY_URL))).status, 404);
 });
+
+test('original route accepts only exact opaque GET/HEAD tokens and has no prompt authority', async t => {
+  const { app } = await fixture(t);
+  const url = 'theatrum://app/original/' + 'a'.repeat(64);
+  for (const method of ['GET', 'HEAD']) {
+    assert.equal(isPrivateBrowserRequestAllowed(url, method), true);
+    assert.equal(isPrivateUnlockRequestAllowed(url, method), false);
+    assert.equal(isPrivateConversionRequestAllowed(url, method), false);
+  }
+  for (const value of [url + '?v=1', url + '.mp4', url + '/', url.slice(0, -1), url.toUpperCase(),
+    url.replace('/original/', '/original//'), url.replace('://app/', '://elsewhere/')]) {
+    assert.equal(isPrivateBrowserRequestAllowed(value, 'GET'), false, value);
+  }
+  assert.equal(isPrivateBrowserRequestAllowed(url, 'POST'), false);
+  const options = { appDirectory: app, isCurrent: () => true };
+  for (const handler of [createPrivateUnlockProtocolHandler(options), createPrivateConversionProtocolHandler(options),
+    createPrivateBrowserProtocolHandler({ ...options, hub: hubStub(), generation: 7 })]) {
+    const response = await handler(new Request(url));
+    assert.equal(response.status, 404); assertPrivate(response);
+  }
+});
+
+test('original range requests go only to captured playback authority with private headers', async t => {
+  const { app } = await fixture(t);
+  const url = 'theatrum://app/original/' + 'b'.repeat(64);
+  let calls = 0;
+  const handler = createPrivateBrowserProtocolHandler({ hub: hubStub({ createPreviewResponse: async () => { throw new Error('wrong authority'); } }),
+    generation: 7, appDirectory: app, isCurrent: () => true,
+    playback: { createResponse: async incoming => {
+      calls++; assert.equal(incoming.url, url); assert.equal(incoming.headers.get('Range'), 'bytes=4-7');
+      return new Response('DATA', { status: 206, headers: { 'Content-Type': 'video/mp4', 'Content-Range': 'bytes 4-7/100',
+        'Content-Length': '4', 'Cache-Control': 'public' } });
+    } } });
+  const response = await handler(new Request(url, { headers: { Range: 'bytes=4-7' } }));
+  assert.equal(calls, 1); assert.equal(response.status, 206); assertPrivate(response);
+  assert.equal(response.headers.get('Content-Range'), 'bytes 4-7/100'); assert.equal(await response.text(), 'DATA');
+});
+
+test('original delivery rejects stale lifetime both before and after asynchronous response creation', async t => {
+  const { app } = await fixture(t);
+  let current = true; let calls = 0; let cancelled = false;
+  const handler = createPrivateBrowserProtocolHandler({ hub: hubStub(), generation: 7, appDirectory: app,
+    isCurrent: () => current, playback: { createResponse: async () => {
+      calls++; current = false;
+      return new Response(new ReadableStream({ cancel: () => { cancelled = true; } }));
+    } } });
+  const incoming = new Request('theatrum://app/original/' + 'c'.repeat(64));
+  assert.equal((await handler(incoming)).status, 404);
+  await Promise.resolve(); assert.equal(cancelled, true);
+  assert.equal((await handler(incoming)).status, 404); assert.equal(calls, 1);
+});
+
+test('original HEAD cancels any response body and original authority errors are generic', async t => {
+  const { app } = await fixture(t);
+  let cancelled = false; let fails = false;
+  const handler = createPrivateBrowserProtocolHandler({ hub: hubStub(), generation: 7, appDirectory: app, isCurrent: () => true,
+    playback: { createResponse: async () => {
+      if (fails) { throw new Error('/private/source/filename.mp4'); }
+      return new Response(new ReadableStream({ cancel: () => { cancelled = true; } }), { headers: { 'Content-Length': '123' } });
+    } } });
+  const url = 'theatrum://app/original/' + 'd'.repeat(64);
+  const response = await handler(new Request(url, { method: 'HEAD' }));
+  assert.equal(response.body, null); assert.equal(cancelled, true); assert.equal(response.headers.get('Content-Length'), '123');
+  fails = true;
+  const failure = await handler(new Request(url));
+  assert.equal(failure.status, 404); assert.equal(await failure.text(), ''); assertPrivate(failure);
+});

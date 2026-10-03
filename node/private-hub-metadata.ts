@@ -11,6 +11,7 @@ export interface PrivateVideoMetadataUpdate {
   revision: string;
   notes: string;
   tags: string[];
+  rating?: number;
 }
 export type PrivateVideoMetadataResult = { status: 'saved'; image: ImageElement }
   | { status: 'conflict' | 'invalid' | 'busy' };
@@ -35,20 +36,45 @@ export function privateVideoMetadataEditable(image: ImageElement): boolean {
     && (image.tags === undefined || validTags(image.tags));
 }
 
+/** Detach plain string entries without invoking caller accessors or iterators. */
+export function snapshotPrivateVideoTags(value: unknown): string[] | undefined {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) { return; }
+    const length = Object.getOwnPropertyDescriptor(value, 'length')?.value;
+    if (!Number.isSafeInteger(length) || length < 0 || length > PRIVATE_VIDEO_TAGS_MAX_COUNT) { return; }
+    if (Reflect.ownKeys(value).length !== length + 1) { return; }
+    const tags: string[] = [];
+    for (let index = 0; index < length; index++) {
+      const field = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!field || !field.enumerable || !Object.hasOwn(field, 'value')
+        || typeof field.value !== 'string' || field.value.length > PRIVATE_VIDEO_TAG_MAX_LENGTH) { return; }
+      tags.push(field.value);
+    }
+    return tags;
+  } catch { return; }
+}
+
 /** Validate a bounded request and detach mutable caller arrays before queue admission. */
 export function snapshotPrivateVideoMetadataUpdate(value: unknown): PrivateVideoMetadataUpdate | undefined {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value)
-      || Object.keys(value).sort().join(',') !== 'index,notes,revision,tags') { return; }
-    const fields = Object.getOwnPropertyDescriptors(value);
-    if (Object.values(fields).some(field => !Object.hasOwn(field, 'value'))) { return; }
-    const index = fields.index.value;
-    const revision = fields.revision.value;
-    const notes = fields.notes.value;
-    const tags = fields.tags.value;
-    if (!Number.isSafeInteger(index) || index < 0 || typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision)
-      || typeof notes !== 'string' || notes.length > PRIVATE_VIDEO_NOTES_MAX_LENGTH || !validTags(tags)) { return; }
-    return { index, revision, notes, tags: [...tags] };
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) { return; }
+    const allowed = new Set(['index', 'revision', 'notes', 'tags', 'rating']);
+    const fields: Record<string, unknown> = Object.create(null);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string' || !allowed.has(key)) { return; }
+      const field = Object.getOwnPropertyDescriptor(value, key);
+      if (!field || !field.enumerable || !Object.hasOwn(field, 'value')) { return; }
+      fields[key] = field.value;
+    }
+    const { index, revision, notes } = fields;
+    const tags = snapshotPrivateVideoTags(fields.tags);
+    if (!Number.isSafeInteger(index) || (index as number) < 0 || typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision)
+      || typeof notes !== 'string' || notes.length > PRIVATE_VIDEO_NOTES_MAX_LENGTH || !tags) { return; }
+    const ratingPresent = Object.hasOwn(fields, 'rating');
+    const rating = fields.rating;
+    if (ratingPresent && (!Number.isInteger(rating) || (rating as number) < 0 || (rating as number) > 5)) { return; }
+    return { index: index as number, revision, notes, tags, ...(ratingPresent ? { rating: rating as number } : {}) };
   } catch { return; }
 }
 
@@ -75,6 +101,7 @@ export function applyPrivateVideoMetadata(image: ImageElement, update: PrivateVi
     }
   }
   const edited = { ...image };
+  if (Object.hasOwn(update, 'rating')) { edited.stars = (update.rating! + 0.5) as ImageElement['stars']; }
   // An unchanged empty field retains its original optional representation.
   if (image.notes !== undefined || update.notes !== '') { edited.notes = update.notes; }
   if (image.tags !== undefined || tags.length > 0) { edited.tags = tags; }

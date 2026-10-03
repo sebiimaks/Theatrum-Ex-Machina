@@ -290,3 +290,76 @@ test('the memory grant cache is bounded and cannot stack more native choices aft
   assert.deepEqual(await f.authorize(), { status: 'busy' });
   assert.equal(f.prompts.length, 256);
 });
+
+
+test('connection status never probes an ungranted or invalid source or opens a picker', async t => {
+  const f = await fixture(t);
+  const stat = t.mock.method(nativeFs, 'lstatSync', () => { assert.fail('An ungranted source must not be probed'); });
+  const realpath = t.mock.method(nativeFs.realpathSync, 'native', () => { assert.fail('An ungranted source must not be resolved'); });
+  for (const root of [f.root, f.other, '', '/', 'relative', undefined, {}]) {
+    assert.equal(f.access.isConnected(root as string), false);
+    f.access.disconnect(root as string);
+  }
+  assert.equal(stat.mock.callCount(), 0);
+  assert.equal(realpath.mock.callCount(), 0);
+  assert.deepEqual(f.prompts, []);
+});
+
+test('connection status remains disconnected while its first native approval is pending', async t => {
+  const f = await fixture(t);
+  const picker = deferred<string | undefined>();
+  f.releases.push(() => picker.resolve(undefined));
+  f.choose(() => picker.promise);
+  const pending = f.authorize();
+  await turn();
+  assert.equal(f.access.isConnected(f.root), false);
+  picker.resolve(f.root);
+  assert.equal(grant(await pending)(), true);
+  assert.equal(f.access.isConnected(f.root), true);
+});
+
+test('disconnect revokes only the selected session grant and a later connection asks again', async t => {
+  const f = await fixture(t);
+  const first = grant(await f.authorize());
+  const other = grant(await f.authorize(f.other));
+  const before = (await fs.readdir(f.directory)).sort();
+  assert.equal(f.access.isConnected(f.root), true);
+  f.access.disconnect(f.root + path.sep);
+  assert.equal(f.access.isConnected(f.root), false);
+  assert.equal(first(), false);
+  assert.equal(other(), true);
+  assert.equal(f.access.isConnected(f.other), true);
+  f.access.disconnect(f.root);
+  const replacement = grant(await f.authorize());
+  assert.equal(replacement(), true);
+  assert.equal(first(), false, 'Reconnecting must not revive previously revoked authority');
+  assert.deepEqual(f.prompts, [f.root, f.other, f.root]);
+  assert.deepEqual((await fs.readdir(f.directory)).sort(), before);
+});
+
+test('refresh detects a replaced folder and cannot revive its old grant when the original returns', async t => {
+  const f = await fixture(t);
+  const first = grant(await f.authorize());
+  const original = path.join(f.directory, 'disconnected-media');
+  await fs.rename(f.root, original);
+  await fs.mkdir(f.root);
+  assert.equal(f.access.isConnected(f.root), false);
+  await fs.rmdir(f.root);
+  await fs.rename(original, f.root);
+  assert.equal(f.access.isConnected(f.root), false);
+  assert.equal(first(), false);
+  assert.equal(grant(await f.authorize())(), true);
+  assert.equal(f.access.isConnected(f.root), true);
+  assert.equal(f.prompts.length, 2);
+});
+
+test('status checks after owner revocation remain disconnected without probing former grants', async t => {
+  const f = await fixture(t);
+  grant(await f.authorize());
+  f.owner.abort();
+  const stat = t.mock.method(nativeFs, 'lstatSync', () => { assert.fail('Revoked sources must not be probed'); });
+  assert.equal(f.access.isConnected(f.root), false);
+  f.access.disconnect(f.root);
+  assert.equal(f.access.isConnected(f.other), false);
+  assert.equal(stat.mock.callCount(), 0);
+});

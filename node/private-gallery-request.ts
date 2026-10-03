@@ -3,8 +3,11 @@ import { createHash, randomBytes } from 'node:crypto';
 import * as path from 'node:path';
 import type { FinalObject, ImageElement } from '../interfaces/final-object.interface';
 import { getImageLocations } from '../interfaces/media-locations';
-import { PRIVATE_GALLERY_CHANNELS as channels, PRIVATE_GALLERY_PAGE_SIZE,
-  type PrivateGalleryDetail, type PrivateGalleryItem, type PrivateGalleryPage,
+import { PRIVATE_GALLERY_CHANNELS as channels, PRIVATE_GALLERY_PAGE_SIZE, PRIVATE_GALLERY_SOURCE_LIMIT, PRIVATE_GALLERY_IMPORT_LIMIT,
+  type PrivateGallerySource, type PrivateGallerySources, type PrivateGallerySourceConnection, type PrivateGallerySourceDisconnection,
+  type PrivateGallerySourceRelocation, type PrivateGallerySourceAddition, type PrivateGalleryOriginalPlayback, type PrivateGalleryImportResponse,
+  type PrivateGalleryImportCounts, type PrivateGalleryImportProgress,
+  type PrivateGalleryDetail, type PrivateGalleryItem, type PrivateGalleryPage, type PrivateGalleryQuery,
   type PrivateGalleryEdit, type PrivateGallerySave, type PrivateGallerySelection,
   type PrivateGalleryRegeneration, type PrivateGalleryProtection, type PrivateGalleryProtectionSave,
   type PrivateCredentialsPasswordChange, type PrivateCredentialsUnprotectedCopy,
@@ -15,12 +18,17 @@ import { snapshotPrivateHubProtection, type PrivateHubProtection } from '../inte
 import { createTheatrumMediaUrl } from '../interfaces/theatrum-protocol';
 import type { PrivateHubSession } from './private-hub-session';
 import { isPrivateHubPlaintextExportCleanupFailure } from './private-hub-plaintext-export';
-import { privateVideoMetadataEditable, privateVideoRevision } from './private-hub-metadata';
+import { privateVideoMetadataEditable, privateVideoRevision, snapshotPrivateVideoTags } from './private-hub-metadata';
 import { PrivateSourceAccess } from './private-source-access';
+import { privateSourcePlaybackType, type PrivateSourcePlayback } from './private-source-playback';
+import { reviewPrivateSourceRelocation, type PrivateSourceRelocationReview } from './private-source-relocation';
+import { reviewPrivateSourceAddition, type PrivateSourceAdditionReview } from './private-source-addition';
+import { reviewPrivateSourceScan, isPrivateSourceScanCleanupFailure, type PrivateSourceScanReview } from './private-source-scan';
 import { isPrivatePreviewGenerationCleanupFailure } from './private-hub-preview-generation';
 import { capturePrivatePreviewSource, isPrivatePreviewSourceCleanupFailure, type PrivatePreviewSource } from './private-preview-source';
 
 import { isPrivateTouchIdCleanupFailure } from './private-touch-id';
+import { checkPrivateVideoImport } from './private-video-import';
 
 const ENTRY_URL = 'theatrum://app/index.html';
 const HASH = /^[a-zA-Z0-9_-]{1,200}$/;
@@ -36,7 +44,19 @@ export interface PrivateGalleryRequestOptions {
   /** Applies a saved setting to the main-owned timer; never a renderer heartbeat. */
   readonly onProtectionChanged: (settings: PrivateHubProtection) => boolean;
   /** Native main-owned picker. Never accept a path from the renderer. */
+  /** Main-owned descriptor playback; no source paths cross this bridge. */
+  readonly playback?: PrivateSourcePlayback;
   readonly chooseSourceDirectory?: (root: string) => Promise<string | undefined>;
+  /** Separate native picker for changing one saved source location. */
+  readonly chooseSourceLocation?: (root: string) => Promise<string | undefined>;
+  /** Native picker for a new saved source location. Saving does not grant access. */
+  readonly chooseNewSourceDirectory?: () => Promise<string | undefined>;
+  /** Native bounded file selection beneath a saved source. No renderer paths. */
+  readonly chooseImportVideo?: (root: string) => Promise<string | readonly string[] | undefined>;
+  /** Count-only native confirmation of one bounded discovered batch. */
+  readonly confirmSourceScan?: (count: number, more: boolean) => Promise<boolean>;
+  /** Native confirmation after the selected folder's referenced videos pass review. */
+  readonly confirmSourceLocation?: (root: string, videoCount: number) => Promise<boolean>;
   /** Native picker for an explicitly acknowledged unprotected copy. No renderer paths. */
   readonly chooseUnprotectedCopyDestination?: () => Promise<string | undefined>;
 }
@@ -46,6 +66,46 @@ interface Row {
   index: number;
   identity: string;
   persistedRevision: string;
+  metrics: { dateAdded: number | undefined; lastPlayed: number | undefined; fileSize: number | undefined;
+    duration: number | undefined; rating: number | undefined };
+}
+
+interface SourceRow {
+  index: number;
+  root: string;
+  identity: string;
+  title: string;
+  videoCount: number;
+}
+
+/** Saved source identities and reference counts only; never probe original media. */
+function sourceRows(catalogue: FinalObject): SourceRow[] {
+  const entries = Object.entries(catalogue.inputDirs ?? {});
+  if (entries.length > PRIVATE_GALLERY_SOURCE_LIMIT || !Array.isArray(catalogue.images)
+    || catalogue.images.length > MAX_ROWS) { throw new Error(); }
+  const sources: SourceRow[] = [];
+  for (const [key, value] of entries) {
+    const index = Number(key);
+    const root = value?.path;
+    if (!Number.isSafeInteger(index) || index < 0 || String(index) !== key
+      || typeof root !== 'string' || !root.length || root.length > 32_768 || root.includes('\0')
+      || !path.isAbsolute(root)) { continue; }
+    const normalized = path.resolve(root);
+    if (normalized === path.parse(normalized).root) { continue; }
+    sources.push({ index, root: normalized, identity: JSON.stringify([index, root]),
+      title: `Source folder ${sources.length + 1}`, videoCount: 0 });
+  }
+  const byIndex = new Map(sources.map(source => [source.index, source]));
+  for (const image of catalogue.images) {
+    if (image.deleted || image.cleanName === '*FOLDER*') { continue; }
+    try {
+      for (const index of new Set(getImageLocations(image).map(location => location.inputSource))) {
+        const source = byIndex.get(index);
+        if (source) { source.videoCount++; }
+      }
+    } catch { /* Malformed locations cannot grant source authority. */ }
+  }
+  return sources;
 }
 
 // Main-owned row identity, never exposed to the private page. A reordered or
@@ -61,7 +121,13 @@ function text(value: unknown, limit: number): string {
 function number(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
 }
-function project(image: ImageElement, index: number, regenerable = false): Row {
+function timestamp(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 8.64e15 ? value : undefined;
+}
+function positiveMetric(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= Number.MAX_SAFE_INTEGER ? value : undefined;
+}
+function project(image: ImageElement, index: number, regenerable = false, playable = false): Row {
   if (!HASH.test(image.hash)) { throw new Error(); }
   const title = text(image.cleanName, 2048) || 'Untitled video';
   const notes = text(image.notes, 65_536);
@@ -73,8 +139,12 @@ function project(image: ImageElement, index: number, regenerable = false): Row {
   const previewKey = randomBytes(16).toString('hex');
   return {
     index, identity: identity(image), persistedRevision: privateVideoRevision(image),
+    metrics: { dateAdded: timestamp(image.dateAdded), lastPlayed: timestamp(image.lastPlayed),
+      fileSize: Number.isSafeInteger(image.fileSize) ? positiveMetric(image.fileSize) : undefined,
+      duration: positiveMetric(image.duration),
+      rating: [0.5, 1.5, 2.5, 3.5, 4.5, 5.5].includes(image.stars) ? rating : undefined },
     display: { title, notes, tags, duration: number(image.duration), width: number(image.width), height: number(image.height),
-      rating, favourite: image.stars === 5.5, editable: privateVideoMetadataEditable(image), regenerable,
+      rating, favourite: image.stars === 5.5, editable: privateVideoMetadataEditable(image), regenerable, playable,
       revision: randomBytes(16).toString('hex'),
       thumbnailUrl: createTheatrumMediaUrl('thumbnails', image.hash, false, previewKey),
       clipUrl: createTheatrumMediaUrl('clips', image.hash, true, previewKey),
@@ -102,6 +172,21 @@ function sourceLocation(catalogue: FinalObject, image: ImageElement) {
   } catch { return undefined; }
 }
 
+/** Playback uses the preferred original independently of generated preview geometry. */
+function playbackLocation(catalogue: FinalObject, image: ImageElement) {
+  try {
+    if (image.deleted || image.cleanName === '*FOLDER*') { return undefined; }
+    const location = getImageLocations(image)[0];
+    if (!location || location.fileName.length > 4096 || location.partialPath.length > 16_384) { return undefined; }
+    const savedRoot = catalogue.inputDirs?.[location.inputSource]?.path;
+    if (typeof savedRoot !== 'string' || savedRoot.length > 32_768 || savedRoot.includes('\0')
+      || !path.isAbsolute(savedRoot)) { return undefined; }
+    const root = path.resolve(savedRoot);
+    if (root === path.parse(root).root) { return undefined; }
+    return { ...location, hash: image.hash, root };
+  } catch { return undefined; }
+}
+
 function uniqueHashes(catalogue: FinalObject): Set<string> {
   const counts = new Map<string, number>();
   for (const image of catalogue.images) {
@@ -110,27 +195,73 @@ function uniqueHashes(catalogue: FinalObject): Set<string> {
   return new Set([...counts].filter(([, count]) => count === 1).map(([hash]) => hash));
 }
 function edit(value: unknown): PrivateGalleryEdit | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) { return undefined; }
-  const object = value as Record<string, unknown>;
-  if (Object.keys(object).sort().join(',') !== 'id,notes,revision,tags'
-    || typeof object.id !== 'string' || !/^[a-f0-9]{32}$/.test(object.id)
-    || typeof object.revision !== 'string' || !/^[a-f0-9]{32}$/.test(object.revision)
-    || typeof object.notes !== 'string' || object.notes.length > 65_536
-    || !Array.isArray(object.tags) || object.tags.length > 128
-    || !object.tags.every(tag => typeof tag === 'string' && tag.length <= 512)) { return undefined; }
-  return { id: object.id, revision: object.revision, notes: object.notes, tags: [...object.tags] };
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) { return; }
+    const allowed = new Set(['id', 'revision', 'notes', 'tags', 'rating']);
+    const fields: Record<string, unknown> = Object.create(null);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string' || !allowed.has(key)) { return; }
+      const field = Object.getOwnPropertyDescriptor(value, key);
+      if (!field || !field.enumerable || !Object.hasOwn(field, 'value')) { return; }
+      fields[key] = field.value;
+    }
+    const { id, revision, notes } = fields;
+    const tags = snapshotPrivateVideoTags(fields.tags);
+    if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id)
+      || typeof revision !== 'string' || !/^[a-f0-9]{32}$/.test(revision)
+      || typeof notes !== 'string' || notes.length > 65_536 || !tags) { return; }
+    const ratingPresent = Object.hasOwn(fields, 'rating');
+    const rating = fields.rating;
+    if (ratingPresent && (!Number.isInteger(rating) || (rating as number) < 0 || (rating as number) > 5)) { return; }
+    return { id, revision, notes, tags, ...(ratingPresent ? { rating: rating as number } : {}) };
+  } catch { return; }
 }
 function summary(id: string, row: Row): PrivateGalleryItem {
   const { title, duration, width, height, rating, favourite, tags, thumbnailUrl } = row.display;
   return { id, title, duration, width, height, rating, favourite, tags: [...tags], thumbnailUrl };
 }
-function query(value: unknown): { query: string; offset: number } | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) { return undefined; }
-  const object = value as Record<string, unknown>;
-  if (Object.keys(object).sort().join(',') !== 'offset,query' || typeof object.query !== 'string'
-    || object.query.length > 200 || !Number.isSafeInteger(object.offset) || (object.offset as number) < 0
-    || (object.offset as number) > MAX_ROWS || (object.offset as number) % PRIVATE_GALLERY_PAGE_SIZE !== 0) { return undefined; }
-  return { query: object.query.trim().toLocaleLowerCase('en-US'), offset: object.offset as number };
+function query(value: unknown): Required<PrivateGalleryQuery> | undefined {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) { return; }
+    const allowed = new Set(['query', 'offset', 'collection', 'sort', 'direction']);
+    const fields: Record<string, unknown> = Object.create(null);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string' || !allowed.has(key)) { return; }
+      const property = Object.getOwnPropertyDescriptor(value, key);
+      if (!property || !property.enumerable || !Object.hasOwn(property, 'value')) { return; }
+      fields[key] = property.value;
+    }
+    if (typeof fields.query !== 'string' || fields.query.length > 200 || !Number.isSafeInteger(fields.offset)
+      || (fields.offset as number) < 0 || (fields.offset as number) > MAX_ROWS
+      || (fields.offset as number) % PRIVATE_GALLERY_PAGE_SIZE !== 0) { return; }
+    const collection = Object.hasOwn(fields, 'collection') ? fields.collection : 'all';
+    const sort = Object.hasOwn(fields, 'sort') ? fields.sort : 'catalogue';
+    const direction = Object.hasOwn(fields, 'direction') ? fields.direction : 'asc';
+    if (!['all', 'favourites', 'recent'].includes(collection as string)
+      || !['catalogue', 'name', 'date-added', 'last-played', 'rating', 'duration', 'file-size'].includes(sort as string)
+      || !['asc', 'desc'].includes(direction as string)) { return; }
+    return { query: fields.query.trim().toLocaleLowerCase('en-US'), offset: fields.offset as number,
+      collection, sort, direction } as Required<PrivateGalleryQuery>;
+  } catch { return; }
+}
+const titleOrder = new Intl.Collator('en-US', { numeric: true, sensitivity: 'base' });
+function orderedRows(all: readonly Row[], request: Required<PrivateGalleryQuery>): Row[] {
+  const matches = all.filter(row => (!request.query || row.search.includes(request.query))
+    && (request.collection === 'all' || (request.collection === 'favourites' ? row.display.favourite : row.metrics.lastPlayed !== undefined)));
+  const direction = request.direction === 'asc' ? 1 : -1;
+  return matches.sort((left, right) => {
+    if (request.sort === 'catalogue') { return direction * (left.index - right.index); }
+    if (request.sort === 'name') { return direction * titleOrder.compare(left.display.title, right.display.title) || left.index - right.index; }
+    const key = request.sort === 'date-added' ? 'dateAdded' : request.sort === 'last-played' ? 'lastPlayed'
+      : request.sort === 'file-size' ? 'fileSize' : request.sort;
+    const a = left.metrics[key], b = right.metrics[key];
+    // Unknown values remain last in either direction. Original catalogue order
+    // resolves ties, including missing pairs, without changing cached row IDs.
+    if (a === undefined || b === undefined) { return a === b ? left.index - right.index : a === undefined ? 1 : -1; }
+    return direction * (a - b) || left.index - right.index;
+  });
 }
 function regenerationRequest(value: unknown): { id: string; revision: string } | undefined {
   try {
@@ -168,8 +299,16 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
   let frame: WebFrameMain | undefined = awaitingInitialNavigation ? undefined : contents.mainFrame;
   let rows: Row[] | undefined;
   const lifetime = new AbortController();
+  let original: AbortController | undefined;
+  let originalDrain: Promise<void> | undefined;
+  let playbackDrain: Promise<void> | undefined;
   let regeneration: AbortController | undefined;
   let regenerationDrain: Promise<void> | undefined;
+  let sourceConnection: AbortController | undefined;
+  let sourceConnectionDrain: Promise<void> | undefined;
+  let importing: AbortController | undefined;
+  let importDrain: Promise<void> | undefined;
+  let importCounts: PrivateGalleryImportCounts | undefined;
   let credentialDrain: Promise<void> | undefined;
   let unprotectedCopy: AbortController | undefined;
   let unprotectedCopyDrain: Promise<void> | undefined;
@@ -177,14 +316,32 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
   let disposal: Promise<void> | undefined;
   const issued = new Map<string, Row>();
   const ids = new Map<Row, string>();
+  const issuedSources = new Map<string, SourceRow>();
   const installed: string[] = [];
   const invalidate = (): void => {
-    invalidated = true; lifetime.abort(); regeneration?.abort(); unprotectedCopy?.abort(); rows = undefined; issued.clear(); ids.clear();
+    invalidated = true; importCounts = undefined; lifetime.abort(); regeneration?.abort(); importing?.abort(); sourceConnection?.abort(); unprotectedCopy?.abort();
+    void retireOriginal();
+    rows = undefined; issued.clear(); ids.clear(); issuedSources.clear();
   };
   const quarantine = (): void => {
+    if (cleanupFailed) { return; }
     cleanupFailed = true;
     invalidate();
     try { onLock(); } catch { /* The failed cleanup is also returned through the disposer. */ }
+  };
+  // stop() retires its token synchronously; every drain is observed, including
+  // one-way cancellation and revocation callbacks which cannot be awaited.
+  const drainPlayback = (): Promise<void> => {
+    let stopping: Promise<void> | undefined;
+    try { stopping = options.playback?.stop(); }
+    catch { quarantine(); }
+    const drain = Promise.resolve(stopping).catch(() => { quarantine(); });
+    playbackDrain = Promise.all([playbackDrain, drain]).then(() => undefined);
+    return playbackDrain;
+  };
+  const retireOriginal = (): Promise<void> => {
+    original?.abort(); original = undefined;
+    return drainPlayback();
   };
   const navigate = (details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>): void => {
     if (details.isMainFrame === false) { return; }
@@ -215,6 +372,15 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     chooseDirectory: root => options.chooseSourceDirectory ? options.chooseSourceDirectory(root) : Promise.resolve(undefined) });
   const eligible = (catalogue: FinalObject, image: ImageElement, hashes = uniqueHashes(catalogue)): boolean =>
     !!options.chooseSourceDirectory && hashes.has(image.hash) && !!sourceLocation(catalogue, image);
+  const playable = (catalogue: FinalObject, image: ImageElement): boolean => {
+    const location = playbackLocation(catalogue, image);
+    return !!options.playback && !!options.chooseSourceDirectory && !!location
+      && privateSourcePlaybackType(location.fileName) !== undefined;
+  };
+  const stopForOperation = async (event: IpcMainEvent | IpcMainInvokeEvent): Promise<boolean> => {
+    await retireOriginal();
+    return trusted(event);
+  };
   const load = async (): Promise<Row[]> => {
     if (rows) { return rows; }
     const catalogue = await hub.readCatalogue(generation);
@@ -224,11 +390,386 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     for (const [index, image] of catalogue.images.entries()) {
       if (image.deleted || image.cleanName === '*FOLDER*') { continue; }
       if (projected.length >= MAX_ROWS) { throw new Error(); }
-      projected.push(project(image, index, eligible(catalogue, image, hashes)));
+      projected.push(project(image, index, eligible(catalogue, image, hashes), playable(catalogue, image)));
     }
     if (!current()) { throw new Error(); }
     rows = projected;
     return rows;
+  };
+  const sourceItem = (id: string, source: SourceRow): PrivateGallerySource => ({ id, title: source.title,
+    videoCount: source.videoCount, connected: access.isConnected(source.root) });
+  const sources = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGallerySources> => {
+    if (!trusted(event) || args.length !== 0) { return { status: 'unavailable' }; }
+    if (pending) { return { status: 'busy' }; }
+    pending = true;
+    try {
+      if (options.playback && !await stopForOperation(event)) { return { status: 'unavailable' }; }
+      const latest = sourceRows(await hub.readCatalogue(generation));
+      if (!trusted(event)) { return { status: 'unavailable' }; }
+      const previous = new Map([...issuedSources].map(([id, source]) => [source.identity, { id, source }]));
+      const retained = new Set(latest.map(source => source.identity));
+      for (const [id, source] of issuedSources) {
+        if (!retained.has(source.identity)) { access.disconnect(source.root); issuedSources.delete(id); }
+      }
+      const items = latest.map(source => {
+        const id = previous.get(source.identity)?.id ?? randomBytes(16).toString('hex');
+        issuedSources.set(id, source);
+        return sourceItem(id, source);
+      });
+      return trusted(event) ? { status: 'ready', items } : { status: 'unavailable' };
+    } catch { return { status: 'unavailable' }; }
+    finally { pending = false; }
+  };
+  const connectSource = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGallerySourceConnection> => {
+    if (!trusted(event) || args.length !== 1 || typeof args[0] !== 'string' || !/^[a-f0-9]{32}$/.test(args[0])
+      || !options.chooseSourceDirectory) { return { status: 'unavailable' }; }
+    if (pending) { return { status: 'busy' }; }
+    const id = args[0];
+    const source = issuedSources.get(id);
+    if (!source) { return { status: 'unavailable' }; }
+    pending = true;
+    const controller = new AbortController();
+    sourceConnection = controller;
+    const authorized = (): boolean => !controller.signal.aborted && trusted(event) && !controller.signal.aborted;
+    const stopped = (): PrivateGallerySourceConnection => trusted(event) && controller.signal.aborted
+      ? { status: 'cancelled' } : { status: 'unavailable' };
+    let granted = false;
+    let connected = false;
+    // Register drainage before the catalogue reader or native picker can reenter lock.
+    const work = Promise.resolve().then(async (): Promise<PrivateGallerySourceConnection> => {
+      try {
+        if (!authorized() || (options.playback && !await stopForOperation(event)) || !authorized()) { return stopped(); }
+        const before = sourceRows(await hub.readCatalogue(generation));
+        if (!authorized()) { return stopped(); }
+        if (!before.some(row => row.identity === source.identity)) {
+          access.disconnect(source.root);
+          return { status: 'conflict' };
+        }
+        access.isConnected(source.root); // Expire a replaced cached directory before offering reconnection.
+        const grant = await access.authorize(source.root, controller.signal, authorized);
+        granted = grant.status === 'granted';
+        if (!authorized()) { return stopped(); }
+        if (grant.status !== 'granted') { return { status: grant.status }; }
+        const after = sourceRows(await hub.readCatalogue(generation));
+        if (!authorized()) { return stopped(); }
+        const latest = after.find(row => row.identity === source.identity);
+        if (!latest) { return { status: 'conflict' }; }
+        if (!grant.isCurrent()) { return { status: 'source-unavailable' }; }
+        issuedSources.set(id, latest);
+        const item = sourceItem(id, latest);
+        if (!authorized()) { return stopped(); }
+        if (!item.connected) { return { status: 'source-unavailable' }; }
+        connected = true;
+        return { status: 'connected', item };
+      } catch { return stopped(); }
+      finally { if (granted && !connected) { access.disconnect(source.root); } }
+    });
+    const drain = work.then(() => undefined, () => undefined);
+    sourceConnectionDrain = drain;
+    try {
+      const result = await work;
+      if (!authorized()) { if (granted) { access.disconnect(source.root); } return stopped(); }
+      return result;
+    } finally {
+      pending = false;
+      if (sourceConnection === controller) { sourceConnection = undefined; }
+      if (sourceConnectionDrain === drain) { sourceConnectionDrain = undefined; }
+    }
+  };
+  const disconnectSource = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGallerySourceDisconnection> => {
+    if (!trusted(event) || args.length !== 1 || typeof args[0] !== 'string' || !/^[a-f0-9]{32}$/.test(args[0])) {
+      return { status: 'unavailable' };
+    }
+    if (pending) { return { status: 'busy' }; }
+    const id = args[0];
+    const source = issuedSources.get(id);
+    if (!source) { return { status: 'unavailable' }; }
+    pending = true;
+    try {
+      if (options.playback && !await stopForOperation(event)) { return { status: 'unavailable' }; }
+      const latest = sourceRows(await hub.readCatalogue(generation)).find(row => row.identity === source.identity);
+      if (!trusted(event)) { return { status: 'unavailable' }; }
+      access.disconnect(source.root);
+      if (!latest) { return { status: 'conflict' }; }
+      issuedSources.set(id, latest);
+      return trusted(event) ? { status: 'disconnected', item: sourceItem(id, latest) } : { status: 'unavailable' };
+    } catch { return { status: 'unavailable' }; }
+    finally { pending = false; }
+  };
+  const relocateSource = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGallerySourceRelocation> => {
+    if (!trusted(event) || args.length !== 1 || typeof args[0] !== 'string' || !/^[a-f0-9]{32}$/.test(args[0])
+      || !options.chooseSourceLocation || !options.confirmSourceLocation) { return { status: 'unavailable' }; }
+    if (pending) { return { status: 'busy' }; }
+    const source = issuedSources.get(args[0]);
+    if (!source) { return { status: 'unavailable' }; }
+    pending = true;
+    const controller = new AbortController();
+    sourceConnection = controller;
+    const authorized = (): boolean => !controller.signal.aborted && trusted(event) && !controller.signal.aborted;
+    const stopped = (): PrivateGallerySourceRelocation => trusted(event) && controller.signal.aborted
+      ? { status: 'cancelled' } : { status: 'unavailable' };
+    const work = Promise.resolve().then(async (): Promise<PrivateGallerySourceRelocation> => {
+      let review: PrivateSourceRelocationReview | undefined;
+      try {
+        if (!authorized() || (options.playback && !await stopForOperation(event)) || !authorized()) { return stopped(); }
+        const before = await hub.readCatalogue(generation);
+        if (!authorized()) { return stopped(); }
+        if (!sourceRows(before).some(row => row.identity === source.identity)) { return { status: 'conflict' }; }
+        const selected = await options.chooseSourceLocation!(source.root);
+        if (!authorized()) { return stopped(); }
+        if (selected === undefined) { return { status: 'cancelled' }; }
+        const latest = await hub.readCatalogue(generation);
+        if (!authorized()) { return stopped(); }
+        if (!sourceRows(latest).some(row => row.identity === source.identity)) { return { status: 'conflict' }; }
+        const reviewed = await reviewPrivateSourceRelocation({ catalogue: latest, sourceIndex: source.index,
+          newRoot: selected, signal: controller.signal, isCurrent: authorized });
+        if (reviewed.status === 'ready') { review = reviewed.review; }
+        if (!authorized()) { return stopped(); }
+        if (reviewed.status !== 'ready') { return { status: reviewed.status }; }
+        review = reviewed.review;
+        const newRoot = review.newRoot;
+        if (!await options.confirmSourceLocation!(newRoot, review.videoCount)) {
+          return authorized() ? { status: 'cancelled' } : stopped();
+        }
+        if (!authorized()) { return stopped(); }
+        // Retire authority before storage admission: a cancelled or rejected
+        // completion can follow an already-published catalogue transaction.
+        access.disconnect(source.root); access.disconnect(newRoot);
+        rows = undefined; issued.clear(); ids.clear(); issuedSources.clear();
+        const result = await hub.relocateSource(generation, review, authorized);
+        return authorized() ? { status: result.status } : stopped();
+      } catch { return authorized() ? { status: 'source-unavailable' } : stopped(); }
+      finally {
+        try { review?.dispose(); }
+        catch { quarantine(); }
+      }
+    });
+    const drain = work.then(() => undefined, () => undefined);
+    sourceConnectionDrain = drain;
+    try {
+      const result = await work;
+      return authorized() ? result : stopped();
+    } finally {
+      pending = false;
+      if (sourceConnection === controller) { sourceConnection = undefined; }
+      if (sourceConnectionDrain === drain) { sourceConnectionDrain = undefined; }
+    }
+  };
+  const importWork = async (mode: 'manual' | 'scan', event: IpcMainInvokeEvent, args: unknown[]): Promise<PrivateGalleryImportResponse> => {
+    if (!trusted(event) || args.length !== 1 || typeof args[0] !== 'string' || !/^[a-f0-9]{32}$/.test(args[0])
+      || (mode === 'manual' ? !options.chooseImportVideo : !options.confirmSourceScan) || !options.chooseSourceDirectory) { return { status: 'unavailable' }; }
+    if (pending) { return { status: 'busy' }; }
+    const saved = issuedSources.get(args[0]);
+    if (!saved) { return { status: 'unavailable' }; }
+    pending = true;
+    const controller = new AbortController();
+    importing = controller;
+    let counts: PrivateGalleryImportCounts | undefined;
+    let review: PrivateSourceScanReview | undefined;
+    const authorized = (): boolean => !controller.signal.aborted && trusted(event) && !controller.signal.aborted;
+    const finished = (outcome: 'completed' | 'cancelled' | 'stopped'): PrivateGalleryImportResponse => {
+      if (!trusted(event)) { return { status: 'unavailable' }; }
+      if (!counts) { return { status: controller.signal.aborted ? 'cancelled' : 'source-unavailable' }; }
+      return { status: 'finished', outcome: controller.signal.aborted ? 'cancelled' : outcome, ...counts };
+    };
+    const stopped = (): PrivateGalleryImportResponse => counts ? finished('stopped')
+      : trusted(event) && controller.signal.aborted ? { status: 'cancelled' } : { status: 'unavailable' };
+    // Register drainage before a picker, reader or capture can reenter revocation.
+    const work = Promise.resolve().then(async (): Promise<PrivateGalleryImportResponse> => {
+      try {
+        if (!authorized() || (options.playback && !await stopForOperation(event)) || !authorized()) { return stopped(); }
+        const before = await hub.readCatalogue(generation);
+        if (!authorized()) { return stopped(); }
+        if (!sourceRows(before).some(row => row.identity === saved.identity)) { return { status: 'conflict' }; }
+        access.isConnected(saved.root);
+        const grant = await access.authorize(saved.root, controller.signal, authorized);
+        if (!authorized()) { return stopped(); }
+        if (grant.status !== 'granted') { return { status: grant.status }; }
+        let selection: string | readonly string[] | undefined;
+        if (mode === 'scan') {
+          // The grant's native picker may have remained open while the saved
+          // source policy changed. Re-read it before any directory enumeration.
+          const current = await hub.readCatalogue(generation);
+          if (!authorized()) { return stopped(); }
+          if (!sourceRows(current).some(row => row.identity === saved.identity)) { return { status: 'conflict' }; }
+          if (!grant.isCurrent()) { return { status: 'source-unavailable' }; }
+          const discovered = await reviewPrivateSourceScan({ catalogue: current, sourceIndex: saved.index,
+            signal: controller.signal, isCurrent: () => authorized() && grant.isCurrent() });
+          if (discovered.status !== 'ready') {
+            return !authorized() ? stopped() : { status: discovered.status === 'limit' ? 'scan-limit' : discovered.status };
+          }
+          review = discovered.review;
+          if (!authorized()) { return stopped(); }
+          const reviewed = await hub.readCatalogue(generation);
+          if (!authorized()) { return stopped(); }
+          if (!review.matchesCatalogue(reviewed)) { return { status: 'conflict' }; }
+          if (!review.isCurrent() || !grant.isCurrent() || !review.files.every(file => review!.fileCurrent(file))) {
+            return { status: 'source-unavailable' };
+          }
+          if (review.files.length === 0) { return { status: 'nothing-new' }; }
+          if (!await options.confirmSourceScan!(review.files.length, review.more)) { return { status: 'cancelled' }; }
+          if (!authorized()) { return stopped(); }
+          const confirmed = await hub.readCatalogue(generation);
+          if (!authorized()) { return stopped(); }
+          if (!review.matchesCatalogue(confirmed)) { return { status: 'conflict' }; }
+          if (!review.isCurrent() || !grant.isCurrent() || !review.files.every(file => review!.fileCurrent(file))) {
+            return { status: 'source-unavailable' };
+          }
+          selection = review.files;
+        } else {
+          selection = await options.chooseImportVideo!(saved.root);
+          if (!authorized()) { return stopped(); }
+          if (selection === undefined) { return { status: 'cancelled' }; }
+        }
+        // Snapshot and validate the whole native selection before probing any file.
+        // String support is retained for main-owned single-file adapters.
+        const input = typeof selection === 'string' ? [selection] : selection;
+        if (!Array.isArray(input) || input.length === 0) { return { status: 'invalid' }; }
+        if (input.length > PRIVATE_GALLERY_IMPORT_LIMIT) { return { status: 'limit' }; }
+        const selected: string[] = [];
+        for (let index = 0; index < input.length; index++) {
+          const property = Object.getOwnPropertyDescriptor(input, String(index));
+          const file = property && Object.hasOwn(property, 'value') ? property.value : undefined;
+          if (typeof file !== 'string' || file.length > 32_768 || file.includes('\0')
+            || !path.isAbsolute(file) || path.resolve(file) !== file) { return { status: 'invalid' }; }
+          const relative = path.relative(saved.root, file);
+          if (!relative || path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) {
+            return { status: 'invalid' };
+          }
+          selected.push(file);
+        }
+        counts = { total: selected.length, processed: 0, imported: 0, duplicates: 0, failed: 0 };
+        importCounts = counts;
+        for (const file of selected) {
+          if (!authorized()) { return stopped(); }
+          const latest = await hub.readCatalogue(generation);
+          if (!authorized()) { return stopped(); }
+          if (!sourceRows(latest).some(row => row.identity === saved.identity) || !grant.isCurrent()
+            || (review && (!review.matchesCatalogue(latest) || !review.fileCurrent(file)))) { return finished('stopped'); }
+          const relative = path.relative(saved.root, file);
+          const directory = path.dirname(relative);
+          const location = { root: saved.root, inputSource: saved.index, fileName: path.basename(relative),
+            partialPath: directory === '.' ? '' : '/' + directory.split(path.sep).join('/'), hash: randomBytes(32).toString('hex') };
+          const fileCurrent = (): boolean => authorized() && grant.isCurrent() && (!review || review.fileCurrent(file));
+          let source: PrivatePreviewSource | undefined;
+          let outcome: 'imported' | 'duplicate' | 'failed' | 'stopped' = 'stopped';
+          try {
+            // Known duplicates and excluded files require no media access.
+            const eligibility = checkPrivateVideoImport(latest, location);
+            if (eligibility === 'duplicate') { outcome = 'duplicate'; }
+            else if (eligibility === 'invalid') { outcome = 'failed'; }
+            else if (eligibility === 'ready') {
+              source = await capturePrivatePreviewSource({ ...location, signal: controller.signal,
+                isCurrent: fileCurrent });
+              if (!authorized()) { return stopped(); }
+              // Each publication may finish just before cancellation. Never retain
+              // cached authority across an admitted catalogue write.
+              rows = undefined; issued.clear(); ids.clear(); issuedSources.clear();
+              const result = await hub.importVideo(generation, source, location,
+                { signal: controller.signal, isCurrent: fileCurrent });
+              outcome = result.status === 'invalid' ? 'failed' : result.status === 'conflict' ? 'stopped' : result.status;
+            }
+          } catch (error) {
+            if (isPrivatePreviewGenerationCleanupFailure(error) || isPrivatePreviewSourceCleanupFailure(error)) { quarantine(); }
+            if (fileCurrent()) { outcome = 'failed'; }
+          } finally {
+            // Drain one file completely before reporting it or starting another.
+            try { await source?.close(); } catch { quarantine(); }
+          }
+          if (outcome !== 'stopped') {
+            counts.processed++;
+            if (outcome === 'imported') { counts.imported++; }
+            else if (outcome === 'duplicate') { counts.duplicates++; }
+            else { counts.failed++; }
+          }
+          if (!authorized()) { return stopped(); }
+          if (outcome === 'stopped' || !fileCurrent()) { return finished('stopped'); }
+        }
+        return finished('completed');
+      } catch (error) {
+        if (isPrivatePreviewGenerationCleanupFailure(error) || isPrivatePreviewSourceCleanupFailure(error)
+          || isPrivateSourceScanCleanupFailure(error)) { quarantine(); }
+        return counts ? finished('stopped') : authorized() ? { status: 'source-unavailable' } : stopped();
+      } finally {
+        try { review?.dispose(); } catch { quarantine(); }
+      }
+    });
+    const drain = work.then(() => undefined, () => undefined);
+    importDrain = drain;
+    try {
+      const result = await work;
+      return trusted(event) ? result : { status: 'unavailable' };
+    } finally {
+      pending = false;
+      if (importing === controller) { importing = undefined; importCounts = undefined; }
+      if (importDrain === drain) { importDrain = undefined; }
+    }
+  };
+  const importVideo = (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGalleryImportResponse> => importWork('manual', event, args);
+  const scanSource = (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGalleryImportResponse> => importWork('scan', event, args);
+  const importProgress = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGalleryImportProgress> => {
+    if (!trusted(event) || args.length !== 0) { return { status: 'unavailable' }; }
+    const snapshot = pending && importing && importCounts ? { ...importCounts } : undefined;
+    if (!trusted(event)) { return { status: 'unavailable' }; }
+    return snapshot ? { status: 'running', ...snapshot } : { status: 'idle' };
+  };
+  const cancelImport = (event: IpcMainEvent, ...args: unknown[]): void => {
+    if (trusted(event) && args.length === 0) { importing?.abort(); }
+  };
+  const addSource = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGallerySourceAddition> => {
+    if (!trusted(event) || args.length !== 0 || !options.chooseNewSourceDirectory) { return { status: 'unavailable' }; }
+    if (pending) { return { status: 'busy' }; }
+    pending = true;
+    const controller = new AbortController();
+    sourceConnection = controller;
+    const authorized = (): boolean => !controller.signal.aborted && trusted(event) && !controller.signal.aborted;
+    const stopped = (): PrivateGallerySourceAddition => trusted(event) && controller.signal.aborted
+      ? { status: 'cancelled' } : { status: 'unavailable' };
+    // A native picker can outlive cancellation. Install its drain before any
+    // main callback runs, and reject its result if this owner has been retired.
+    const work = Promise.resolve().then(async (): Promise<PrivateGallerySourceAddition> => {
+      let review: PrivateSourceAdditionReview | undefined;
+      try {
+        if (!authorized() || (options.playback && !await stopForOperation(event)) || !authorized()) { return stopped(); }
+        const before = await hub.readCatalogue(generation);
+        if (!authorized()) { return stopped(); }
+        if (Object.keys(before.inputDirs ?? {}).length >= PRIVATE_GALLERY_SOURCE_LIMIT) { return { status: 'limit' }; }
+        const selected = await options.chooseNewSourceDirectory!();
+        if (!authorized()) { return stopped(); }
+        if (selected === undefined) { return { status: 'cancelled' }; }
+        const catalogue = await hub.readCatalogue(generation);
+        if (!authorized()) { return stopped(); }
+        const checked = await reviewPrivateSourceAddition({ catalogue, newRoot: selected,
+          signal: controller.signal, isCurrent: authorized });
+        if (checked.status === 'ready') { review = checked.review; }
+        if (!authorized()) { return stopped(); }
+        if (checked.status !== 'ready') { return { status: checked.status }; }
+        review = checked.review;
+        // Saving a root never carries a stale grant from an earlier catalogue.
+        access.disconnect(review.newRoot);
+        // Even an uncertain completion can have saved the new root. Drop all
+        // issued identities before publication; the page reloads saved state.
+        rows = undefined; issued.clear(); ids.clear(); issuedSources.clear();
+        const result = await hub.addSource(generation, review, authorized);
+        return authorized() ? { status: result.status } : stopped();
+      } catch { return authorized() ? { status: 'source-unavailable' } : stopped(); }
+      finally {
+        try { review?.dispose(); } catch { quarantine(); }
+      }
+    });
+    const drain = work.then(() => undefined, () => undefined);
+    sourceConnectionDrain = drain;
+    try {
+      const result = await work;
+      return authorized() ? result : stopped();
+    } finally {
+      pending = false;
+      if (sourceConnection === controller) { sourceConnection = undefined; }
+      if (sourceConnectionDrain === drain) { sourceConnectionDrain = undefined; }
+    }
+  };
+  const cancelSourceConnection = (event: IpcMainEvent, ...args: unknown[]): void => {
+    if (trusted(event) && args.length === 0) { sourceConnection?.abort(); }
   };
   const list = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGalleryPage> => {
     try {
@@ -238,9 +779,10 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
       if (pending) { return { status: 'busy' }; }
       pending = true;
       try {
+        if (options.playback && !await stopForOperation(event)) { return { status: 'unavailable' }; }
         const all = await load();
         if (!trusted(event)) { return { status: 'unavailable' }; }
-        const matches = request.query ? all.filter(row => row.search.includes(request.query)) : all;
+        const matches = orderedRows(all, request);
         const items = matches.slice(request.offset, request.offset + PRIVATE_GALLERY_PAGE_SIZE).map(row => {
           let id = ids.get(row);
           if (!id) { id = randomBytes(16).toString('hex'); ids.set(row, id); issued.set(id, row); }
@@ -260,13 +802,14 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
       if (!row) { return { status: 'unavailable' }; }
       pending = true;
       try {
+        if (options.playback && !await stopForOperation(event)) { return { status: 'unavailable' }; }
         const catalogue = await hub.readCatalogue(generation);
         if (!trusted(event)) { return { status: 'unavailable' }; }
         const image = catalogue.images[row.index];
         if (!image || image.deleted || image.cleanName === '*FOLDER*' || identity(image) !== row.identity) {
           return { status: 'unavailable' };
         }
-        const latest = project(image, row.index, eligible(catalogue, image));
+        const latest = project(image, row.index, eligible(catalogue, image), playable(catalogue, image));
         // Re-reading the same record does not invalidate another unchanged draft.
         if (latest.persistedRevision === row.persistedRevision) { latest.display.revision = row.display.revision; }
         Object.assign(row, latest);
@@ -287,16 +830,96 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
       if (request.revision !== row.display.revision) { return { status: 'conflict' }; }
       pending = true;
       try {
+        if (options.playback && !await stopForOperation(event)) { return { status: 'unavailable' }; }
         const result = await hub.updateVideoMetadata(generation, {
           index: row.index, revision: row.persistedRevision, notes: request.notes, tags: request.tags,
+          ...(Object.hasOwn(request, 'rating') ? { rating: request.rating } : {}),
         }, () => trusted(event));
         if (!trusted(event)) { return { status: 'unavailable' }; }
         if (result.status !== 'saved') { return { status: result.status }; }
         if (identity(result.image) !== row.identity) { return { status: 'unavailable' }; }
-        Object.assign(row, project(result.image, row.index, row.display.regenerable));
+        Object.assign(row, project(result.image, row.index, row.display.regenerable, row.display.playable));
         return { status: 'saved', item: { ...row.display, id: request.id, tags: [...row.display.tags] } };
       } finally { pending = false; }
     } catch { return { status: 'unavailable' }; }
+  };
+  const playOriginal = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGalleryOriginalPlayback> => {
+    if (!trusted(event) || args.length !== 1 || !options.playback || !options.chooseSourceDirectory) {
+      return { status: 'unavailable' };
+    }
+    const value = regenerationRequest(args[0]);
+    if (!value) { return { status: 'unavailable' }; }
+    if (pending) { return { status: 'busy' }; }
+    const row = issued.get(value.id);
+    if (!row) { return { status: 'unavailable' }; }
+    if (value.revision !== row.display.revision) { return { status: 'conflict' }; }
+    pending = true;
+    const previous = retireOriginal();
+    const controller = new AbortController();
+    original = controller;
+    const authorized = (): boolean => !controller.signal.aborted && trusted(event) && !controller.signal.aborted;
+    const stopped = (): PrivateGalleryOriginalPlayback => trusted(event) && controller.signal.aborted
+      ? { status: 'cancelled' } : { status: 'unavailable' };
+    let ready = false;
+    const work = Promise.resolve().then(async (): Promise<PrivateGalleryOriginalPlayback> => {
+      let source: PrivatePreviewSource | undefined;
+      try {
+        await previous;
+        if (!authorized()) { return stopped(); }
+        const catalogue = await hub.readCatalogue(generation);
+        if (!authorized()) { return stopped(); }
+        const image = catalogue.images[row.index];
+        if (!image || privateVideoRevision(image) !== row.persistedRevision || identity(image) !== row.identity) {
+          return { status: 'conflict' };
+        }
+        const location = playbackLocation(catalogue, image);
+        if (!location) { return { status: 'source-unavailable' }; }
+        const type = privateSourcePlaybackType(location.fileName);
+        if (!type) { return { status: 'unsupported' }; }
+        access.isConnected(location.root);
+        const grant = await access.authorize(location.root, controller.signal, authorized);
+        if (!authorized()) { return stopped(); }
+        if (grant.status !== 'granted') { return { status: grant.status }; }
+        const latest = await hub.readCatalogue(generation);
+        if (!authorized()) { return stopped(); }
+        const refreshed = latest.images[row.index];
+        if (!refreshed || privateVideoRevision(refreshed) !== row.persistedRevision || identity(refreshed) !== row.identity
+          || JSON.stringify(playbackLocation(latest, refreshed)) !== JSON.stringify(location)) {
+          return { status: 'conflict' };
+        }
+        if (!grant.isCurrent()) { return { status: 'source-unavailable' }; }
+        source = await capturePrivatePreviewSource({ ...location, signal: controller.signal,
+          isCurrent: () => authorized() && grant.isCurrent() });
+        if (!authorized() || !grant.isCurrent()) { return stopped(); }
+        const owned = source; source = undefined; // Manager consumes even rejected starts.
+        const url = await options.playback!.start(owned, type);
+        if (!authorized() || !grant.isCurrent()) { await retireOriginal(); return stopped(); }
+        ready = true;
+        return { status: 'ready', url };
+      } catch (error) {
+        const failedWhileCurrent = authorized();
+        if (isPrivatePreviewSourceCleanupFailure(error)) { quarantine(); }
+        await drainPlayback();
+        return cleanupFailed || !trusted(event) ? { status: 'unavailable' }
+          : failedWhileCurrent ? { status: 'source-unavailable' } : stopped();
+      } finally {
+        try { await source?.close(); } catch { quarantine(); }
+      }
+    });
+    const drain = work.then(() => undefined, () => undefined);
+    originalDrain = drain;
+    try {
+      const result = await work;
+      if (!authorized()) { await retireOriginal(); return stopped(); }
+      return result;
+    } finally {
+      pending = false;
+      if (!ready && original === controller) { original = undefined; controller.abort(); }
+      if (originalDrain === drain) { originalDrain = undefined; }
+    }
+  };
+  const stopOriginal = (event: IpcMainEvent, ...args: unknown[]): void => {
+    if (trusted(event) && args.length === 0) { void retireOriginal(); }
   };
   const regenerate = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGalleryRegeneration> => {
     if (!trusted(event) || args.length !== 1) { return { status: 'unavailable' }; }
@@ -316,6 +939,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     const work = (async (): Promise<PrivateGalleryRegeneration> => {
       let source: PrivatePreviewSource | undefined;
       try {
+        if (options.playback && !await stopForOperation(event)) { return { status: 'unavailable' }; }
         const catalogue = await hub.readCatalogue(generation);
         if (!authorized()) { return stopped(); }
         const image = catalogue.images[row.index];
@@ -345,7 +969,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
         if (!authorized() || !grant.isCurrent()) { return stopped(); }
         await hub.generatePreviews(generation, source, { signal: controller.signal });
         if (!authorized()) { return stopped(); }
-        Object.assign(row, project(refreshed, row.index, true));
+        Object.assign(row, project(refreshed, row.index, true, playable(latest, refreshed)));
         return { status: 'generated', item: { ...row.display, id, tags: [...row.display.tags] } };
       } catch (error) {
         if (isPrivatePreviewGenerationCleanupFailure(error)) {
@@ -377,6 +1001,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     if (pending) { return { status: 'busy' }; }
     pending = true;
     try {
+      if (options.playback && !await stopForOperation(event)) { return { status: 'unavailable' }; }
       const settings = await hub.readProtection(generation);
       return trusted(event) ? { status: 'ready', ...settings } : { status: 'unavailable' };
     } catch { return { status: 'unavailable' }; }
@@ -389,6 +1014,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     if (pending) { return { status: 'busy' }; }
     pending = true;
     try {
+      if (options.playback && !await stopForOperation(event)) { return { status: 'unavailable' }; }
       const settings = await hub.updateProtection(generation, request, () => trusted(event));
       if (!trusted(event)) { return { status: 'unavailable' }; }
       try {
@@ -416,7 +1042,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
       let successfulLock = false;
       const work = Promise.resolve().then(async (): Promise<PrivateCredentialsPasswordChange> => {
         try {
-          if (!trusted(event)) { return { status: 'unavailable' }; }
+          if (options.playback && !await stopForOperation(event)) { return { status: 'unavailable' }; }
           const changing = hub.changePassword(generation, request!, () => trusted(event));
           request!.currentPassword = ''; request!.newPassword = '';
           const result = await changing;
@@ -474,7 +1100,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     // uses the same revoked window lifetime; native cleanup must finish first.
     const result = Promise.resolve().then(async () => {
       try {
-        if (!trusted(event)) { return; }
+        if (options.playback && !await stopForOperation(event)) { return; }
         const response = await work();
         return trusted(event) ? response : undefined;
       } catch (error) {
@@ -529,7 +1155,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
       // Register drainage before a session callback can synchronously dispose us.
       const work = Promise.resolve().then(async (): Promise<PrivateCredentialsUnprotectedCopy> => {
         try {
-          if (!authorized()) { return stopped(); }
+          if (!authorized() || (options.playback && !await stopForOperation(event)) || !authorized()) { return stopped(); }
           const copying = hub.createUnprotectedCopy(generation, request!, authorized, {
             signal: controller.signal,
             chooseDestination: async () => {
@@ -580,21 +1206,37 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     contents.removeListener('destroyed', invalidate);
     contents.removeListener('render-process-gone', invalidate);
     ipcMain.removeListener(channels.lock, lock);
+    ipcMain.removeListener(channels.stopOriginal, stopOriginal);
     ipcMain.removeListener(channels.cancelRegeneration, cancelRegeneration);
+    ipcMain.removeListener(channels.cancelSourceConnection, cancelSourceConnection);
+    ipcMain.removeListener(channels.cancelImport, cancelImport);
     ipcMain.removeListener(channels.cancelUnprotectedCopy, cancelUnprotectedCopy);
     if (activeRequest === token) {
       for (const channel of installed) { ipcMain.removeHandler(channel); }
       activeRequest = undefined;
     }
-    disposal = Promise.all([access.dispose(), regenerationDrain, credentialDrain, unprotectedCopyDrain]).then(() => {
+    let playbackDisposal: Promise<void> | undefined;
+    try { playbackDisposal = options.playback?.dispose(); } catch { cleanupFailed = true; }
+    const disposedPlayback = Promise.resolve(playbackDisposal).catch(() => { cleanupFailed = true; });
+    disposal = Promise.all([access.dispose(), originalDrain, playbackDrain, disposedPlayback,
+      regenerationDrain, sourceConnectionDrain, importDrain, credentialDrain, unprotectedCopyDrain]).then(() => {
       if (cleanupFailed) { throw new Error('Private gallery cleanup unavailable'); }
     });
     return disposal;
   };
   try {
+    ipcMain.handle(channels.sources, sources); installed.push(channels.sources);
+    ipcMain.handle(channels.addSource, addSource); installed.push(channels.addSource);
+    ipcMain.handle(channels.connectSource, connectSource); installed.push(channels.connectSource);
+    ipcMain.handle(channels.disconnectSource, disconnectSource); installed.push(channels.disconnectSource);
+    ipcMain.handle(channels.relocateSource, relocateSource); installed.push(channels.relocateSource);
+    ipcMain.handle(channels.importVideo, importVideo); installed.push(channels.importVideo);
+    ipcMain.handle(channels.scanSource, scanSource); installed.push(channels.scanSource);
+    ipcMain.handle(channels.importProgress, importProgress); installed.push(channels.importProgress);
     ipcMain.handle(channels.list, list); installed.push(channels.list);
     ipcMain.handle(channels.detail, detail); installed.push(channels.detail);
     ipcMain.handle(channels.save, save); installed.push(channels.save);
+    ipcMain.handle(channels.playOriginal, playOriginal); installed.push(channels.playOriginal);
     ipcMain.handle(channels.regenerate, regenerate); installed.push(channels.regenerate);
     ipcMain.handle(channels.protection, protection); installed.push(channels.protection);
     ipcMain.handle(channels.setProtection, setProtection); installed.push(channels.setProtection);
@@ -604,7 +1246,10 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     ipcMain.handle(channels.disableTouchId, disableTouchId); installed.push(channels.disableTouchId);
     ipcMain.handle(channels.createUnprotectedCopy, createUnprotectedCopy); installed.push(channels.createUnprotectedCopy);
     ipcMain.on(channels.lock, lock);
+    ipcMain.on(channels.stopOriginal, stopOriginal);
     ipcMain.on(channels.cancelRegeneration, cancelRegeneration);
+    ipcMain.on(channels.cancelSourceConnection, cancelSourceConnection);
+    ipcMain.on(channels.cancelImport, cancelImport);
     ipcMain.on(channels.cancelUnprotectedCopy, cancelUnprotectedCopy);
     contents.on('did-start-navigation', navigate);
     contents.on('destroyed', invalidate);

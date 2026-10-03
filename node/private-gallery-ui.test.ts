@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
+import type { PrivateGalleryEdit, PrivateGalleryQuery } from '../interfaces/private-gallery';
 
 const galleryRoot = path.resolve(__dirname, '../private-gallery');
 const source = readFileSync(path.join(galleryRoot, 'gallery.js'), 'utf8');
@@ -31,6 +32,8 @@ class ElementStub {
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onloadeddata: (() => void) | null = null;
+  onended: (() => void) | null = null;
+  loop = false;
   starts: string[] = [];
   pauses = 0;
   loads = 0;
@@ -74,7 +77,12 @@ class ElementStub {
     return ['input', 'textarea', 'select'].includes(this.tagName) || this.getAttribute('contenteditable') === 'true' ? this : null;
   }
   querySelector(selector: string): ElementStub | null {
-    return this.children.find(child => child.tagName === selector) ?? null;
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
+  querySelectorAll(selector: string): ElementStub[] {
+    const action = /^\[data-action="([^"]+)"\]$/.exec(selector)?.[1];
+    return this.children.flatMap(child => [...((action ? child.getAttribute('data-action') === action : child.tagName === selector)
+      ? [child] : []), ...child.querySelectorAll(selector)]);
   }
   focus(): void { this.onFocus(this); }
   pause(): void { this.pauses++; }
@@ -100,17 +108,40 @@ function detail(entry = item(), overrides: Record<string, unknown> = {}): any {
   return { status: 'ready', item: { ...entry, notes: 'Private notes',
     posterUrl: 'theatrum://app/media/clips/0.jpg', clipUrl: 'theatrum://app/media/clips/0.mp4',
     filmstripUrl: 'theatrum://app/media/filmstrips/0.jpg',
-    editable: true, regenerable: true, revision: 'a'.repeat(32), ...overrides } };
+    editable: true, regenerable: true, playable: true, revision: 'a'.repeat(32), ...overrides } };
+}
+
+function sourceFolder(index = 1, overrides: Record<string, unknown> = {}): any {
+  return { id: index.toString(16).padStart(32, '0'), title: `Source folder ${index}`, videoCount: 3, connected: false, ...overrides };
 }
 
 async function settle(): Promise<void> { for (let index = 0; index < 8; index++) { await Promise.resolve(); } }
 
 function harness(options: {
-  list?: (request: { query: string; offset: number }) => Promise<any>;
+  list?: (request: PrivateGalleryQuery) => Promise<any>;
   detail?: (id: string) => Promise<any>;
-  save?: (request: { id: string; revision: string; notes: string; tags: string[] }) => Promise<any>;
+  save?: (request: PrivateGalleryEdit) => Promise<any>;
   regenerate?: (request: { id: string; revision: string }) => Promise<any>;
   cancelRegeneration?: () => void;
+  playOriginal?: (request: { id: string; revision: string }) => Promise<any>;
+  stopOriginal?: () => void;
+  exitFullscreen?: () => Promise<void>;
+  originalAvailable?: boolean;
+  sources?: () => Promise<any>;
+  addSource?: () => Promise<any>;
+  addSourceAvailable?: boolean;
+  connectSource?: (id: string) => Promise<any>;
+  disconnectSource?: (id: string) => Promise<any>;
+  relocateSource?: (id: string) => Promise<any>;
+  relocationAvailable?: boolean;
+  scanSource?: (id: string) => Promise<any>;
+  scanAvailable?: boolean;
+  importVideo?: (id: string) => Promise<any>;
+  importProgress?: () => Promise<any>;
+  cancelImport?: () => void;
+  importAvailable?: boolean;
+  cancelSourceConnection?: () => void;
+  sourcesAvailable?: boolean;
   protection?: () => Promise<any>;
   setProtection?: (request: { autoLockMinutes: number }) => Promise<any>;
   touchIdStatus?: () => Promise<any>;
@@ -127,7 +158,11 @@ function harness(options: {
 } = {}) {
   const elements = new Map<string, ElementStub>();
   const created: ElementStub[] = [];
-  const document = new ElementStub('document');
+  let fullscreenExits = 0;
+  const document = Object.assign(new ElementStub('document'), {
+    fullscreenElement: null as ElementStub | null,
+    exitFullscreen: () => { fullscreenExits++; return options.exitFullscreen?.() ?? Promise.resolve(); },
+  });
   const window = new ElementStub('window');
   let focused: ElementStub | undefined;
   Object.defineProperty(document, 'activeElement', { get: () => focused });
@@ -146,9 +181,9 @@ function harness(options: {
   }
   const timers = new Map<number, () => void>();
   let timerId = 0;
-  const requests: { query: string; offset: number }[] = [];
+  const requests: PrivateGalleryQuery[] = [];
   const selections: string[] = [];
-  const saves: { id: string; revision: string; notes: string; tags: string[] }[] = [];
+  const saves: PrivateGalleryEdit[] = [];
   const generations: { id: string; revision: string }[] = [];
   const protectionSaves: { autoLockMinutes: number }[] = [];
   const passwordChanges: { currentPassword: string; newPassword: string }[] = [];
@@ -158,7 +193,20 @@ function harness(options: {
   let touchIdReads = 0;
   let copyCancellations = 0;
   let protectionReads = 0;
+  let sourceReads = 0;
+  let sourceCancellations = 0;
+  let sourceAdditions = 0;
+  let sourceConnected = false;
+  const sourceConnections: string[] = [];
+  const sourceDisconnections: string[] = [];
+  const sourceRelocations: string[] = [];
+  const videoImports: string[] = [];
+  const sourceScans: string[] = [];
+  let importCancellations = 0;
+  let importProgressReads = 0;
   let cancellations = 0;
+  let originalStops = 0;
+  const originalPlays: { id: string; revision: string }[] = [];
   let lockCalls = 0;
   const observers: Observer[] = [];
   class Observer {
@@ -170,7 +218,7 @@ function harness(options: {
     visible(): void { this.callback([...this.targets].map(target => ({ target, isIntersecting: true }))); }
   }
   const api = {
-    list: async (request: { query: string; offset: number }) => {
+    list: async (request: PrivateGalleryQuery) => {
       requests.push({ ...request });
       return options.list ? options.list(request) : ready([item()]);
     },
@@ -178,17 +226,60 @@ function harness(options: {
       selections.push(id);
       return options.detail ? options.detail(id) : detail(item(Number(id.split('-')[1])));
     },
-    save: async (request: { id: string; revision: string; notes: string; tags: string[] }) => {
+    save: async (request: PrivateGalleryEdit) => {
       saves.push({ ...request, tags: [...request.tags] });
       return options.save ? options.save(request)
         : { status: 'saved', item: { ...detail(item(Number(request.id.split('-')[1]))).item,
-          notes: request.notes, tags: request.tags, revision: 'b'.repeat(32) } };
+          notes: request.notes, tags: request.tags, revision: 'b'.repeat(32),
+          ...(Object.hasOwn(request, 'rating') ? { rating: request.rating, favourite: request.rating === 5 } : {}) } };
     },
     regenerate: async (request: { id: string; revision: string }) => {
       generations.push({ ...request });
       return options.regenerate ? options.regenerate(request) : { status: 'generated', item: detail().item };
     },
     cancelRegeneration: () => { cancellations++; options.cancelRegeneration?.(); },
+    playOriginal: options.originalAvailable === false ? undefined : async (request: { id: string; revision: string }) => {
+      originalPlays.push({ ...request });
+      return options.playOriginal ? options.playOriginal(request) : { status: 'ready', url: 'theatrum://app/original/' + 'b'.repeat(64) };
+    },
+    stopOriginal: options.originalAvailable === false ? undefined : () => { originalStops++; options.stopOriginal?.(); },
+    sources: options.sourcesAvailable === false ? undefined : async () => {
+      sourceReads++;
+      return options.sources ? options.sources() : { status: 'ready', items: [sourceFolder(1, { connected: sourceConnected })] };
+    },
+    addSource: options.addSourceAvailable === false ? undefined : async () => {
+      sourceAdditions++; return options.addSource ? options.addSource() : { status: 'added' };
+    },
+    connectSource: options.sourcesAvailable === false ? undefined : async (id: string) => {
+      sourceConnections.push(id);
+      if (options.connectSource) { return options.connectSource(id); }
+      sourceConnected = true;
+      return { status: 'connected', item: sourceFolder(1, { connected: true }) };
+    },
+    disconnectSource: options.sourcesAvailable === false ? undefined : async (id: string) => {
+      sourceDisconnections.push(id);
+      if (options.disconnectSource) { return options.disconnectSource(id); }
+      sourceConnected = false;
+      return { status: 'disconnected', item: sourceFolder() };
+    },
+    relocateSource: options.relocationAvailable === false ? undefined : async (id: string) => {
+      sourceRelocations.push(id);
+      if (options.relocateSource) { return options.relocateSource(id); }
+      sourceConnected = false;
+      return { status: 'relocated' };
+    },
+    scanSource: options.scanAvailable === false ? undefined : async (id: string) => {
+      sourceScans.push(id); return options.scanSource ? options.scanSource(id) : { status: 'nothing-new' };
+    },
+    importVideo: options.importAvailable === false ? undefined : async (id: string) => {
+      videoImports.push(id);
+      return options.importVideo ? options.importVideo(id) : batchResult();
+    },
+    importProgress: options.importAvailable === false ? undefined : async () => {
+      importProgressReads++; return options.importProgress ? options.importProgress() : { status: 'idle' };
+    },
+    cancelImport: options.importAvailable === false ? undefined : () => { importCancellations++; options.cancelImport?.(); },
+    cancelSourceConnection: options.sourcesAvailable === false ? undefined : () => { sourceCancellations++; options.cancelSourceConnection?.(); },
     protection: async () => {
       protectionReads++;
       return options.protection ? options.protection() : { status: 'ready', autoLockMinutes: 5 };
@@ -233,12 +324,20 @@ function harness(options: {
     byId, created, document, window, requests, selections, saves, generations, observers, protectionSaves, passwordChanges, unprotectedCopies,
     touchIdEnrollments, get touchIdDisables() { return touchIdDisables; }, get touchIdReads() { return touchIdReads; },
     get protectionReads() { return protectionReads; },
+    sourceConnections, sourceDisconnections, sourceRelocations, videoImports, sourceScans,
+    get importCancellations() { return importCancellations; },
+    get importProgressReads() { return importProgressReads; },
+    get sourceReads() { return sourceReads; },
+    get sourceAdditions() { return sourceAdditions; },
+    get sourceCancellations() { return sourceCancellations; },
     get copyCancellations() { return copyCancellations; },
     get cancellations() { return cancellations; },
+    originalPlays, get originalStops() { return originalStops; },
     get cards() { return byId('gallery-grid').children; },
     get images() { return created.filter(element => element.tagName === 'img'); },
     get activeImages() { return created.filter(element => element.tagName === 'img' && element.onload); },
     get focused() { return focused; }, get lockCalls() { return lockCalls; },
+    get fullscreenExits() { return fullscreenExits; },
     get timers() { return timers.size; },
     async runTimer() {
       const next = timers.entries().next().value as [number, () => void] | undefined;
@@ -1017,7 +1116,8 @@ test('saving tags refreshes active search results without closing the saved vide
   const h = harness({ list: async request => ready(saved && request.query ? [] : [item()]),
     save: async request => {
       saved = true;
-      return { status: 'saved', item: { ...detail().item, notes: request.notes, tags: request.tags, revision: 'b'.repeat(32) } };
+      return { status: 'saved', item: { ...detail().item, notes: request.notes, tags: request.tags, revision: 'b'.repeat(32),
+          ...(Object.hasOwn(request, 'rating') ? { rating: request.rating, favourite: request.rating === 5 } : {}) } };
     } });
   await settle();
   h.byId('gallery-search').value = 'Nature'; h.byId('gallery-search').fire('input');
@@ -1312,7 +1412,7 @@ test('Protection reads only on opening and shows no default until the encrypted 
   assert.equal(h.byId('save-protection').disabled, true);
   assert.equal(h.focused, h.byId('auto-lock-minutes'));
   assert.equal(h.timers, 0, 'There is no renderer activity heartbeat');
-  assert.match(html, /inactivity in this private window, including while a preview is playing or previews are regenerating/);
+  assert.match(html, /inactivity in this private window, including during video playback or preview regeneration/);
   assert.match(html, /Locking clears unsaved edits/);
 });
 
@@ -2396,4 +2496,1482 @@ test('unavailable Touch ID can remove a previously stored key without claiming i
     else { assert.match(h.byId('touch-id-status').textContent, /may still be present/);
       assert.doesNotMatch(h.byId('touch-id-summary').textContent, /is off/); }
   }
+});
+
+
+test('source folders open on demand, retain drafts and expose only bounded generic labels', async () => {
+  const h = harness({ sources: async () => ({ status: 'ready', items: [sourceFolder(1, {
+    path: '/private/source/secret', notes: 'Should never render', filename: 'private-video.mp4',
+  })] }) });
+  await selectFirst(h);
+  const notes = h.byId('details-notes');
+  const tag = h.byId('tag-draft');
+  notes.value = 'Unsaved notes'; notes.fire('input');
+  tag.value = 'Unsaved tag'; tag.fire('input');
+  assert.equal(h.sourceReads, 0);
+  h.byId('source-folders-toggle').fire('click');
+  await settle();
+  assert.equal(h.byId('source-folders-panel').hidden, false);
+  const row = h.byId('source-folders-list').children[0];
+  assert.match(row.textContent, /Source folder 1.*3 videos.*Not connected.*Connect/);
+  assert.equal(row.querySelector('button')!.getAttribute('aria-label'), 'Connect Source folder 1');
+  assert.doesNotMatch(row.textContent, /secret|private-video|Should never render|00000000000000000000000000000001/);
+  assert.equal(row.getAttribute('data-source-id'), null);
+  h.byId('refresh-source-folders').fire('click');
+  await settle();
+  assert.equal(h.sourceReads, 2);
+  assert.equal(notes.value, 'Unsaved notes');
+  assert.equal(tag.value, 'Unsaved tag');
+  assert.equal(h.byId('save-details').disabled, false);
+  h.byId('close-source-folders').fire('click');
+  assert.equal(h.byId('source-folders-list').children.length, 0);
+  assert.equal(h.byId('source-folders-status').textContent, '');
+  assert.equal(h.byId('source-folders-panel').hidden, true);
+  h.byId('source-folders-toggle').fire('click');
+  await settle();
+  assert.equal(h.sourceReads, 3, 'Reopening never reuses source grants cached in the view');
+  assert.equal(notes.value, 'Unsaved notes');
+});
+
+test('source connect and disconnect stop previews, preserve drafts and refresh shared grant rows', async () => {
+  let connected = false;
+  const h = harness({
+    sources: async () => ({ status: 'ready', items: [sourceFolder(1, { connected }), sourceFolder(2, { connected })] }),
+    connectSource: async () => { connected = true; return { status: 'connected', item: sourceFolder(1, { connected }) }; },
+    disconnectSource: async () => { connected = false; return { status: 'disconnected', item: sourceFolder(1, { connected }) }; },
+  });
+  await selectFirst(h);
+  h.byId('source-folders-toggle').fire('click'); await settle();
+  h.byId('details-notes').value = 'Keep notes'; h.byId('details-notes').fire('input');
+  h.byId('play-preview').fire('click'); await settle();
+  assert.notEqual(h.byId('preview-video').src, '');
+  h.byId('source-folders-list').children[0].querySelector('button')!.fire('click');
+  assert.equal(h.byId('preview-video').src, '');
+  assert.equal(h.byId('save-details').disabled, true);
+  await settle();
+  assert.deepEqual(h.sourceConnections, [sourceFolder().id]);
+  assert.equal(h.sourceReads, 2);
+  assert.ok(h.byId('source-folders-list').children.every(row => /Connected for this session/.test(row.textContent)));
+  assert.match(h.byId('source-folders-status').textContent, /connected until this hub locks/);
+  assert.equal(h.byId('details-notes').value, 'Keep notes');
+  assert.equal(h.byId('save-details').disabled, false);
+  h.byId('source-folders-list').children[0].querySelector('button')!.fire('click');
+  await settle();
+  assert.deepEqual(h.sourceDisconnections, [sourceFolder().id]);
+  assert.equal(h.sourceReads, 3);
+  assert.ok(h.byId('source-folders-list').children.every(row => /Not connected/.test(row.textContent)));
+  assert.equal(h.byId('source-folders-status').textContent, 'Source folder disconnected.');
+});
+
+test('pending source connection serializes competing UI actions, allows cancellation and retains drafts', async () => {
+  const pending = deferred();
+  const h = harness({ connectSource: () => pending.promise, list: async () => ready([item(), item(1)], 70) });
+  await selectFirst(h);
+  h.byId('source-folders-toggle').fire('click'); await settle();
+  h.byId('details-notes').value = 'Draft'; h.byId('details-notes').fire('input');
+  h.byId('source-folders-list').children[0].querySelector('button')!.fire('click');
+  for (const id of ['source-folders-toggle', 'refresh-source-folders', 'close-source-folders', 'protection-button',
+    'save-details', 'discard-details', 'regenerate-previews', 'play-preview', 'toggle-filmstrip', 'next-page', 'gallery-search']) {
+    assert.equal(h.byId(id).disabled, true, `${id} must wait for the source picker`);
+  }
+  assert.equal(h.byId('details-notes').readOnly, true);
+  assert.equal(h.byId('lock-hub').disabled, false);
+  h.cards[1].fire('click');
+  h.byId('close-details').fire('click');
+  h.document.fire('keydown', { key: 'Escape' });
+  assert.equal(h.byId('details-panel').hidden, false);
+  assert.equal(h.byId('source-folders-panel').hidden, false);
+  assert.equal(h.selections.length, 1);
+  assert.equal(h.byId('cancel-source-connection').hidden, false);
+  h.byId('cancel-source-connection').fire('click');
+  h.byId('cancel-source-connection').fire('click');
+  assert.equal(h.sourceCancellations, 1);
+  assert.equal(h.byId('cancel-source-connection').disabled, true);
+  pending.resolve({ status: 'cancelled' }); await settle();
+  assert.match(h.byId('source-folders-status').textContent, /Connection cancelled/);
+  assert.equal(h.byId('close-source-folders').disabled, false);
+  assert.equal(h.byId('source-folders-list').children[0].querySelector('button')!.disabled, false);
+  assert.equal(h.byId('details-notes').value, 'Draft');
+  assert.equal(h.byId('save-details').disabled, false);
+});
+
+test('source errors are generic, wrong folders remain retryable and ambiguous grants require refresh', async () => {
+  for (const status of ['wrong-folder', 'source-unavailable', 'conflict', 'busy', 'unavailable']) {
+    const h = harness({ connectSource: async () => ({ status, path: '/private/secret', message: 'Sensitive error' }) });
+    await settle();
+    h.byId('source-folders-toggle').fire('click'); await settle();
+    h.byId('source-folders-list').children[0].querySelector('button')!.fire('click'); await settle();
+    assert.doesNotMatch(h.byId('source-folders-status').textContent, /secret|Sensitive error/);
+    assert.notEqual(h.byId('source-folders-status').textContent, '');
+    assert.equal(h.byId('source-folders-list').children.length, ['wrong-folder', 'source-unavailable'].includes(status) ? 1 : 0);
+    assert.equal(h.byId('refresh-source-folders').disabled, false);
+    h.byId('refresh-source-folders').fire('click'); await settle();
+    assert.equal(h.byId('source-folders-list').children.length, 1);
+  }
+});
+
+test('source listing rejects malformed, duplicate and oversized records without rendering contents', async () => {
+  for (const items of [
+    [sourceFolder(1, { title: '/private/secret' })], [sourceFolder(1, { id: 'path/to/file' })],
+    [sourceFolder(1, { videoCount: -1 })], [sourceFolder(1, { connected: 'yes' })], new Array(1),
+    [sourceFolder(), sourceFolder()], Array.from({ length: 257 }, () => sourceFolder()),
+  ]) {
+    const h = harness({ sources: async () => ({ status: 'ready', items }) });
+    await settle(); h.byId('source-folders-toggle').fire('click'); await settle();
+    assert.equal(h.byId('source-folders-list').children.length, 0);
+    assert.match(h.byId('source-folders-status').textContent, /could not be checked/);
+    assert.doesNotMatch(h.byId('source-folders-status').textContent, /secret/);
+  }
+  const h = harness({ sourcesAvailable: false });
+  await settle();
+  assert.equal(h.byId('source-folders-toggle').disabled, true);
+});
+
+test('locking or hiding during source requests clears rows, drafts and rejects late responses', async () => {
+  for (const operation of ['list', 'connect', 'disconnect']) {
+    const pending = deferred();
+    const h = harness({
+      sources: operation === 'list' ? () => pending.promise : async () => ({ status: 'ready', items: [sourceFolder(1, { connected: operation === 'disconnect' })] }),
+      connectSource: () => pending.promise, disconnectSource: () => pending.promise,
+    });
+    await selectFirst(h);
+    h.byId('details-notes').value = 'Draft'; h.byId('details-notes').fire('input');
+    h.byId('source-folders-toggle').fire('click'); await settle();
+    if (operation !== 'list') { h.byId('source-folders-list').children[0].querySelector('button')!.fire('click'); }
+    if (operation === 'disconnect') { h.window.fire('pagehide'); }
+    else { h.byId('lock-hub').fire('click'); }
+    assert.equal(h.byId('source-folders-panel').hidden, true);
+    assert.equal(h.byId('source-folders-list').children.length, 0);
+    assert.equal(h.byId('source-folders-status').textContent, '');
+    assert.equal(h.byId('details-notes').value, '');
+    assert.equal(h.byId('cancel-source-connection').hidden, true);
+    pending.resolve(operation === 'list' ? { status: 'ready', items: [sourceFolder()] }
+      : { status: operation === 'connect' ? 'connected' : 'disconnected', item: sourceFolder(1, { connected: operation === 'connect' }) });
+    await settle();
+    assert.equal(h.byId('source-folders-list').children.length, 0);
+    assert.equal(h.byId('source-folders-status').textContent, '');
+    assert.equal(h.byId('source-folders-toggle').disabled, true);
+  }
+});
+
+
+test('locking while connected source rows refresh cannot repopulate the retired panel', async () => {
+  const refresh = deferred();
+  let calls = 0;
+  const h = harness({ sources: () => ++calls === 1
+    ? Promise.resolve({ status: 'ready', items: [sourceFolder()] }) : refresh.promise });
+  await settle(); h.byId('source-folders-toggle').fire('click'); await settle();
+  h.byId('source-folders-list').children[0].querySelector('button')!.fire('click'); await settle();
+  assert.equal(h.sourceReads, 2);
+  assert.equal(h.byId('close-source-folders').disabled, true);
+  h.byId('lock-hub').fire('click');
+  refresh.resolve({ status: 'ready', items: [sourceFolder(1, { connected: true })] }); await settle();
+  assert.equal(h.byId('source-folders-panel').hidden, true);
+  assert.equal(h.byId('source-folders-list').children.length, 0);
+  assert.equal(h.byId('source-folders-status').textContent, '');
+});
+
+test('source bridge failures remain generic and successful changes with failed refresh do not retain stale rows', async () => {
+  let calls = 0;
+  const h = harness({ sources: async () => {
+    if (++calls === 1) { return { status: 'ready', items: [sourceFolder()] }; }
+    throw new Error('/private/source/secret');
+  } });
+  await settle(); h.byId('source-folders-toggle').fire('click'); await settle();
+  h.byId('source-folders-list').children[0].querySelector('button')!.fire('click'); await settle();
+  assert.equal(h.byId('source-folders-list').children.length, 0);
+  assert.match(h.byId('source-folders-status').textContent, /Source folder connected.*Choose Refresh/);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /secret/);
+  assert.equal(h.focused, h.byId('refresh-source-folders'));
+  h.byId('refresh-source-folders').fire('click'); await settle();
+  assert.match(h.byId('source-folders-status').textContent, /could not be checked/);
+});
+
+
+function relocationButton(h: ReturnType<typeof harness>): ElementStub {
+  return h.byId('source-folders-list').children[0].querySelector('[data-action="relocate-source"]')!;
+}
+
+test('source relocation exposes a named keyboard action without putting source identities in the DOM', async () => {
+  const h = harness();
+  await settle(); h.byId('source-folders-toggle').fire('click'); await settle();
+  const button = relocationButton(h);
+  assert.equal(button.tagName, 'button');
+  assert.equal(button.textContent, 'Change location…');
+  assert.equal(button.getAttribute('aria-label'), 'Change location of Source folder 1');
+  assert.equal(button.getAttribute('data-action'), 'relocate-source');
+  assert.equal(button.disabled, false);
+  assert.ok(h.created.every(element => [...element.attributes.values()].every(value => !value.includes(sourceFolder().id))));
+  const unavailable = harness({ relocationAvailable: false });
+  await settle(); unavailable.byId('source-folders-toggle').fire('click'); await settle();
+  assert.equal(relocationButton(unavailable).disabled, true);
+  assert.equal(unavailable.byId('source-folders-list').children[0].querySelector('button')!.disabled, false);
+});
+
+test('source relocation requires saving or discarding notes, pending tags and removed tags', async () => {
+  for (const kind of ['notes', 'pending-tag', 'removed-tag']) {
+    const h = harness(); await selectFirst(h);
+    if (kind === 'notes') { draftNotes(h, 'Preserved private draft'); }
+    if (kind === 'pending-tag') { draftTag(h, 'Pending private tag'); }
+    if (kind === 'removed-tag') { h.byId('details-tags').children[0].querySelector('button')!.fire('click'); }
+    const notes = h.byId('details-notes').value;
+    const tag = h.byId('tag-draft').value;
+    const tags = h.byId('details-tags').textContent;
+    h.byId('source-folders-toggle').fire('click'); await settle();
+    relocationButton(h).fire('click'); await settle();
+    assert.equal(h.sourceRelocations.length, 0);
+    assert.match(h.byId('source-folders-status').textContent, /Save or discard your video notes, tags and rating/);
+    assert.equal(h.byId('details-notes').value, notes);
+    assert.equal(h.byId('tag-draft').value, tag);
+    assert.equal(h.byId('details-tags').textContent, tags);
+    assert.equal(h.byId('save-details').disabled, false);
+    assert.equal(h.requests.length, 1, 'A refused relocation does not refresh away the draft');
+  }
+});
+
+test('source relocation serializes operations, stops previews and supports one cancellation request', async () => {
+  const pending = deferred();
+  const h = harness({ relocateSource: () => pending.promise, list: async () => ready([item(), item(1)], 70) });
+  await selectFirst(h);
+  h.byId('play-preview').fire('click'); await settle();
+  assert.notEqual(h.byId('preview-video').src, '');
+  h.byId('source-folders-toggle').fire('click'); await settle();
+  relocationButton(h).fire('click');
+  assert.equal(h.byId('preview-video').src, '');
+  assert.deepEqual(h.sourceRelocations, [sourceFolder().id]);
+  assert.match(h.byId('source-folders-status').textContent, /folder will be checked before you confirm its saved location/);
+  for (const id of ['source-folders-toggle', 'refresh-source-folders', 'close-source-folders', 'protection-button',
+    'save-details', 'discard-details', 'regenerate-previews', 'play-preview', 'toggle-filmstrip', 'next-page', 'gallery-search']) {
+    assert.equal(h.byId(id).disabled, true, `${id} must wait for source relocation`);
+  }
+  assert.ok(h.byId('source-folders-list').children[0].querySelectorAll('button').every(button => button.disabled));
+  assert.equal(h.byId('details-notes').readOnly, true);
+  assert.equal(h.byId('lock-hub').disabled, false);
+  h.cards[1].fire('click'); h.byId('close-details').fire('click');
+  h.document.fire('keydown', { key: 'Escape' });
+  assert.equal(h.byId('source-folders-panel').hidden, false);
+  assert.equal(h.byId('details-panel').hidden, false);
+  assert.equal(h.selections.length, 1);
+  assert.equal(h.byId('cancel-source-connection').hidden, false);
+  assert.equal(h.byId('cancel-source-connection').textContent, 'Cancel change');
+  h.byId('cancel-source-connection').fire('click'); h.byId('cancel-source-connection').fire('click');
+  assert.equal(h.sourceCancellations, 1);
+  assert.equal(h.byId('cancel-source-connection').disabled, true);
+  assert.match(h.byId('source-folders-status').textContent, /save already in progress may finish/);
+  pending.resolve({ status: 'cancelled' }); await settle(); await settle();
+  assert.equal(h.byId('cancel-source-connection').hidden, true);
+  assert.equal(h.byId('details-panel').hidden, true);
+  assert.equal(h.byId('close-source-folders').disabled, false);
+  assert.equal(h.requests.length, 2, 'Cancellation refreshes after a potentially admitted save');
+  assert.equal(h.sourceReads, 2);
+  assert.match(h.byId('source-folders-status').textContent, /Location change cancelled/);
+});
+
+test('saved relocation refreshes catalogue and source identities without auto-connecting or reusing old selections', async () => {
+  let relocated = false;
+  const replacedId = 'e'.repeat(32);
+  const h = harness({
+    sources: async () => ({ status: 'ready', items: [sourceFolder(1, { id: relocated ? replacedId : sourceFolder().id, connected: !relocated })] }),
+    relocateSource: async () => { relocated = true; return { status: 'relocated', path: '/private/secret' }; },
+    list: async request => ready([item(relocated ? 1 : 0)], 70, request.offset),
+  });
+  await selectFirst(h);
+  h.byId('source-folders-toggle').fire('click'); await settle();
+  relocationButton(h).fire('click'); await settle(); await settle();
+  assert.equal(h.requests.length, 2);
+  assert.deepEqual(h.requests[1], h.requests[0]);
+  assert.equal(h.selections.length, 1, 'Retired selection IDs are not requested again');
+  assert.equal(h.byId('details-panel').hidden, true);
+  assert.equal(h.byId('details-notes').value, '');
+  assert.equal(h.cards.length, 1);
+  assert.match(h.cards[0].textContent, /Private video 1/);
+  assert.equal(h.cards[0].getAttribute('aria-pressed'), 'false');
+  assert.equal(h.sourceConnections.length, 0);
+  const row = h.byId('source-folders-list').children[0];
+  assert.match(row.textContent, /Not connected/);
+  assert.equal(h.focused, row.querySelector('button'));
+  assert.equal(h.byId('source-folders-status').textContent, 'Source location saved. Connect the folder to regenerate previews.');
+  row.querySelector('button')!.fire('click'); await settle();
+  assert.deepEqual(h.sourceConnections, [replacedId]);
+});
+
+test('relocation retains a search and current page while loading replacement catalogue identities', async () => {
+  const h = harness({ list: async request => ready([item(request.offset)], 70, request.offset) });
+  await settle();
+  const search = h.byId('gallery-search');
+  search.value = 'Nature'; search.fire('input'); await h.runTimer();
+  h.byId('next-page').fire('click'); await settle();
+  h.byId('source-folders-toggle').fire('click'); await settle();
+  relocationButton(h).fire('click'); await settle(); await settle();
+  assert.deepEqual(h.requests.at(-1), { query: 'Nature', offset: 48, collection: 'all', sort: 'catalogue', direction: 'asc' });
+  assert.equal(search.value, 'Nature');
+  assert.equal(h.byId('page-label').textContent, 'Page 2 of 2');
+});
+
+for (const status of ['invalid', 'source-unavailable', 'conflict', 'busy', 'unavailable', '__proto__', 'constructor']) {
+  test(`${status} source relocation uses fixed messages and refreshes authoritative state`, async () => {
+    const h = harness({ relocateSource: async () => ({ status, path: '/private/secret', message: 'Sensitive error' }) });
+    await selectFirst(h); h.byId('source-folders-toggle').fire('click'); await settle();
+    relocationButton(h).fire('click'); await settle(); await settle();
+    const message = h.byId('source-folders-status').textContent;
+    assert.notEqual(message, '');
+    assert.doesNotMatch(message, /secret|Sensitive error|function|object Object/);
+    if (status === 'invalid') { assert.match(message, /separate folder.*neither contains nor sits inside.*recorded file sizes/); }
+    if (status === 'source-unavailable') { assert.match(message, /every video.*same names, subfolders and sizes.*access is allowed/); }
+    assert.equal(h.requests.length, 2);
+    assert.equal(h.sourceReads, 2);
+    assert.equal(h.byId('details-panel').hidden, true);
+    assert.equal(relocationButton(h).disabled, false);
+  });
+}
+
+test('relocation refresh failures do not retain stale rows, details or sensitive bridge errors', async () => {
+  let reads = 0;
+  const h = harness({ sources: async () => {
+    if (++reads === 1) { return { status: 'ready', items: [sourceFolder()] }; }
+    throw new Error('/private/secret');
+  }, relocateSource: async () => { throw new Error('/private/secret'); } });
+  await selectFirst(h); h.byId('source-folders-toggle').fire('click'); await settle();
+  relocationButton(h).fire('click'); await settle(); await settle();
+  assert.equal(h.byId('details-panel').hidden, true);
+  assert.equal(h.byId('source-folders-list').children.length, 0);
+  assert.match(h.byId('source-folders-status').textContent, /Choose Refresh/);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /secret/);
+  assert.equal(h.focused, h.byId('refresh-source-folders'));
+});
+
+test('lock and pagehide retire relocation and refresh callbacks without restoring catalogue or sources', async () => {
+  for (const stage of ['picker', 'catalogue', 'sources']) {
+    for (const ending of ['lock', 'pagehide']) {
+      const pending = deferred();
+      let lists = 0; let reads = 0;
+      const h = harness({
+        relocateSource: async () => stage === 'picker' ? pending.promise : { status: 'relocated' },
+        list: async () => ++lists > 1 && stage === 'catalogue' ? pending.promise : ready([item()]),
+        sources: async () => ++reads > 1 && stage === 'sources' ? pending.promise : { status: 'ready', items: [sourceFolder()] },
+      });
+      await selectFirst(h); h.byId('source-folders-toggle').fire('click'); await settle();
+      relocationButton(h).fire('click'); await settle(); await settle();
+      if (ending === 'lock') { h.byId('lock-hub').fire('click'); }
+      else { h.window.fire('pagehide'); }
+      pending.resolve(stage === 'picker' ? { status: 'relocated' } : stage === 'catalogue' ? ready([item(1)])
+        : { status: 'ready', items: [sourceFolder(2)] });
+      await settle(); await settle();
+      assert.equal(h.byId('details-panel').hidden, true);
+      assert.equal(h.byId('source-folders-panel').hidden, true);
+      assert.equal(h.byId('source-folders-list').children.length, 0);
+      assert.equal(h.byId('source-folders-status').textContent, '');
+      assert.equal(h.byId('cancel-source-connection').hidden, true);
+      assert.equal(h.cards.length, 0);
+    }
+  }
+});
+
+
+test('original playback starts only explicitly, preserves drafts and stops without saving metadata', async () => {
+  const pending = deferred();
+  const h = harness({ playOriginal: async () => pending.promise }); await selectFirst(h);
+  assert.equal(h.originalPlays.length, 0);
+  assert.equal(h.byId('play-original').hidden, false);
+  h.byId('details-notes').value = 'Keep my unsaved notes'; h.byId('details-notes').fire('input');
+  h.byId('tag-draft').value = 'Tag draft'; h.byId('tag-draft').fire('input');
+  h.byId('play-original').fire('click'); h.byId('play-original').fire('click');
+  assert.deepEqual(h.originalPlays, [{ id: 'opaque-0', revision: 'a'.repeat(32) }]);
+  assert.equal(h.byId('preview-video').src, '');
+  assert.equal(h.byId('stop-video').hidden, false);
+  assert.equal(h.byId('stop-video').textContent, 'Cancel');
+  assert.equal(h.byId('details-notes').readOnly, true);
+  pending.resolve({ status: 'ready', url: 'theatrum://app/original/' + 'b'.repeat(64) }); await settle();
+  const video = h.byId('preview-video');
+  assert.equal(video.src, 'theatrum://app/original/' + 'b'.repeat(64));
+  assert.equal(video.hidden, false);
+  assert.equal(video.plays, 1);
+  assert.equal(h.byId('stop-video').textContent, 'Stop video');
+  assert.equal(h.byId('details-notes').readOnly, false);
+  assert.equal(h.byId('play-preview').hidden, true);
+  assert.equal(h.byId('play-original').hidden, true);
+  h.byId('stop-video').fire('click');
+  assert.equal(h.originalStops, 1);
+  assert.equal(video.src, ''); assert.equal(video.hidden, true);
+  assert.equal(h.byId('play-original').hidden, false);
+  assert.equal(h.byId('play-preview').hidden, false);
+  assert.equal(h.byId('details-notes').value, 'Keep my unsaved notes');
+  assert.equal(h.byId('tag-draft').value, 'Tag draft');
+  assert.equal(h.saves.length, 0);
+  assert.equal(h.focused, h.byId('play-original'));
+});
+
+test('original playback availability is independent of preview regeneration and requires complete bridge and revision', async () => {
+  for (const entry of [
+    { overrides: { regenerable: false }, available: true, visible: true },
+    { overrides: { playable: false }, available: true, visible: false },
+    { overrides: { playable: 'yes' }, available: true, visible: false },
+    { overrides: { revision: 'bad' }, available: true, visible: false },
+    { overrides: {}, available: false, visible: false },
+  ]) {
+    const h = harness({ originalAvailable: entry.available, detail: async () => detail(item(), entry.overrides) }); await selectFirst(h);
+    assert.equal(h.byId('play-original').hidden, !entry.visible);
+    assert.equal(h.byId('play-preview').hidden, false);
+  }
+});
+
+test('pending original picker excludes competing operations and cancellation waits for its response', async () => {
+  const pending = deferred();
+  const h = harness({ playOriginal: async () => pending.promise, list: async () => ready([item(0), item(1)], 80) });
+  await selectFirst(h);
+  h.byId('play-original').fire('click');
+  for (const id of ['source-folders-toggle', 'protection-button', 'save-details', 'discard-details', 'regenerate-previews',
+    'play-preview', 'toggle-filmstrip', 'next-page', 'gallery-search']) { assert.equal(h.byId(id).disabled, true, id); }
+  assert.equal(h.byId('lock-hub').disabled, false);
+  h.cards[1].fire('click'); h.byId('close-details').fire('click');
+  assert.equal(h.selections.length, 1); assert.equal(h.byId('details-panel').hidden, false);
+  h.byId('stop-video').fire('click'); h.byId('stop-video').fire('click');
+  assert.equal(h.originalStops, 1);
+  assert.equal(h.byId('stop-video').disabled, true);
+  h.byId('play-original').fire('click');
+  assert.equal(h.originalPlays.length, 1);
+  pending.resolve({ status: 'ready', url: 'theatrum://app/original/' + 'b'.repeat(64) }); await settle();
+  assert.equal(h.byId('preview-video').src, '');
+  assert.equal(h.byId('preview-video').plays, 0);
+  assert.equal(h.byId('playback-status').textContent, 'Opening video cancelled.');
+  assert.equal(h.byId('play-original').disabled, false);
+  assert.equal(h.byId('source-folders-toggle').disabled, false);
+});
+
+for (const status of ['cancelled', 'conflict', 'source-unavailable', 'wrong-folder', 'unsupported', 'busy', 'unavailable', '__proto__', 'constructor']) {
+  test(`original ${status} failures use fixed messages and preserve drafts`, async () => {
+    const h = harness({ playOriginal: async () => ({ status, message: '/private/sensitive.mov', url: 'file:///private/sensitive.mov' }) });
+    await selectFirst(h);
+    h.byId('details-notes').value = 'Draft'; h.byId('details-notes').fire('input');
+    h.byId('play-original').fire('click'); await settle();
+    assert.equal(h.byId('preview-video').src, '');
+    assert.equal(h.byId('preview-video').plays, 0);
+    assert.equal(h.originalStops, 1);
+    assert.equal(h.byId('play-original').disabled, false);
+    assert.equal(h.byId('details-notes').value, 'Draft');
+    assert.doesNotMatch(h.byId('playback-status').textContent, /sensitive|file:|function|object Object/);
+    assert.ok(h.byId('playback-status').textContent.length > 15);
+    assert.equal(h.saves.length, 0);
+  });
+}
+
+test('original URLs require exactly a same-origin opaque 64-hex capability', async () => {
+  for (const url of ['file:///private/video.mp4', 'https://example.test/private.mp4', 'theatrum://app/media/clips/0.mp4',
+    'theatrum://app/original/' + 'b'.repeat(63), 'theatrum://app/original/' + 'b'.repeat(65),
+    'theatrum://app/original/' + 'B'.repeat(64), 'theatrum://app/original/' + 'b'.repeat(64) + '?path=private',
+    'theatrum://app/original/' + 'b'.repeat(64) + '#private', 'theatrum://app/original/' + 'b'.repeat(64) + '\n',
+    'theatrum://user@app/original/' + 'b'.repeat(64), undefined, 12]) {
+    const h = harness({ playOriginal: async () => ({ status: 'ready', url }) }); await selectFirst(h);
+    h.byId('play-original').fire('click'); await settle();
+    assert.equal(h.byId('preview-video').src, '', String(url));
+    assert.equal(h.byId('preview-video').plays, 0);
+    assert.equal(h.originalStops, 1);
+  }
+});
+
+test('playback media errors and rejected decoder promises revoke original access with fixed text', async () => {
+  for (const rejection of [false, true]) {
+    const h = harness(); await selectFirst(h);
+    const video = h.byId('preview-video');
+    if (rejection) { video.playResult = Promise.reject(new Error('/private/decoder.log')); }
+    h.byId('play-original').fire('click'); await settle();
+    if (!rejection) { video.onerror!(); }
+    assert.equal(video.src, ''); assert.equal(video.hidden, true);
+    assert.equal(h.originalStops, 1);
+    assert.match(h.byId('playback-status').textContent, /format or codec may be unsupported/);
+    assert.doesNotMatch(h.byId('playback-status').textContent, /decoder.log/);
+    assert.equal(h.byId('play-original').disabled, false);
+  }
+});
+
+test('natural original playback completion retires capability unless the user enabled looping', async () => {
+  const h = harness(); await selectFirst(h);
+  h.byId('play-original').fire('click'); await settle();
+  const video = h.byId('preview-video'); const ended = video.onended!;
+  video.loop = true; ended(); assert.equal(h.originalStops, 0);
+  video.loop = false; ended(); assert.equal(h.originalStops, 1);
+  assert.equal(video.src, ''); assert.equal(video.onended, null);
+});
+
+test('late original media events and play promises cannot stop newer playback', async () => {
+  const h = harness(); await selectFirst(h);
+  const video = h.byId('preview-video'); const pending = deferred<void>();
+  video.playResult = pending.promise;
+  h.byId('play-original').fire('click'); await settle();
+  const oldError = video.onerror!; const oldLoaded = video.onloadeddata!; const oldEnded = video.onended!;
+  h.byId('stop-video').fire('click');
+  video.playResult = Promise.resolve();
+  h.byId('play-original').fire('click'); await settle();
+  const pauses = video.pauses; const stops = h.originalStops;
+  oldError(); oldLoaded(); oldEnded(); pending.resolve(); await settle();
+  assert.equal(h.originalStops, stops); assert.equal(video.pauses, pauses);
+  assert.equal(video.hidden, false); assert.equal(video.plays, 2);
+});
+
+for (const action of ['close', 'selection', 'lock', 'pagehide', 'protection', 'sources', 'regeneration']) {
+  test(`${action} retires original playback before proceeding`, async () => {
+    const h = harness({ list: async () => ready([item(0), item(1)]) }); await selectFirst(h);
+    h.byId('play-original').fire('click'); await settle();
+    const video = h.byId('preview-video'); const lateError = video.onerror!;
+    if (action === 'close') { h.byId('close-details').fire('click'); }
+    if (action === 'selection') { h.cards[1].fire('click'); }
+    if (action === 'lock') { h.byId('lock-hub').fire('click'); }
+    if (action === 'pagehide') { h.window.fire('pagehide'); }
+    if (action === 'protection') { h.byId('protection-button').fire('click'); }
+    if (action === 'sources') { h.byId('source-folders-toggle').fire('click'); }
+    if (action === 'regeneration') { h.byId('regenerate-previews').fire('click'); }
+    await settle();
+    assert.equal(h.originalStops, 1); assert.equal(video.src, ''); assert.equal(video.hidden, true);
+    lateError(); assert.equal(h.originalStops, 1);
+  });
+}
+
+test('lock and pagehide retire pending original replies without reintroducing capability or private messages', async () => {
+  for (const action of ['lock', 'pagehide']) {
+    const pending = deferred(); const h = harness({ playOriginal: async () => pending.promise }); await selectFirst(h);
+    h.byId('play-original').fire('click');
+    if (action === 'lock') { h.byId('lock-hub').fire('click'); } else { h.window.fire('pagehide'); }
+    assert.equal(h.originalStops, 1);
+    pending.resolve({ status: 'ready', url: 'theatrum://app/original/' + 'b'.repeat(64) }); await settle();
+    assert.equal(h.originalStops, 1); assert.equal(h.byId('preview-video').src, '');
+    assert.equal(h.byId('preview-video').plays, 0); assert.equal(h.byId('playback-status').textContent, '');
+  }
+});
+
+test('original player retains local-only media controls and exposes actions outside video controls', () => {
+  assert.match(html, /<video[^>]*preload="none"[^>]*controlslist="nodownload noremoteplayback"[^>]*disablepictureinpicture disableremoteplayback/);
+  assert.match(html, /<\/video>\s*<\/div>\s*<div class="playback-actions"/);
+  assert.doesNotMatch(source, /requestPictureInPicture|window\.open|shell\.open|dispatchEvent|setInterval/);
+});
+
+
+test('saving or discarding drafts clears active original playback before the catalogue request', async () => {
+  for (const action of ['save', 'discard']) {
+    const h = harness(); await selectFirst(h);
+    h.byId('play-original').fire('click'); await settle();
+    h.byId('details-notes').value = 'Edited note'; h.byId('details-notes').fire('input');
+    h.byId(action === 'save' ? 'save-details' : 'discard-details').fire('click');
+    assert.equal(h.byId('preview-video').src, '');
+    assert.equal(h.originalStops, 1);
+    await settle();
+    assert.equal(h.byId('play-original').hidden, false);
+    assert.equal(h.byId('stop-video').hidden, true);
+    assert.equal(h.byId('playback-status').textContent, '');
+    assert.equal(h.saves.length, action === 'save' ? 1 : 0);
+    assert.equal(h.byId('details-notes').value, action === 'save' ? 'Edited note' : 'Private notes');
+  }
+});
+
+
+test('Escape in fullscreen leaves Details and original playback intact for the browser exit', async () => {
+  const h = harness(); await selectFirst(h);
+  h.byId('play-original').fire('click'); await settle();
+  const video = h.byId('preview-video'); const original = video.src;
+  h.document.fullscreenElement = video;
+  const event = h.document.fire('keydown', { key: 'Escape', target: video });
+  assert.equal(event.defaultPrevented, false);
+  assert.equal(h.byId('details-panel').hidden, false);
+  assert.equal(video.src, original); assert.equal(video.hidden, false);
+  assert.equal(h.originalStops, 0); assert.equal(h.fullscreenExits, 0);
+  h.document.fullscreenElement = null;
+  assert.equal(h.document.fire('keydown', { key: 'Escape', target: video }).defaultPrevented, true);
+  assert.equal(h.byId('details-panel').hidden, true); assert.equal(h.originalStops, 1);
+});
+
+for (const mode of ['preview', 'original']) {
+  for (const action of ['stop', 'selection', 'lock', 'pagehide']) {
+    test(`${action} exits fullscreen ${mode} without waiting to clear media or revoke access`, async () => {
+      const pendingExit = deferred<void>();
+      const h = harness({ list: async () => ready([item(0), item(1)]), exitFullscreen: () => pendingExit.promise });
+      await selectFirst(h);
+      h.byId(mode === 'original' ? 'play-original' : 'play-preview').fire('click'); await settle();
+      const video = h.byId('preview-video');
+      h.document.fullscreenElement = video;
+      if (action === 'stop') { h.byId('stop-video').fire('click'); }
+      if (action === 'selection') { h.cards[1].fire('click'); }
+      if (action === 'lock') { h.byId('lock-hub').fire('click'); }
+      if (action === 'pagehide') { h.window.fire('pagehide'); }
+      assert.equal(h.fullscreenExits, 1); assert.equal(video.src, ''); assert.equal(video.hidden, true);
+      assert.equal(h.originalStops, mode === 'original' ? 1 : 0);
+      assert.equal(h.lockCalls, action === 'lock' ? 1 : 0);
+      pendingExit.resolve(); await settle();
+      assert.equal(video.src, ''); assert.equal(h.originalStops, mode === 'original' ? 1 : 0);
+    });
+  }
+}
+
+for (const failure of ['throw', 'rejection']) {
+  test(`fullscreen exit ${failure} cannot prevent media revocation and locking`, async () => {
+    const h = harness({ exitFullscreen: () => {
+      if (failure === 'throw') { throw new Error('Window closed'); }
+      return Promise.reject(new Error('Fullscreen transition rejected'));
+    } });
+    await selectFirst(h); h.byId('play-original').fire('click'); await settle();
+    h.document.fullscreenElement = h.byId('preview-video');
+    h.byId('lock-hub').fire('click');
+    assert.equal(h.fullscreenExits, 1); assert.equal(h.lockCalls, 1); assert.equal(h.originalStops, 1);
+    assert.equal(h.byId('preview-video').src, ''); assert.equal(h.byId('preview-video').hidden, true);
+    await settle();
+    assert.equal(h.byId('details-title').textContent, '');
+  });
+}
+
+test('ordinary playback cleanup never exits an unrelated fullscreen element', async () => {
+  const h = harness(); await selectFirst(h);
+  h.byId('play-original').fire('click'); await settle();
+  h.document.fullscreenElement = h.byId('details-panel');
+  h.byId('stop-video').fire('click');
+  assert.equal(h.fullscreenExits, 0); assert.equal(h.originalStops, 1);
+});
+
+
+function importButton(h: ReturnType<typeof harness>): ElementStub {
+  return h.byId('source-folders-list').children[0].querySelector('[data-action="import-video"]')!;
+}
+
+async function openSources(h: ReturnType<typeof harness>): Promise<void> {
+  await settle(); h.byId('source-folders-toggle').fire('click'); await settle();
+}
+
+test('Add videos is a named source action with no path or opaque source identity in its DOM', async () => {
+  const h = harness(); await openSources(h);
+  const button = importButton(h);
+  assert.equal(button.tagName, 'button'); assert.equal(button.textContent, 'Add videos…');
+  assert.equal(button.getAttribute('aria-label'), 'Add videos from Source folder 1');
+  assert.equal(button.disabled, false);
+  assert.ok(h.created.every(element => [...element.attributes.values()].every(value => !value.includes(sourceFolder().id))));
+  const unavailable = harness({ importAvailable: false }); await openSources(unavailable);
+  assert.equal(importButton(unavailable).disabled, true);
+  assert.equal(relocationButton(unavailable).disabled, false);
+  assert.equal(unavailable.byId('source-folders-list').children[0].querySelector('button')!.disabled, false);
+});
+
+test('video import is disabled for drafts and guards direct invocation without losing edits', async () => {
+  for (const kind of ['notes', 'pending-tag', 'removed-tag', 'composition']) {
+    const h = harness(); await selectFirst(h); await openSources(h);
+    if (kind === 'notes') { draftNotes(h, 'PRIVATE-DRAFT'); }
+    if (kind === 'pending-tag') { draftTag(h, 'PRIVATE-TAG'); }
+    if (kind === 'removed-tag') { h.byId('details-tags').children[0].querySelector('button')!.fire('click'); }
+    if (kind === 'composition') { h.byId('details-notes').fire('compositionstart'); }
+    const notes = h.byId('details-notes').value; const tag = h.byId('tag-draft').value;
+    assert.equal(importButton(h).disabled, true);
+    importButton(h).disabled = false; importButton(h).fire('click'); await settle();
+    assert.deepEqual(h.videoImports, []);
+    assert.match(h.byId('source-folders-status').textContent, /Save or discard your video notes, tags and rating/);
+    assert.equal(h.byId('details-notes').value, notes); assert.equal(h.byId('tag-draft').value, tag);
+    assert.equal(h.requests.length, 1); assert.equal(h.sourceReads, 1);
+  }
+});
+
+test('video import stops original playback, serializes controls and keeps cancellation independent from source changes', async () => {
+  const pending = deferred();
+  const h = harness({ importVideo: () => pending.promise, list: async () => ready([item(), item(1)], 70) });
+  await selectFirst(h); await openSources(h);
+  h.byId('play-original').fire('click'); await settle();
+  assert.match(h.byId('preview-video').src, /original/);
+  const stops = h.originalStops;
+  importButton(h).fire('click');
+  assert.equal(h.originalStops, stops + 1); assert.equal(h.byId('preview-video').src, '');
+  assert.deepEqual(h.videoImports, [sourceFolder().id]);
+  assert.match(h.byId('source-folders-status').textContent, /encrypted before it is added/);
+  for (const id of ['source-folders-toggle', 'refresh-source-folders', 'close-source-folders', 'protection-button',
+    'save-details', 'discard-details', 'regenerate-previews', 'play-preview', 'play-original', 'toggle-filmstrip', 'next-page', 'gallery-search']) {
+    assert.equal(h.byId(id).disabled, true, id);
+  }
+  assert.ok(h.byId('source-folders-list').children[0].querySelectorAll('button').every(button => button.disabled));
+  assert.equal(h.byId('details-notes').readOnly, true); assert.equal(h.byId('lock-hub').disabled, false);
+  h.cards[1].fire('click'); h.byId('close-details').fire('click'); h.document.fire('keydown', { key: 'Escape' });
+  assert.equal(h.selections.length, 1); assert.equal(h.byId('source-folders-panel').hidden, false);
+  assert.equal(h.byId('cancel-source-connection').hidden, true); assert.equal(h.byId('cancel-video-import').hidden, false);
+  h.byId('cancel-source-connection').fire('click'); assert.equal(h.sourceCancellations, 0);
+  h.byId('cancel-video-import').fire('click'); h.byId('cancel-video-import').fire('click');
+  assert.equal(h.importCancellations, 1); assert.equal(h.byId('cancel-video-import').disabled, true);
+  assert.match(h.byId('source-folders-status').textContent, /already being saved may finish/);
+  pending.resolve({ status: 'cancelled' }); await settle(); await settle();
+  assert.equal(h.requests.length, 2); assert.equal(h.sourceReads, 2);
+  assert.equal(h.byId('details-panel').hidden, true); assert.equal(h.byId('cancel-video-import').hidden, true);
+  assert.equal(importButton(h).disabled, false); assert.equal(h.focused, importButton(h));
+  assert.match(h.byId('source-folders-status').textContent, /Import cancelled.*already being saved may finish/);
+});
+
+test('a committed import wins a cancellation race and refreshes catalogue and source identities', async () => {
+  let imported = false; const pending = deferred(); const newSourceId = 'e'.repeat(32);
+  const h = harness({ importVideo: async () => { await pending.promise; imported = true; return batchResult(); },
+    sources: async () => ({ status: 'ready', items: [sourceFolder(1, { id: imported ? newSourceId : sourceFolder().id, videoCount: imported ? 4 : 3 })] }),
+    list: async request => ready(imported ? [item(1), item(2)] : [item()], 70, request.offset) });
+  await selectFirst(h); await openSources(h);
+  const oldButton = importButton(h); oldButton.fire('click'); h.byId('cancel-video-import').fire('click');
+  pending.resolve({}); await settle(); await settle();
+  assert.equal(h.requests.length, 2); assert.deepEqual(h.requests[1], h.requests[0]);
+  assert.equal(h.cards.length, 2); assert.equal(h.selections.length, 1); assert.equal(h.byId('details-notes').value, '');
+  assert.match(h.byId('source-folders-list').textContent, /4 videos/);
+  assert.match(h.byId('source-folders-status').textContent, /Import complete. 1 added/);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /cancelled|rollback/);
+  oldButton.disabled = false; oldButton.fire('click'); assert.equal(h.videoImports.length, 1, 'Retired source closures cannot submit');
+  importButton(h).fire('click'); await settle(); await settle();
+  assert.deepEqual(h.videoImports, [sourceFolder().id, newSourceId]);
+});
+
+for (const status of ['cancelled', 'conflict', 'invalid', 'duplicate', 'limit', 'source-unavailable', 'wrong-folder', 'busy', 'unavailable', '__proto__', 'constructor']) {
+  test(`${status} video import refreshes authoritative state and shows only fixed messages`, async () => {
+    const h = harness({ importVideo: async () => ({ status, path: '/PRIVATE-IMPORT', message: 'PRIVATE-IMPORT' }) });
+    await selectFirst(h); await openSources(h); importButton(h).fire('click'); await settle(); await settle();
+    assert.equal(h.requests.length, 2); assert.equal(h.sourceReads, 2); assert.equal(h.byId('details-panel').hidden, true);
+    assert.notEqual(h.byId('source-folders-status').textContent, '');
+    assert.doesNotMatch(h.byId('source-folders-status').textContent, /PRIVATE-IMPORT|function|object Object/);
+    assert.equal(importButton(h).disabled, false);
+    if (status === 'wrong-folder') {
+      assert.match(h.byId('source-folders-status').textContent, /not the saved source folder.*select the saved folder when prompted/);
+    }
+  });
+}
+
+test('import and refresh exceptions leave no stale details or source rows', async () => {
+  let reads = 0;
+  const h = harness({ importVideo: async () => { throw new Error('/PRIVATE-IMPORT'); }, sources: async () => {
+    if (++reads === 1) return { status: 'ready', items: [sourceFolder()] };
+    throw new Error('/PRIVATE-IMPORT');
+  } });
+  await selectFirst(h); await openSources(h); importButton(h).fire('click'); await settle(); await settle();
+  assert.equal(h.requests.length, 2); assert.equal(h.sourceReads, 2); assert.equal(h.byId('details-panel').hidden, true);
+  assert.equal(h.byId('source-folders-list').children.length, 0);
+  assert.match(h.byId('source-folders-status').textContent, /could not be added.*Choose Refresh/);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /PRIVATE-IMPORT/);
+  assert.equal(h.focused, h.byId('refresh-source-folders'));
+});
+
+test('lock and pagehide suppress import and refresh completions at every async boundary', async () => {
+  for (const stage of ['import', 'catalogue', 'sources']) {
+    for (const ending of ['lock', 'pagehide']) {
+      const pending = deferred(); let lists = 0; let reads = 0;
+      const h = harness({ importVideo: async () => stage === 'import' ? pending.promise : batchResult(),
+        list: async () => ++lists > 1 && stage === 'catalogue' ? pending.promise : ready([item()]),
+        sources: async () => ++reads > 1 && stage === 'sources' ? pending.promise : { status: 'ready', items: [sourceFolder()] } });
+      await selectFirst(h); await openSources(h); importButton(h).fire('click'); await settle(); await settle();
+      if (ending === 'lock') h.byId('lock-hub').fire('click'); else h.window.fire('pagehide');
+      pending.resolve(stage === 'import' ? { status: 'imported' } : stage === 'catalogue' ? ready([item(1)]) : { status: 'ready', items: [sourceFolder(2)] });
+      await settle(); await settle();
+      assert.equal(h.byId('details-panel').hidden, true); assert.equal(h.byId('source-folders-panel').hidden, true);
+      assert.equal(h.byId('source-folders-list').children.length, 0); assert.equal(h.byId('source-folders-status').textContent, '');
+      assert.equal(h.byId('cancel-video-import').hidden, true); assert.equal(h.cards.length, 0);
+      h.byId('cancel-video-import').fire('click'); assert.equal(h.importCancellations, 0);
+    }
+  }
+});
+
+test('malformed source IDs cannot create import actions', async () => {
+  for (const patch of [{ id: sourceFolder().id + '\n' }, { id: '/PRIVATE-IMPORT' }, { title: 'Source folder 1\n' }, { videoCount: 100_001 }]) {
+    const h = harness({ sources: async () => ({ status: 'ready', items: [sourceFolder(1, patch)] }) }); await openSources(h);
+    assert.equal(h.byId('source-folders-list').children.length, 0); assert.deepEqual(h.videoImports, []);
+  }
+});
+
+
+test('import cancellation errors remain generic and never block locking', async () => {
+  const pending = deferred();
+  const h = harness({ importVideo: () => pending.promise, cancelImport: () => { throw new Error('/PRIVATE-IMPORT'); } });
+  await openSources(h); importButton(h).fire('click'); h.byId('cancel-video-import').fire('click');
+  assert.match(h.byId('source-folders-status').textContent, /could not be cancelled.*lock the hub/);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /PRIVATE-IMPORT/);
+  assert.equal(h.byId('lock-hub').disabled, false);
+  h.byId('lock-hub').fire('click'); pending.resolve({ status: 'cancelled' }); await settle();
+  assert.equal(h.lockCalls, 1); assert.equal(h.requests.length, 1);
+  assert.equal(h.byId('source-folders-status').textContent, '');
+});
+
+test('import preserves search and pagination while retiring the old selection', async () => {
+  const h = harness({ list: async request => ready([item(request.offset)], 70, request.offset) });
+  await settle(); const search = h.byId('gallery-search');
+  search.value = 'Nature'; search.fire('input'); await h.runTimer();
+  h.byId('next-page').fire('click'); await settle(); await openSources(h);
+  importButton(h).fire('click'); await settle(); await settle();
+  assert.deepEqual(h.requests.at(-1), { query: 'Nature', offset: 48, collection: 'all', sort: 'catalogue', direction: 'asc' });
+  assert.equal(search.value, 'Nature'); assert.equal(h.byId('page-label').textContent, 'Page 2 of 2');
+});
+
+
+test('Add folder can start from an empty valid source list but not a failed, unavailable or full list', async () => {
+  for (const count of [0, 1, 255, 256]) {
+    const h = harness({ sources: async () => ({ status: 'ready', items: Array.from({ length: count }, (_, i) => sourceFolder(i + 1)) }) });
+    await openSources(h);
+    assert.equal(h.byId('add-source-folder').disabled, count === 256);
+    h.byId('add-source-folder').disabled = false; h.byId('add-source-folder').fire('click'); await settle(); await settle();
+    assert.equal(h.sourceAdditions, count === 256 ? 0 : 1);
+    assert.equal(h.sourceConnections.length, 0); assert.equal(h.videoImports.length, 0);
+  }
+  for (const result of [{ status: 'unavailable' }, { status: 'busy' }, { status: 'ready', items: [sourceFolder(257)] }]) {
+    const h = harness({ sources: async () => result }); await openSources(h);
+    assert.equal(h.byId('add-source-folder').disabled, true);
+    h.byId('add-source-folder').disabled = false; h.byId('add-source-folder').fire('click'); await settle();
+    assert.equal(h.sourceAdditions, 0);
+  }
+  const h = harness({ addSourceAvailable: false }); await openSources(h);
+  assert.equal(h.byId('add-source-folder').disabled, true);
+  assert.equal(importButton(h).disabled, false);
+});
+
+test('source-add guards notes, tags and composition drafts without erasing edits', async () => {
+  for (const kind of ['notes', 'pending-tag', 'removed-tag', 'composition']) {
+    const h = harness(); await selectFirst(h); await openSources(h);
+    if (kind === 'notes') { draftNotes(h, 'PRIVATE-DRAFT'); }
+    if (kind === 'pending-tag') { draftTag(h, 'PRIVATE-TAG'); }
+    if (kind === 'removed-tag') { h.byId('details-tags').children[0].querySelector('button')!.fire('click'); }
+    if (kind === 'composition') { h.byId('details-notes').fire('compositionstart'); }
+    const notes = h.byId('details-notes').value; const tag = h.byId('tag-draft').value;
+    assert.equal(h.byId('add-source-folder').disabled, true);
+    h.byId('add-source-folder').disabled = false; h.byId('add-source-folder').fire('click'); await settle();
+    assert.equal(h.sourceAdditions, 0);
+    assert.match(h.byId('source-folders-status').textContent, /Save or discard your video notes, tags and rating/);
+    assert.equal(h.byId('details-notes').value, notes); assert.equal(h.byId('tag-draft').value, tag);
+    assert.equal(h.requests.length, 1); assert.equal(h.sourceReads, 1);
+  }
+});
+
+test('adding a source stops playback and serializes controls while preserving one-shot cancellation', async () => {
+  const pending = deferred();
+  const h = harness({ addSource: () => pending.promise, list: async () => ready([item(), item(1)], 70) });
+  await selectFirst(h); await openSources(h); h.byId('play-original').fire('click'); await settle();
+  const stops = h.originalStops;
+  h.byId('add-source-folder').fire('click');
+  assert.equal(h.originalStops, stops + 1); assert.equal(h.byId('preview-video').src, '');
+  assert.equal(h.sourceAdditions, 1);
+  assert.match(h.byId('source-folders-status').textContent, /No videos will be added automatically.*original files remain unchanged/);
+  for (const id of ['add-source-folder', 'source-folders-toggle', 'refresh-source-folders', 'close-source-folders', 'protection-button',
+    'save-details', 'discard-details', 'regenerate-previews', 'play-preview', 'play-original', 'next-page', 'gallery-search']) {
+    assert.equal(h.byId(id).disabled, true, id);
+  }
+  assert.ok(h.byId('source-folders-list').children[0].querySelectorAll('button').every(button => button.disabled));
+  assert.equal(h.byId('details-notes').readOnly, true); assert.equal(h.byId('lock-hub').disabled, false);
+  h.cards[1].fire('click'); h.byId('close-details').fire('click'); h.document.fire('keydown', { key: 'Escape' });
+  assert.equal(h.selections.length, 1); assert.equal(h.byId('source-folders-panel').hidden, false);
+  assert.equal(h.byId('cancel-source-connection').hidden, false); assert.equal(h.byId('cancel-video-import').hidden, true);
+  assert.equal(h.byId('cancel-source-connection').textContent, 'Cancel adding folder');
+  h.byId('cancel-video-import').fire('click'); assert.equal(h.importCancellations, 0);
+  h.byId('cancel-source-connection').fire('click'); h.byId('cancel-source-connection').fire('click');
+  assert.equal(h.sourceCancellations, 1);
+  assert.match(h.byId('source-folders-status').textContent, /save already in progress may finish/);
+  pending.resolve({ status: 'cancelled' }); await settle(); await settle();
+  assert.equal(h.requests.length, 2); assert.equal(h.sourceReads, 2);
+  assert.equal(h.byId('details-panel').hidden, true); assert.equal(h.byId('cancel-source-connection').hidden, true);
+  assert.equal(h.byId('add-source-folder').disabled, false); assert.equal(h.focused, h.byId('add-source-folder'));
+});
+
+test('a committed source addition wins cancellation and refreshes disconnected zero-video rows without granting access', async () => {
+  let added = false; const pending = deferred();
+  const h = harness({ addSource: async () => { await pending.promise; added = true; return { status: 'added' }; },
+    sources: async () => ({ status: 'ready', items: added ? [sourceFolder(), sourceFolder(2, { videoCount: 0 })] : [sourceFolder()] }) });
+  await selectFirst(h); await openSources(h);
+  h.byId('add-source-folder').fire('click'); h.byId('cancel-source-connection').fire('click');
+  pending.resolve(undefined); await settle(); await settle();
+  assert.equal(h.byId('source-folders-list').children.length, 2);
+  const row = h.byId('source-folders-list').children[1];
+  assert.match(row.textContent, /0 videos.*Not connected/);
+  assert.match(h.byId('source-folders-status').textContent, /saved and not connected.*Original files are unchanged/);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /cancelled/);
+  assert.equal(h.sourceConnections.length, 0); assert.equal(h.videoImports.length, 0);
+  assert.equal(h.requests.length, 2); assert.equal(h.sourceReads, 2);
+  row.querySelector('[data-action="connect-source"]')!.fire('click'); await settle();
+  assert.deepEqual(h.sourceConnections, [sourceFolder(2).id]);
+});
+
+for (const status of ['cancelled', 'conflict', 'invalid', 'duplicate', 'limit', 'source-unavailable', 'busy', 'unavailable', '__proto__', 'constructor']) {
+  test(`${status} source addition refreshes authoritative state with a fixed generic message`, async () => {
+    const h = harness({ addSource: async () => ({ status, path: '/PRIVATE-SOURCE', message: 'PRIVATE-SOURCE' }) });
+    await selectFirst(h); await openSources(h); h.byId('add-source-folder').fire('click'); await settle(); await settle();
+    assert.equal(h.requests.length, 2); assert.equal(h.sourceReads, 2); assert.equal(h.byId('details-panel').hidden, true);
+    assert.notEqual(h.byId('source-folders-status').textContent, '');
+    assert.doesNotMatch(h.byId('source-folders-status').textContent, /PRIVATE-SOURCE|function|object Object/);
+    assert.equal(h.byId('add-source-folder').disabled, false);
+  });
+}
+
+test('source-add refresh exceptions clear stale rows and require a successful refresh before another add', async () => {
+  let reads = 0;
+  const h = harness({ addSource: async () => { throw new Error('/PRIVATE-SOURCE'); }, sources: async () => {
+    if (++reads === 2) { throw new Error('/PRIVATE-SOURCE'); }
+    return { status: 'ready', items: [] };
+  } });
+  await selectFirst(h); await openSources(h); h.byId('add-source-folder').fire('click'); await settle(); await settle();
+  assert.equal(h.requests.length, 2); assert.equal(h.sourceReads, 2); assert.equal(h.byId('details-panel').hidden, true);
+  assert.equal(h.byId('source-folders-list').children.length, 0); assert.equal(h.byId('add-source-folder').disabled, true);
+  assert.match(h.byId('source-folders-status').textContent, /could not be added.*Choose Refresh/);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /PRIVATE-SOURCE/);
+  assert.equal(h.focused, h.byId('refresh-source-folders'));
+  h.byId('refresh-source-folders').fire('click'); await settle();
+  assert.equal(h.byId('add-source-folder').disabled, false);
+});
+
+test('lock and pagehide retire source-add picker and refresh callbacks without restoring sensitive state', async () => {
+  for (const stage of ['picker', 'catalogue', 'sources']) {
+    for (const action of ['lock', 'pagehide']) {
+      const pending = deferred(); let reads = 0; let lists = 0;
+      const h = harness({ addSource: async () => stage === 'picker' ? pending.promise : { status: 'added' },
+        list: async () => ++lists > 1 && stage === 'catalogue' ? pending.promise : ready([item()]),
+        sources: async () => ++reads > 1 && stage === 'sources' ? pending.promise : { status: 'ready', items: [sourceFolder()] } });
+      await selectFirst(h); await openSources(h); h.byId('add-source-folder').fire('click'); await settle(); await settle();
+      if (action === 'lock') { h.byId('lock-hub').fire('click'); } else { h.window.fire('pagehide'); }
+      pending.resolve(stage === 'picker' ? { status: 'added' } : stage === 'catalogue' ? ready([item(1)]) : { status: 'ready', items: [sourceFolder(2)] });
+      await settle(); await settle();
+      assert.equal(h.byId('details-panel').hidden, true); assert.equal(h.byId('source-folders-panel').hidden, true);
+      assert.equal(h.byId('source-folders-list').children.length, 0); assert.equal(h.byId('source-folders-status').textContent, '');
+      assert.equal(h.byId('cancel-source-connection').hidden, true); assert.equal(h.byId('add-source-folder').disabled, true);
+      assert.equal(h.cards.length, 0);
+    }
+  }
+});
+
+test('source-add cancellation exceptions remain generic and locking still clears the pending action', async () => {
+  const pending = deferred();
+  const h = harness({ addSource: () => pending.promise, cancelSourceConnection: () => { throw new Error('/PRIVATE-SOURCE'); } });
+  await openSources(h); h.byId('add-source-folder').fire('click'); h.byId('cancel-source-connection').fire('click');
+  assert.match(h.byId('source-folders-status').textContent, /could not be cancelled.*lock the hub/);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /PRIVATE-SOURCE/);
+  h.byId('lock-hub').fire('click'); pending.resolve({ status: 'added' }); await settle();
+  assert.equal(h.byId('source-folders-status').textContent, '');
+});
+
+
+function batchResult(overrides: Record<string, unknown> = {}): any {
+  return { status: 'finished', outcome: 'completed', total: 1, processed: 1, imported: 1, duplicates: 0, failed: 0, ...overrides };
+}
+
+test('batch import help describes bounded manual selection from one source folder', () => {
+  assert.match(html, /Add up to 100 videos from one folder with encrypted previews/);
+});
+
+test('batch summaries distinguish saved, duplicate, failed and unprocessed videos', async () => {
+  for (const outcome of ['completed', 'cancelled', 'stopped']) {
+    const h = harness({ importVideo: async () => batchResult({ outcome, total: outcome === 'completed' ? 6 : 8,
+      processed: 6, imported: 3, duplicates: 2, failed: 1, path: '/PRIVATE-BATCH', message: '/PRIVATE-BATCH' }) });
+    await openSources(h); importButton(h).fire('click'); await settle(); await settle();
+    const status = h.byId('source-folders-status').textContent;
+    assert.match(status, /3 added, 2 already in the catalogue, 1 failed/);
+    assert.match(status, outcome === 'completed' ? /0 not processed/ : /2 not processed/);
+    assert.match(status, outcome === 'completed' ? /Import complete.*Original videos are unchanged/ : /Saved videos remain.*already being saved may finish.*Review the catalogue/);
+    assert.doesNotMatch(status, /PRIVATE-BATCH/);
+    assert.equal(h.requests.length, 2); assert.equal(h.sourceReads, 2); assert.equal(h.timers, 0);
+  }
+});
+
+test('invalid batch counts never render misleading completion or native fields', async () => {
+  for (const changes of [{ total: 2 }, { processed: 0 }, { failed: 1 }, { imported: -1 }, { total: 101 },
+    { processed: 0.5 }, { outcome: 'PRIVATE-BATCH' }, { total: '<PRIVATE-BATCH>' }]) {
+    const h = harness({ importVideo: async () => batchResult(changes) });
+    await openSources(h); importButton(h).fire('click'); await settle(); await settle();
+    assert.match(h.byId('source-folders-status').textContent, /could not be added.*Review the current catalogue/);
+    assert.doesNotMatch(h.byId('source-folders-status').textContent, /Import complete|PRIVATE-BATCH/);
+    assert.equal(h.timers, 0);
+  }
+});
+
+test('numeric progress polls serially during import and stops before catalogue refresh', async () => {
+  const pending = deferred(); const progress = deferred(); const listing = deferred(); let calls = 0;
+  const h = harness({ importVideo: () => pending.promise, importProgress: () => progress.promise,
+    list: async () => ++calls === 1 ? ready([item()]) : listing.promise });
+  await openSources(h); importButton(h).fire('click');
+  assert.match(h.byId('source-folders-status').textContent, /Choose up to 100 videos/);
+  assert.equal(h.timers, 1); await h.runTimer(); assert.equal(h.importProgressReads, 1); assert.equal(h.timers, 0);
+  progress.resolve({ status: 'running', total: 5, processed: 3, imported: 1, duplicates: 1, failed: 1, path: '/PRIVATE-BATCH' }); await settle();
+  assert.equal(h.timers, 1);
+  assert.match(h.byId('source-folders-status').textContent, /3 of 5 processed.*1 added, 1 already in the catalogue, 1 failed/);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /PRIVATE-BATCH/);
+  pending.resolve(batchResult()); await settle();
+  assert.equal(h.timers, 0, 'Polling ends before refresh is released');
+  listing.resolve(ready([item()])); await settle(); await settle();
+  assert.match(h.byId('source-folders-status').textContent, /Import complete/);
+});
+
+test('idle, malformed and failed progress leave the fixed status intact and can retry', async () => {
+  for (const response of [{ status: 'idle' }, { status: 'running', total: 2 },
+    { status: 'running', total: 101, processed: 1, imported: 1, duplicates: 0, failed: 0 },
+    { status: 'running', total: 2, processed: 1, imported: 1, duplicates: 1, failed: 0 }, new Error('/PRIVATE-BATCH')]) {
+    const pending = deferred();
+    const h = harness({ importVideo: () => pending.promise, importProgress: async () => {
+      if (response instanceof Error) throw response; return response;
+    } });
+    await openSources(h); importButton(h).fire('click'); const before = h.byId('source-folders-status').textContent;
+    await h.runTimer(); assert.equal(h.byId('source-folders-status').textContent, before); assert.equal(h.timers, 1);
+    pending.resolve(batchResult()); await settle(); await settle(); assert.equal(h.timers, 0);
+  }
+});
+
+test('cancellation, lock and pagehide stop polling and discard already requested late progress', async () => {
+  for (const action of ['cancel', 'lock', 'pagehide']) {
+    for (const inFlight of [false, true]) {
+      const pending = deferred(); const progress = deferred();
+      const h = harness({ importVideo: () => pending.promise, importProgress: () => progress.promise });
+      await openSources(h); importButton(h).fire('click');
+      if (inFlight) await h.runTimer();
+      if (action === 'cancel') h.byId('cancel-video-import').fire('click');
+      if (action === 'lock') h.byId('lock-hub').fire('click');
+      if (action === 'pagehide') h.window.fire('pagehide');
+      const before = h.byId('source-folders-status').textContent;
+      assert.equal(h.timers, 0);
+      progress.resolve({ status: 'running', total: 10, processed: 9, imported: 9, duplicates: 0, failed: 0 }); await settle();
+      assert.equal(h.byId('source-folders-status').textContent, before); assert.equal(h.timers, 0);
+      pending.resolve(batchResult({ outcome: 'cancelled', total: 2 })); await settle(); await settle();
+      assert.equal(h.timers, 0);
+      if (action === 'cancel') assert.match(h.byId('source-folders-status').textContent, /1 added.*1 not processed.*Saved videos remain/);
+      else assert.equal(h.byId('source-folders-status').textContent, '');
+    }
+  }
+});
+
+test('old progress cannot repaint a completed import or its replacement operation', async () => {
+  for (const replacement of [false, true]) {
+    const pending = deferred(); const progress = deferred(); const later = deferred(); let imports = 0;
+    const h = harness({ importVideo: () => ++imports === 1 ? pending.promise : later.promise, importProgress: () => progress.promise });
+    await openSources(h); importButton(h).fire('click'); await h.runTimer();
+    pending.resolve(batchResult()); await settle(); await settle();
+    if (replacement) importButton(h).fire('click');
+    const before = h.byId('source-folders-status').textContent;
+    progress.resolve({ status: 'running', total: 100, processed: 99, imported: 99, duplicates: 0, failed: 0 }); await settle();
+    assert.equal(h.byId('source-folders-status').textContent, before);
+    assert.equal(h.timers, replacement ? 1 : 0);
+    if (replacement) { later.resolve(batchResult()); await settle(); await settle(); }
+    assert.equal(h.timers, 0);
+  }
+});
+
+
+function selectCollection(h: ReturnType<typeof harness>, value: string): void {
+  h.byId('gallery-collection').value = value; h.byId('gallery-collection').fire('change');
+}
+function selectSort(h: ReturnType<typeof harness>, value: string): void {
+  h.byId('gallery-sort').value = value; h.byId('gallery-sort').fire('change');
+}
+
+test('collection and sort controls have explicit labels and start in catalogue order without persistent storage', async () => {
+  const h = harness(); await settle();
+  assert.match(html, /for="gallery-collection">Collection/); assert.match(html, /for="gallery-sort">Sort by/);
+  assert.equal(h.byId('gallery-collection').value, 'all'); assert.equal(h.byId('gallery-sort').value, 'catalogue');
+  assert.equal(h.byId('gallery-sort-direction').getAttribute('data-direction'), 'asc');
+  assert.match(h.byId('gallery-sort-direction').getAttribute('aria-label')!, /Sort ascending; activate for descending/);
+  assert.deepEqual(h.requests[0], { query: '', offset: 0, collection: 'all', sort: 'catalogue', direction: 'asc' });
+  assert.doesNotMatch(source, /localStorage|sessionStorage|indexedDB|document\.cookie/);
+});
+
+test('Recent chooses descending last played while other collections preserve chosen order', async () => {
+  const h = harness(); await settle();
+  selectCollection(h, 'recent'); await settle();
+  assert.deepEqual(h.requests.at(-1), { query: '', offset: 0, collection: 'recent', sort: 'last-played', direction: 'desc' });
+  assert.equal(h.byId('gallery-sort').value, 'last-played'); assert.equal(h.byId('gallery-sort-direction').getAttribute('data-direction'), 'desc');
+  assert.match(h.byId('gallery-sort-direction').getAttribute('aria-label')!, /Sort descending; activate for ascending/);
+  selectCollection(h, 'favourites'); await settle();
+  assert.equal(h.requests.at(-1)!.collection, 'favourites'); assert.equal(h.requests.at(-1)!.sort, 'last-played');
+  selectSort(h, 'name'); await settle(); h.byId('gallery-sort-direction').fire('click'); await settle();
+  selectCollection(h, 'all'); await settle();
+  assert.deepEqual(h.requests.at(-1), { query: '', offset: 0, collection: 'all', sort: 'name', direction: 'desc' });
+});
+
+test('sort choices set sensible directions and direction button reverses each order', async () => {
+  const h = harness(); await settle();
+  for (const sort of ['catalogue', 'name', 'date-added', 'last-played', 'rating', 'duration', 'file-size']) {
+    selectSort(h, sort); await settle();
+    const direction = ['catalogue', 'name'].includes(sort) ? 'asc' : 'desc';
+    assert.equal(h.requests.at(-1)!.sort, sort); assert.equal(h.requests.at(-1)!.direction, direction);
+    h.byId('gallery-sort-direction').fire('click'); await settle();
+    assert.equal(h.requests.at(-1)!.direction, direction === 'asc' ? 'desc' : 'asc');
+  }
+});
+
+test('browse changes preserve pending search text in a single new request and reset paging', async () => {
+  for (const kind of ['collection', 'sort', 'direction']) {
+    const h = harness({ list: async request => ready([item()], 100, request.offset) }); await settle();
+    h.byId('next-page').fire('click'); await settle(); assert.equal(h.requests.at(-1)!.offset, 48);
+    h.byId('gallery-search').value = 'Nature'; h.byId('gallery-search').fire('input'); assert.equal(h.timers, 1);
+    if (kind === 'collection') selectCollection(h, 'favourites');
+    if (kind === 'sort') selectSort(h, 'rating');
+    if (kind === 'direction') h.byId('gallery-sort-direction').fire('click');
+    await settle(); assert.equal(h.timers, 0); assert.equal(h.requests.length, 3);
+    assert.equal(h.requests.at(-1)!.query, 'Nature'); assert.equal(h.requests.at(-1)!.offset, 0);
+    assert.equal(h.byId('gallery-search').value, 'Nature');
+    h.byId('next-page').fire('click'); await settle();
+    const previous = h.requests.at(-2)!; assert.deepEqual(h.requests.at(-1), { ...previous, offset: 48 });
+    h.byId('gallery-search').value = 'Bird'; h.byId('gallery-search').fire('input'); await h.runTimer();
+    assert.deepEqual(h.requests.at(-1), { ...previous, query: 'Bird', offset: 0 });
+  }
+});
+
+test('browse replacement retires old page replies, image callbacks and delayed retries', async () => {
+  const stale = deferred(); let calls = 0;
+  const h = harness({ list: async request => ++calls === 2 ? stale.promise : ready([item(calls)], 100, request.offset) });
+  await settle(); const oldImage = h.activeImages[0]; const callback = oldImage.onload!;
+  selectSort(h, 'name'); await settle();
+  selectCollection(h, 'favourites'); await settle();
+  stale.resolve(ready([item(99)], 100)); await settle(); callback();
+  assert.equal(h.cards.length, 1); assert.match(h.cards[0].textContent, /Private video 3/);
+  assert.equal(oldImage.src, ''); assert.equal(h.requests.at(-1)!.collection, 'favourites');
+  const retry = harness({ list: async request => request.sort === 'name' ? { status: 'busy' } : ready([item()]) });
+  await settle(); selectSort(retry, 'name'); await settle(); assert.equal(retry.timers, 1);
+  selectSort(retry, 'duration'); await settle(); assert.equal(retry.timers, 0);
+  assert.equal(retry.requests.length, 3); assert.equal(retry.requests.at(-1)!.sort, 'duration');
+});
+
+test('busy retries and manual retries retain the selected collection, sort and direction', async () => {
+  const h = harness({ list: async request => request.collection === 'recent' ? { status: 'busy' } : ready([item()]) });
+  await settle(); selectCollection(h, 'recent'); await settle(); await h.runTimer(); await h.runTimer();
+  const request = { query: '', offset: 0, collection: 'recent', sort: 'last-played', direction: 'desc' };
+  assert.deepEqual(h.requests.slice(1), [request, request, request]);
+  h.byId('retry-gallery').fire('click'); await settle(); assert.deepEqual(h.requests.at(-1), request);
+});
+
+test('empty collections describe favourites and saved playback history without promising playback tracking', async () => {
+  const h = harness({ list: async () => ready([]) }); await settle();
+  selectCollection(h, 'favourites'); await settle();
+  assert.equal(h.byId('empty-title').textContent, 'No favourites yet');
+  assert.match(h.byId('empty-message').textContent, /marked as favourites.*All videos/);
+  selectCollection(h, 'recent'); await settle();
+  assert.equal(h.byId('empty-title').textContent, 'No recently played videos');
+  assert.match(h.byId('empty-message').textContent, /saved catalogue history.*Playback in this test build does not update it/);
+  h.byId('gallery-search').value = 'None'; h.byId('gallery-search').fire('input'); await h.runTimer();
+  assert.equal(h.byId('empty-title').textContent, 'No matching videos');
+  assert.match(h.byId('empty-message').textContent, /another collection/);
+});
+
+test('browse changes stop originals, previews and filmstrips before showing replacement rows', async () => {
+  for (const media of ['original', 'preview', 'filmstrip']) {
+    const h = harness(); await selectFirst(h);
+    if (media === 'original') h.byId('play-original').fire('click');
+    if (media === 'preview') h.byId('play-preview').fire('click');
+    if (media === 'filmstrip') h.byId('toggle-filmstrip').fire('click');
+    await settle(); selectSort(h, 'name'); await settle();
+    assert.equal(h.byId('preview-video').src, ''); assert.equal(h.byId('detail-filmstrip').src, '');
+    assert.equal(h.byId('details-panel').hidden, true); assert.equal(h.byId('filmstrip-panel').hidden, true);
+    if (media === 'original') assert.equal(h.originalStops, 1);
+  }
+});
+
+test('unsaved notes, tags, composition and protection settings disable browse and guard forced changes', async () => {
+  for (const draft of ['notes', 'tag', 'remove-tag', 'editor-composition', 'search-composition', 'protection']) {
+    const h = harness(); await selectFirst(h);
+    if (draft === 'notes') draftNotes(h, 'PRIVATE-NOTES');
+    if (draft === 'tag') draftTag(h, 'PRIVATE-TAG');
+    if (draft === 'remove-tag') h.byId('details-tags').children[0].querySelector('button')!.fire('click');
+    if (draft === 'editor-composition') h.byId('details-notes').fire('compositionstart');
+    if (draft === 'search-composition') h.byId('gallery-search').fire('compositionstart');
+    if (draft === 'protection') {
+      h.byId('protection-button').fire('click'); await settle();
+      h.byId('auto-lock-minutes').value = '15'; h.byId('auto-lock-minutes').fire('change');
+    }
+    const notes = h.byId('details-notes').value; const tag = h.byId('tag-draft').value;
+    for (const id of ['gallery-collection', 'gallery-sort', 'gallery-sort-direction']) assert.equal(h.byId(id).disabled, true, draft + id);
+    h.byId('gallery-collection').value = 'recent'; h.byId('gallery-sort').value = 'duration';
+    h.byId('gallery-collection').fire('change');
+    assert.equal(h.byId('gallery-collection').value, 'all'); assert.equal(h.byId('gallery-sort').value, 'catalogue');
+    h.byId('gallery-sort-direction').disabled = false; h.byId('gallery-sort-direction').fire('click');
+    assert.equal(h.byId('gallery-sort-direction').getAttribute('data-direction'), 'asc'); assert.equal(h.requests.length, 1);
+    assert.equal(h.byId('details-notes').value, notes); assert.equal(h.byId('tag-draft').value, tag);
+    if (draft === 'protection') assert.match(h.byId('protection-status').textContent, /Save your auto-lock setting/);
+  }
+});
+
+test('browse remains gated throughout imports, source changes and protection operations', async () => {
+  for (const operation of ['import', 'add-source', 'connect', 'protection', 'save', 'regenerate']) {
+    const pending = deferred(); const h = harness({ importVideo: () => pending.promise, addSource: () => pending.promise,
+      connectSource: () => pending.promise, setProtection: () => pending.promise, save: () => pending.promise, regenerate: () => pending.promise });
+    await selectFirst(h);
+    if (['import', 'add-source', 'connect'].includes(operation)) {
+      await openSources(h);
+      if (operation === 'import') importButton(h).fire('click');
+      if (operation === 'add-source') h.byId('add-source-folder').fire('click');
+      if (operation === 'connect') h.byId('source-folders-list').children[0].querySelector('button')!.fire('click');
+    }
+    if (operation === 'protection') {
+      h.byId('protection-button').fire('click'); await settle(); h.byId('auto-lock-minutes').value = '15';
+      h.byId('auto-lock-minutes').fire('change'); h.byId('save-protection').fire('click');
+    }
+    if (operation === 'save') { draftNotes(h); h.byId('save-details').fire('click'); }
+    if (operation === 'regenerate') h.byId('regenerate-previews').fire('click');
+    for (const id of ['gallery-collection', 'gallery-sort', 'gallery-sort-direction']) assert.equal(h.byId(id).disabled, true, operation + id);
+    selectCollection(h, 'recent'); selectSort(h, 'name');
+    h.byId('gallery-sort-direction').disabled = false; h.byId('gallery-sort-direction').fire('click');
+    assert.equal(h.byId('gallery-collection').value, 'all'); assert.equal(h.byId('gallery-sort').value, 'catalogue');
+    assert.equal(h.requests.length, 1);
+    h.byId('lock-hub').fire('click'); pending.resolve({ status: 'unavailable' }); await settle();
+  }
+});
+
+test('metadata refresh preserves current collection and order', async () => {
+  const h = harness(); await settle(); selectCollection(h, 'favourites'); await settle(); selectSort(h, 'rating'); await settle();
+  await selectFirst(h); draftNotes(h, 'Updated notes'); h.byId('save-details').fire('click'); await settle(); await settle();
+  assert.deepEqual(h.requests.at(-1), { query: '', offset: 0, collection: 'favourites', sort: 'rating', direction: 'desc' });
+});
+
+test('invalid select values restore current controls without sending a request', async () => {
+  const h = harness(); await settle();
+  selectCollection(h, '/PRIVATE-PATH'); selectSort(h, '__proto__');
+  assert.equal(h.requests.length, 1); assert.equal(h.byId('gallery-collection').value, 'all');
+  assert.equal(h.byId('gallery-sort').value, 'catalogue');
+});
+
+test('locking and pagehide reset collection/order and suppress delayed list replies', async () => {
+  for (const action of ['lock', 'pagehide']) {
+    const pending = deferred();
+    const h = harness({ list: async request => request.collection === 'recent' ? pending.promise : ready([item()]) });
+    await settle(); selectCollection(h, 'recent');
+    if (action === 'lock') h.byId('lock-hub').fire('click'); else h.window.fire('pagehide');
+    assert.equal(h.byId('gallery-collection').value, 'all'); assert.equal(h.byId('gallery-sort').value, 'catalogue');
+    assert.equal(h.byId('gallery-sort-direction').getAttribute('data-direction'), 'asc');
+    for (const id of ['gallery-collection', 'gallery-sort', 'gallery-sort-direction']) assert.equal(h.byId(id).disabled, true);
+    pending.resolve(ready([item(99)])); await settle();
+    assert.equal(h.cards.length, 0); assert.equal(h.byId('result-summary').textContent, '');
+  }
+});
+
+
+function chooseRating(h: ReturnType<typeof harness>, value: string): void {
+  h.byId('details-rating-input').value = value; h.byId('details-rating-input').fire('change');
+}
+
+test('rating editor labels five stars as Favourite and saves only an explicit rating choice', async () => {
+  const h = harness(); await selectFirst(h);
+  assert.match(html, /for="details-rating-input">Rating/); assert.match(html, /5 stars · Favourite/);
+  assert.match(html, /Five-star videos appear in Favourites/);
+  assert.equal(h.byId('details-rating-input').value, '4'); assert.equal(h.byId('details-rating-editor').hidden, false);
+  assert.equal(h.byId('save-details').disabled, true);
+  chooseRating(h, '5');
+  assert.equal(h.byId('save-details').disabled, false); assert.equal(h.byId('discard-details').disabled, false);
+  assert.deepEqual(h.saves, [], 'Rating never autosaves');
+  h.byId('save-details').fire('click'); await settle(); await settle();
+  assert.equal(h.saves[0].rating, 5); assert.equal(h.byId('details-rating-input').value, '5');
+  assert.match(h.byId('details-rating').textContent, /Saved: 5 \/ 5 · Favourite/);
+  assert.equal(h.byId('save-details').disabled, true);
+  draftNotes(h, 'Only notes'); h.byId('save-details').fire('click'); await settle();
+  assert.equal(Object.hasOwn(h.saves[1], 'rating'), false, 'Saved intent is cleared before later text-only edits');
+});
+
+test('untouched legacy ratings are omitted while an explicit choice can normalize a projected value', async () => {
+  for (const [rating, favourite, choice] of [[1.75, false, ''], [5, false, ''], [5, true, '5'], [0, false, '0']] as const) {
+    const h = harness({ detail: async () => detail(item(0, { rating, favourite })) }); await selectFirst(h);
+    assert.equal(h.byId('details-rating-input').value, choice);
+    if (!choice) assert.equal(h.byId('details-rating-existing').hidden, false);
+    draftNotes(h, 'Leave legacy stars unchanged'); h.byId('save-details').fire('click'); await settle();
+    assert.equal(Object.hasOwn(h.saves[0], 'rating'), false);
+  }
+  const h = harness({ detail: async () => detail(item(0, { rating: 5, favourite: false })) }); await selectFirst(h);
+  chooseRating(h, '5'); h.byId('save-details').fire('click'); await settle();
+  assert.equal(h.saves[0].rating, 5); assert.match(h.byId('details-rating').textContent, /Favourite/);
+});
+
+test('explicit rating choices including Unrated and choosing the original value remain deliberate save intent', async () => {
+  for (const rating of ['0', '1', '2', '3', '4', '5']) {
+    const h = harness(); await selectFirst(h); chooseRating(h, '5'); chooseRating(h, rating);
+    assert.equal(h.byId('save-details').disabled, false);
+    h.byId('save-details').fire('click'); await settle();
+    assert.equal(h.saves[0].rating, Number(rating));
+  }
+});
+
+test('rating-only drafts guard navigation, sorting, source changes and preview regeneration', async () => {
+  const h = harness({ list: async request => ready([item(), item(1)], 100, request.offset) }); await selectFirst(h);
+  chooseRating(h, '5');
+  h.cards[1].fire('click'); h.byId('close-details').fire('click'); h.byId('next-page').fire('click');
+  selectCollection(h, 'recent'); selectSort(h, 'rating'); h.byId('regenerate-previews').fire('click');
+  assert.equal(h.selections.length, 1); assert.equal(h.requests.length, 1); assert.equal(h.generations.length, 0);
+  assert.equal(h.byId('details-rating-input').value, '5'); assert.equal(h.byId('details-panel').hidden, false);
+  await openSources(h); importButton(h).disabled = false; importButton(h).fire('click');
+  h.byId('add-source-folder').disabled = false; h.byId('add-source-folder').fire('click'); await settle();
+  assert.equal(h.videoImports.length, 0); assert.equal(h.sourceAdditions, 0);
+  assert.match(h.byId('source-folders-status').textContent, /notes, tags and rating/);
+});
+
+test('discard restores the saved rating and clears rating intent before later text edits', async () => {
+  const h = harness(); await selectFirst(h); chooseRating(h, '5');
+  h.byId('discard-details').fire('click'); await settle(); await settle();
+  assert.equal(h.byId('details-rating-input').value, '4'); assert.equal(h.byId('save-details').disabled, true);
+  draftNotes(h, 'Notes after discard'); h.byId('save-details').fire('click'); await settle();
+  assert.equal(Object.hasOwn(h.saves[0], 'rating'), false);
+});
+
+test('rating conflict and failed reload retain the draft until authoritative details are applied', async () => {
+  let reload = 0;
+  const h = harness({ save: async () => ({ status: 'conflict' }), detail: async () => ++reload === 2
+    ? { status: 'unavailable' } : detail(item(0, { rating: reload > 2 ? 2 : 4 })) });
+  await selectFirst(h); chooseRating(h, '5'); h.byId('save-details').fire('click'); await settle();
+  assert.equal(h.byId('details-rating-input').value, '5'); assert.equal(h.byId('save-details').disabled, true);
+  h.byId('discard-details').fire('click'); await settle();
+  assert.equal(h.byId('details-rating-input').value, '5'); assert.match(h.byId('edit-status').textContent, /edits are still here/);
+  h.byId('discard-details').fire('click'); await settle(); await settle();
+  assert.equal(h.byId('details-rating-input').value, '2'); assert.equal(h.byId('save-details').disabled, true);
+});
+
+test('rating changes are blocked during composition, unsaved protection settings and admitted operations', async () => {
+  for (const operation of ['composition', 'protection-draft', 'save', 'discard', 'regenerate', 'import', 'source', 'protection-save']) {
+    const pending = deferred(); let reading = false;
+    const h = harness({ save: () => pending.promise, detail: async () => reading ? pending.promise : detail(),
+      regenerate: () => pending.promise, importVideo: () => pending.promise, connectSource: () => pending.promise,
+      setProtection: () => pending.promise }); await selectFirst(h);
+    if (operation === 'composition') h.byId('details-notes').fire('compositionstart');
+    if (operation === 'save') { draftNotes(h); h.byId('save-details').fire('click'); }
+    if (operation === 'discard') { draftNotes(h); reading = true; h.byId('discard-details').fire('click'); }
+    if (operation === 'regenerate') h.byId('regenerate-previews').fire('click');
+    if (operation === 'import' || operation === 'source') {
+      await openSources(h);
+      if (operation === 'import') importButton(h).fire('click');
+      else h.byId('source-folders-list').children[0].querySelector('button')!.fire('click');
+    }
+    if (operation.startsWith('protection')) {
+      h.byId('protection-button').fire('click'); await settle(); h.byId('auto-lock-minutes').value = '15';
+      h.byId('auto-lock-minutes').fire('change');
+      if (operation === 'protection-save') h.byId('save-protection').fire('click');
+    }
+    assert.equal(h.byId('details-rating-input').disabled, true, operation);
+    chooseRating(h, '5'); assert.equal(h.byId('details-rating-input').value, '4', operation);
+    if (operation === 'protection-draft') assert.equal(h.byId('auto-lock-minutes').value, '15');
+    h.byId('lock-hub').fire('click'); pending.resolve({ status: 'unavailable' }); await settle();
+    assert.equal(h.byId('details-rating-input').value, '');
+  }
+});
+
+test('rating draft is immutable during a pending save and lock/pagehide discard late replies', async () => {
+  for (const ending of ['save', 'lock', 'pagehide']) {
+    const pending = deferred(); const h = harness({ save: () => pending.promise }); await selectFirst(h);
+    chooseRating(h, '5'); h.byId('save-details').fire('click'); chooseRating(h, '2');
+    assert.equal(h.saves[0].rating, 5); assert.equal(h.byId('details-rating-input').value, '5');
+    if (ending === 'lock') h.byId('lock-hub').fire('click');
+    if (ending === 'pagehide') h.window.fire('pagehide');
+    pending.resolve({ status: 'saved', item: detail(item(0, { rating: 5, favourite: true })).item }); await settle(); await settle();
+    assert.equal(h.byId('details-rating-input').value, ending === 'save' ? '5' : '');
+    assert.equal(h.byId('details-rating-input').disabled, ending !== 'save');
+    if (ending !== 'save') { assert.equal(h.byId('details-rating').textContent, ''); assert.equal(h.cards.length, 0); }
+  }
+});
+
+test('saved rating refreshes Favourites and rating order without closing saved details', async () => {
+  let current = 5;
+  const h = harness({ detail: async () => detail(item(0, { rating: current, favourite: current === 5 })),
+    list: async request => ready(request.collection === 'favourites' && current !== 5 ? [] : [item(0, { rating: current, favourite: current === 5 })]),
+    save: async request => { current = request.rating!; return { status: 'saved', item: detail(item(0, { rating: current, favourite: current === 5 })).item }; } });
+  await settle(); selectCollection(h, 'favourites'); await settle(); selectSort(h, 'rating'); await settle(); await selectFirst(h);
+  chooseRating(h, '3'); h.byId('save-details').fire('click'); await settle(); await settle();
+  assert.equal(h.cards.length, 0); assert.equal(h.byId('details-panel').hidden, false);
+  assert.equal(h.byId('details-rating-input').value, '3'); assert.doesNotMatch(h.byId('details-rating').textContent, /Favourite/);
+  assert.deepEqual(h.requests.at(-1), { query: '', offset: 0, collection: 'favourites', sort: 'rating', direction: 'desc' });
+});
+
+test('read-only and invalid rating inputs never add an edit intent', async () => {
+  for (const invalid of ['', '6', '-1', '2.5', '05', '5\n', 'PRIVATE-RATING']) {
+    const h = harness(); await selectFirst(h); chooseRating(h, invalid);
+    assert.equal(h.byId('details-rating-input').value, '4'); assert.equal(h.byId('save-details').disabled, true);
+    draftNotes(h, 'Only notes'); h.byId('save-details').fire('click'); await settle();
+    assert.equal(Object.hasOwn(h.saves[0], 'rating'), false);
+  }
+  const h = harness({ detail: async () => detail(item(), { editable: false }) }); await selectFirst(h);
+  assert.equal(h.byId('details-rating-editor').hidden, true); assert.equal(h.byId('details-rating-input').disabled, true);
+  chooseRating(h, '5'); assert.equal(h.byId('details-rating-input').value, '4'); assert.equal(h.saves.length, 0);
+});
+
+
+function scanButton(h: ReturnType<typeof harness>): ElementStub {
+  return h.byId('source-folders-list').children[0].querySelector('[data-action="scan-source"]')!;
+}
+
+test('Find new videos is an explicit path-free source action and opening the panel never scans', async () => {
+  const h = harness(); await openSources(h);
+  assert.equal(scanButton(h).textContent, 'Find new videos…');
+  assert.equal(scanButton(h).getAttribute('aria-label'), 'Find new videos in Source folder 1');
+  assert.equal(scanButton(h).getAttribute('aria-describedby'), 'source-scan-help');
+  assert.match(html, /Find new videos skips links and ignored folders. Review up to 100 new videos before importing/);
+  assert.match(html, /Saves a location without adding videos/);
+  assert.deepEqual(h.sourceScans, []); assert.deepEqual(h.videoImports, []);
+  assert.ok(h.created.every(element => [...element.attributes.values()].every(value => !value.includes(sourceFolder().id))));
+  const unavailable = harness({ scanAvailable: false }); await openSources(unavailable);
+  assert.equal(scanButton(unavailable).disabled, true); assert.equal(importButton(unavailable).disabled, false);
+});
+
+test('reviewed discovery uses the shared cancellable import workflow and keeps existing Add videos separate', async () => {
+  const scan = deferred(); const h = harness({ scanSource: () => scan.promise,
+    importProgress: async () => ({ status: 'running', total: 3, processed: 1, imported: 1, duplicates: 0, failed: 0 }) });
+  await selectFirst(h); await openSources(h); h.byId('play-original').fire('click'); await settle();
+  scanButton(h).fire('click');
+  assert.deepEqual(h.sourceScans, [sourceFolder().id]); assert.deepEqual(h.videoImports, []);
+  assert.match(h.byId('source-folders-status').textContent, /Finding new videos.*Review the import before it begins/);
+  assert.equal(h.originalStops, 1); assert.equal(h.byId('preview-video').src, '');
+  assert.equal(h.byId('cancel-video-import').hidden, false); assert.equal(h.focused, h.byId('cancel-video-import'));
+  assert.match(h.byId('cancel-video-import').getAttribute('aria-label')!, /finding or importing/);
+  assert.equal(h.byId('cancel-source-connection').hidden, true);
+  assert.ok(h.byId('source-folders-list').children[0].querySelectorAll('button').every(button => button.disabled));
+  assert.equal(h.byId('gallery-collection').disabled, true); assert.equal(h.byId('details-rating-input').disabled, true);
+  await h.runTimer(); assert.match(h.byId('source-folders-status').textContent, /1 of 3 processed/);
+  h.byId('cancel-source-connection').fire('click'); assert.equal(h.sourceCancellations, 0);
+  h.byId('cancel-video-import').fire('click'); h.byId('cancel-video-import').fire('click');
+  assert.equal(h.importCancellations, 1); assert.equal(h.timers, 0);
+  assert.match(h.byId('source-folders-status').textContent, /Stopping the scan or import.*confirmation.*already being saved may finish/);
+  scan.resolve(batchResult({ outcome: 'cancelled', total: 3 })); await settle(); await settle();
+  assert.match(h.byId('source-folders-status').textContent, /1 added.*2 not processed/);
+  assert.equal(h.byId('cancel-video-import').hidden, true); assert.equal(h.focused, scanButton(h));
+  assert.equal(h.byId('details-panel').hidden, true); assert.equal(h.requests.length, 2); assert.equal(h.sourceReads, 2);
+  importButton(h).fire('click'); await settle(); await settle();
+  assert.equal(h.videoImports.length, 1); assert.equal(h.sourceScans.length, 1);
+});
+
+test('scan status messages strip native diagnostics, distinguish empty and safety limits and refresh authoritative state', async () => {
+  for (const status of ['nothing-new', 'scan-limit', 'cancelled', 'conflict', 'invalid', 'source-unavailable', 'wrong-folder', 'busy', 'unavailable', '__proto__']) {
+    const h = harness({ scanSource: async () => ({ status, paths: ['/PRIVATE-SCAN'], message: 'PRIVATE-SCAN' }) });
+    await selectFirst(h); await openSources(h); scanButton(h).fire('click'); await settle(); await settle();
+    const message = h.byId('source-folders-status').textContent;
+    assert.doesNotMatch(message, /PRIVATE-SCAN|object Object|function/);
+    assert.equal(h.requests.length, 2); assert.equal(h.sourceReads, 2); assert.equal(h.timers, 0);
+    assert.equal(scanButton(h).disabled, false); assert.equal(h.byId('details-panel').hidden, true);
+    if (status === 'nothing-new') assert.equal(message, 'No new videos found.');
+    if (status === 'scan-limit') assert.match(message, /safety limit.*Add videos… to select files/);
+    if (status === 'wrong-folder') assert.match(message, /Find new videos again.*saved folder/);
+  }
+});
+
+test('scan refreshes opaque source IDs after completion and ignores retired row closures', async () => {
+  let scanned = false; const replacement = 'e'.repeat(32);
+  const h = harness({ scanSource: async () => { scanned = true; return batchResult(); }, sources: async () => ({ status: 'ready',
+    items: [sourceFolder(1, { id: scanned ? replacement : sourceFolder().id })] }) });
+  await openSources(h); const original = scanButton(h); original.fire('click'); await settle(); await settle();
+  original.disabled = false; original.fire('click'); assert.equal(h.sourceScans.length, 1);
+  scanButton(h).fire('click'); await settle(); await settle();
+  assert.deepEqual(h.sourceScans, [sourceFolder().id, replacement]);
+});
+
+test('notes, tags, ratings and composition drafts prevent scanning without erasing edits', async () => {
+  for (const draft of ['notes', 'tags', 'rating', 'composition']) {
+    const h = harness(); await selectFirst(h); await openSources(h);
+    if (draft === 'notes') draftNotes(h, 'PRIVATE-DRAFT');
+    if (draft === 'tags') draftTag(h, 'PRIVATE-TAG');
+    if (draft === 'rating') chooseRating(h, '5');
+    if (draft === 'composition') h.byId('details-notes').fire('compositionstart');
+    const notes = h.byId('details-notes').value; const tags = h.byId('tag-draft').value; const rating = h.byId('details-rating-input').value;
+    assert.equal(scanButton(h).disabled, true); scanButton(h).disabled = false; scanButton(h).fire('click'); await settle();
+    assert.deepEqual(h.sourceScans, []); assert.equal(h.requests.length, 1);
+    assert.equal(h.byId('details-notes').value, notes); assert.equal(h.byId('tag-draft').value, tags); assert.equal(h.byId('details-rating-input').value, rating);
+    assert.match(h.byId('source-folders-status').textContent, /Save or discard.*notes, tags and rating/);
+  }
+});
+
+test('scan and progress cannot repaint after lock, pagehide or a cancelled scan replaced by Add videos', async () => {
+  for (const action of ['lock', 'pagehide', 'replace']) {
+    const pending = deferred(); const progress = deferred(); const replacement = deferred();
+    const h = harness({ scanSource: () => pending.promise, importProgress: () => progress.promise, importVideo: () => replacement.promise });
+    await openSources(h); scanButton(h).fire('click'); await h.runTimer();
+    if (action === 'lock') h.byId('lock-hub').fire('click');
+    if (action === 'pagehide') h.window.fire('pagehide');
+    if (action === 'replace') h.byId('cancel-video-import').fire('click');
+    pending.resolve({ status: 'cancelled' }); await settle(); await settle();
+    if (action === 'replace') importButton(h).fire('click');
+    const before = h.byId('source-folders-status').textContent;
+    progress.resolve({ status: 'running', total: 100, processed: 99, imported: 99, duplicates: 0, failed: 0 }); await settle();
+    assert.equal(h.byId('source-folders-status').textContent, before);
+    if (action === 'replace') { replacement.resolve(batchResult()); await settle(); await settle(); }
+    else { assert.equal(h.byId('source-folders-list').children.length, 0); assert.equal(h.requests.length, 1); }
+    assert.equal(h.timers, 0);
+  }
+});
+
+test('scan rejection and cancellation exceptions stay generic and leave Lock available', async () => {
+  const rejected = harness({ scanSource: async () => { throw new Error('/PRIVATE-SCAN'); } });
+  await openSources(rejected); scanButton(rejected).fire('click'); await settle(); await settle();
+  assert.doesNotMatch(rejected.byId('source-folders-status').textContent, /PRIVATE-SCAN/); assert.equal(rejected.timers, 0);
+  const pending = deferred(); const h = harness({ scanSource: () => pending.promise, cancelImport: () => { throw new Error('/PRIVATE-SCAN'); } });
+  await openSources(h); scanButton(h).fire('click'); h.byId('cancel-video-import').fire('click');
+  assert.match(h.byId('source-folders-status').textContent, /scan or import could not be cancelled.*lock the hub/);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /PRIVATE-SCAN/);
+  assert.equal(h.byId('lock-hub').disabled, false); h.byId('lock-hub').fire('click');
+  pending.resolve(batchResult()); await settle(); assert.equal(h.timers, 0);
 });

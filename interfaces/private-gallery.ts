@@ -1,7 +1,15 @@
 /** Narrow private-window contract. Never include keys or filesystem locations. */
 export const PRIVATE_GALLERY_PAGE_SIZE = 48;
+export const PRIVATE_GALLERY_SOURCE_LIMIT = 256;
+export const PRIVATE_GALLERY_IMPORT_LIMIT = 100;
 export const PRIVATE_GALLERY_CHANNELS = Object.freeze({
   list: 'private-gallery-list', detail: 'private-gallery-detail', save: 'private-gallery-save', lock: 'private-gallery-lock',
+  sources: 'private-gallery-sources', addSource: 'private-gallery-add-source', connectSource: 'private-gallery-connect-source',
+  relocateSource: 'private-gallery-relocate-source',
+  scanSource: 'private-gallery-scan-source',
+  importVideo: 'private-gallery-import-video', importProgress: 'private-gallery-import-progress', cancelImport: 'private-gallery-cancel-import',
+  disconnectSource: 'private-gallery-disconnect-source', cancelSourceConnection: 'private-gallery-cancel-source-connection',
+  playOriginal: 'private-gallery-play-original', stopOriginal: 'private-gallery-stop-original',
   regenerate: 'private-gallery-regenerate', cancelRegeneration: 'private-gallery-cancel-regeneration',
   protection: 'private-gallery-protection', setProtection: 'private-gallery-set-protection',
   changePassword: 'private-credentials-change-password',
@@ -11,6 +19,16 @@ export const PRIVATE_GALLERY_CHANNELS = Object.freeze({
   createUnprotectedCopy: 'private-credentials-create-unprotected-copy',
   cancelUnprotectedCopy: 'private-credentials-cancel-unprotected-copy',
 });
+export type PrivateGalleryCollection = 'all' | 'favourites' | 'recent';
+export type PrivateGallerySort = 'catalogue' | 'name' | 'date-added' | 'last-played' | 'rating' | 'duration' | 'file-size';
+export type PrivateGallerySortDirection = 'asc' | 'desc';
+export interface PrivateGalleryQuery {
+  query: string;
+  offset: number;
+  collection?: PrivateGalleryCollection;
+  sort?: PrivateGallerySort;
+  direction?: PrivateGallerySortDirection;
+}
 export interface PrivateGalleryItem {
   id: string;
   title: string;
@@ -31,8 +49,37 @@ export interface PrivateGalleryDetail extends PrivateGalleryItem {
   editable: boolean;
   revision: string;
   regenerable: boolean;
+  playable: boolean;
 }
 export type PrivateGalleryUnavailable = { status: 'busy' | 'unavailable' };
+export interface PrivateGallerySource {
+  id: string;
+  title: string;
+  videoCount: number;
+  connected: boolean;
+}
+export type PrivateGallerySources = PrivateGalleryUnavailable | { status: 'ready'; items: PrivateGallerySource[] };
+export type PrivateGallerySourceAddition = PrivateGalleryUnavailable
+  | { status: 'added' | 'cancelled' | 'conflict' | 'invalid' | 'duplicate' | 'limit' | 'source-unavailable' };
+export type PrivateGallerySourceConnection = PrivateGalleryUnavailable
+  | { status: 'cancelled' | 'conflict' | 'wrong-folder' | 'source-unavailable' }
+  | { status: 'connected'; item: PrivateGallerySource };
+export type PrivateGallerySourceDisconnection = PrivateGalleryUnavailable | { status: 'conflict' }
+  | { status: 'disconnected'; item: PrivateGallerySource };
+export type PrivateGallerySourceRelocation = PrivateGalleryUnavailable
+  | { status: 'relocated' | 'cancelled' | 'conflict' | 'invalid' | 'source-unavailable' };
+export interface PrivateGalleryImportCounts {
+  total: number;
+  processed: number;
+  imported: number;
+  duplicates: number;
+  failed: number;
+}
+export type PrivateGalleryImportProgress = { status: 'idle' | 'unavailable' }
+  | ({ status: 'running' } & PrivateGalleryImportCounts);
+export type PrivateGalleryImportResponse = PrivateGalleryUnavailable
+  | { status: 'cancelled' | 'conflict' | 'invalid' | 'duplicate' | 'limit' | 'nothing-new' | 'scan-limit' | 'source-unavailable' | 'wrong-folder' }
+  | ({ status: 'finished'; outcome: 'completed' | 'cancelled' | 'stopped' } & PrivateGalleryImportCounts);
 export type PrivateGalleryPage = PrivateGalleryUnavailable | {
   status: 'ready'; total: number; offset: number; items: PrivateGalleryItem[];
 };
@@ -42,9 +89,14 @@ export interface PrivateGalleryEdit {
   revision: string;
   notes: string;
   tags: string[];
+  /** Explicit user intent only; omission preserves the stored legacy stars. */
+  rating?: number;
 }
 export type PrivateGallerySave = PrivateGalleryUnavailable | { status: 'conflict' | 'invalid' }
   | { status: 'saved'; item: PrivateGalleryDetail };
+export type PrivateGalleryOriginalPlayback = PrivateGalleryUnavailable
+  | { status: 'cancelled' | 'conflict' | 'source-unavailable' | 'wrong-folder' | 'unsupported' }
+  | { status: 'ready'; url: string };
 export type PrivateGalleryRegeneration = PrivateGalleryUnavailable
   | { status: 'cancelled' | 'conflict' | 'source-unavailable' | 'wrong-folder' }
   | { status: 'generated'; item: PrivateGalleryDetail };

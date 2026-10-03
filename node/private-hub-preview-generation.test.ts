@@ -10,7 +10,7 @@ import { readPrivateHubPreview, writePrivateHubPreview } from './private-hub-cat
 import { generatePrivateHubPreviews } from './private-hub-preview-generation';
 import { capturePrivatePreviewSource, type PrivatePreviewSource } from './private-preview-source';
 import { createPrivatePreviewSet, privatePreviewSetRecordId, publishPrivatePreviewSet, readPrivatePreviewSet } from './private-hub-preview-set';
-import { validatePrivateJpeg } from './private-preview-plan';
+import { validatePrivateJpeg, type PrivateVideoMetadata } from './private-preview-plan';
 import * as mediaProcess from './private-media-process';
 
 const cwd = path.resolve(__dirname, '..');
@@ -50,7 +50,15 @@ test('native generation publishes verified encrypted images and clips without so
     assert.equal(options.shell, false);
     return originalSpawn(...args);
   });
-  const set = await generatePrivateHubPreviews(store, source, settings, { isCurrent: () => true });
+  const observedMetadata: PrivateVideoMetadata[] = [];
+  const set = await generatePrivateHubPreviews(store, source, settings, { isCurrent: () => true,
+    onMetadata: metadata => {
+      assert.equal(Object.isFrozen(metadata), true);
+      assert.equal(Reflect.set(metadata, 'fps', 500), false);
+      assert.equal(JSON.stringify(metadata).includes(canary), false);
+      observedMetadata.push(metadata);
+    } });
+  assert.deepEqual(observedMetadata, [{ duration: 4, width: 160, height: 90, fps: 30, hasAudio: true }]);
   assert.deepEqual(await readPrivatePreviewSet(store, source.hash), set);
   assert.equal(set.clip, true);
   assert.equal(set.screenCount, 3);
@@ -82,6 +90,38 @@ test('native generation publishes verified encrypted images and clips without so
   assert.equal(withoutClips.clip, false);
   await assert.rejects(readPrivateHubPreview(store, 'clip', source.hash));
   await assert.rejects(readPrivateHubPreview(store, 'clip-poster', source.hash));
+});
+
+test('metadata callback is skipped for invalid preview settings or catalogue geometry', async t => {
+  const { store, source } = await fixture(t);
+  let calls = 0;
+  const onMetadata = (): void => { calls++; };
+  await assert.rejects(generatePrivateHubPreviews(store, source, { ...settings, height: 999 } as unknown as ScreenshotSettings,
+    { isCurrent: () => true, onMetadata }));
+  await assert.rejects(generatePrivateHubPreviews(store, source, settings, { isCurrent: () => true, expectedScreenCount: 4, onMetadata }));
+  assert.equal(calls, 0);
+  assert.equal(await readPrivatePreviewSet(store, source.hash), undefined);
+});
+
+test('callback failure and cancellation prevent staging while draining the probe and releasing admission', async t => {
+  const { store, source, directory } = await fixture(t);
+  const before = (await fs.promises.readdir(directory)).sort();
+  let calls = 0;
+  for (const cancel of [false, true]) {
+    const controller = new AbortController();
+    await assert.rejects(generatePrivateHubPreviews(store, source, settings, { isCurrent: () => true, signal: controller.signal,
+      onMetadata: () => {
+        calls++;
+        if (cancel) { controller.abort(); } else { throw new Error(canary); }
+      } }), error => !String(error).includes(canary));
+    assert.deepEqual((await fs.promises.readdir(directory)).sort(), before);
+    assert.equal(await readPrivatePreviewSet(store, source.hash), undefined);
+    const leases = await Promise.all([source.open(), source.open()]);
+    await Promise.all(leases.map(lease => lease.close()));
+  }
+  assert.equal(calls, 2);
+  const set = await generatePrivateHubPreviews(store, source, { ...settings, clipSnippets: 0 }, { isCurrent: () => true });
+  assert.deepEqual(await readPrivatePreviewSet(store, source.hash), set);
 });
 
 test('source replacement during final encrypted staging leaves the previous active manifest intact', async t => {

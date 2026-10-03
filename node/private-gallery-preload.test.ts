@@ -10,7 +10,7 @@ const item = () => ({ id: 'a'.repeat(32), title: 'Private video', duration: 12, 
   rating: 4, favourite: false, tags: ['Birds'], thumbnailUrl: 'theatrum://app/media/thumbnails/hash-1.jpg',
   notes: 'Private notes', clipUrl: 'theatrum://app/media/clips/hash-1.mp4',
   posterUrl: 'theatrum://app/media/clips/hash-1.jpg', filmstripUrl: 'theatrum://app/media/filmstrips/hash-1.jpg',
-  truncated: false, editable: true, regenerable: true, revision: 'b'.repeat(32) });
+  truncated: false, editable: true, regenerable: true, playable: true, revision: 'b'.repeat(32) });
 const page = () => ({ status: 'ready', total: 1, offset: 0, items: [item()] });
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 function fixture(...results: unknown[]) {
@@ -30,13 +30,13 @@ function fixture(...results: unknown[]) {
     native: (next: typeof native) => { native = next; } };
 }
 
-test('sandbox preload keeps eight gallery methods and exposes six separate frozen credential methods', () => {
+test('sandbox preload keeps twenty gallery methods and exposes six separate frozen credential methods', () => {
   const f = fixture();
   assert.deepEqual(f.imported, ['electron']);
   assert.deepEqual(Object.keys(f.exposed), ['privateGallery', 'privateCredentials']);
   assert.deepEqual(Object.keys(f.credentials).sort(), ['cancelUnprotectedCopy', 'changePassword', 'createUnprotectedCopy', 'disableTouchId', 'enableTouchId', 'touchIdStatus']);
   assert.equal(Object.isFrozen(f.credentials), true);
-  assert.deepEqual(Object.keys(f.bridge).sort(), ['cancelRegeneration', 'detail', 'list', 'lock', 'protection', 'regenerate', 'save', 'setProtection']);
+  assert.deepEqual(Object.keys(f.bridge).sort(), ['addSource', 'cancelImport', 'cancelRegeneration', 'cancelSourceConnection', 'connectSource', 'detail', 'disconnectSource', 'importProgress', 'importVideo', 'list', 'lock', 'playOriginal', 'protection', 'regenerate', 'relocateSource', 'save', 'scanSource', 'setProtection', 'sources', 'stopOriginal']);
   assert.equal(Object.isFrozen(f.bridge), true);
   for (const key of ['ipc', 'on', 'send', 'invoke', 'files', 'clipboard', 'unlock', 'password', 'process']) {
     assert.equal(f.bridge[key], undefined);
@@ -565,4 +565,540 @@ test('Touch ID status snapshots only validated native outcome and state primitiv
     get state() { return ++stateReads === 1 ? 'enabled' : '/private'; } });
   assert.deepEqual(plain(await f.credentials.touchIdStatus()), { outcome: 'available', state: 'enabled' });
   assert.equal(outcomeReads, 1); assert.equal(stateReads, 1);
+});
+
+
+const sourceFolder = () => ({ id: 'c'.repeat(32), title: 'Source folder 1', videoCount: 20, connected: false });
+
+test('source methods send exact bounded requests and strip paths, native indices and unknown reply fields', async () => {
+  const folder = sourceFolder();
+  const f = fixture({ status: 'ready', items: [{ ...folder, root: '/private/path', index: 3, identity: 'secret' }], path: '/secret' });
+  assert.deepEqual(plain(await f.bridge.sources()), { status: 'ready', items: [folder] });
+  assert.deepEqual(f.invoked, [[channels.sources]]);
+  f.native(async () => ({ status: 'connected', item: { ...folder, connected: true, path: '/secret' } }));
+  assert.deepEqual(plain(await f.bridge.connectSource(folder.id)), { status: 'connected', item: { ...folder, connected: true } });
+  f.native(async () => ({ status: 'disconnected', item: { ...folder, path: '/secret' } }));
+  assert.deepEqual(plain(await f.bridge.disconnectSource(folder.id)), { status: 'disconnected', item: folder });
+  assert.deepEqual(f.invoked.slice(1), [[channels.connectSource, folder.id], [channels.disconnectSource, folder.id]]);
+});
+
+test('source preload rejects forged request shapes and malformed or excessive reply projections', async () => {
+  const f = fixture();
+  for (const method of ['connectSource', 'disconnectSource', 'relocateSource', 'importVideo', 'scanSource']) {
+    for (const args of [[], ['/private/path'], [{ id: 'c'.repeat(32) }], ['c'.repeat(32), 'extra']]) {
+      assert.deepEqual(plain(await f.bridge[method](...args)), { status: 'unavailable' });
+    }
+  }
+  assert.deepEqual(plain(await f.bridge.sources(undefined)), { status: 'unavailable' });
+  assert.equal(f.invoked.length, 0);
+  for (const items of [
+    [sourceFolder(), sourceFolder()], Array.from({ length: 257 }, sourceFolder),
+    [{ ...sourceFolder(), title: '/secret/source' }], [{ ...sourceFolder(), title: 'Source folder 257' }], [{ ...sourceFolder(), title: 'Source folder 1\n' }],
+    [{ ...sourceFolder(), videoCount: 100_001 }], [{ ...sourceFolder(), videoCount: 1.5 }],
+    [{ ...sourceFolder(), connected: 'yes' }], [{ ...sourceFolder(), id: 'native-index' }],
+  ]) {
+    f.native(async () => ({ status: 'ready', items }));
+    assert.deepEqual(plain(await f.bridge.sources()), { status: 'unavailable' });
+  }
+  f.native(async () => ({ status: 'connected', item: sourceFolder() }));
+  assert.deepEqual(plain(await f.bridge.connectSource(sourceFolder().id)), { status: 'unavailable' });
+  f.native(async () => ({ status: 'disconnected', item: { ...sourceFolder(), connected: true } }));
+  assert.deepEqual(plain(await f.bridge.disconnectSource(sourceFolder().id)), { status: 'unavailable' });
+});
+
+test('source cancellation is one-way, coalesced and gated while shared requests are pending', async () => {
+  const f = fixture();
+  let finish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  const work = f.bridge.connectSource(sourceFolder().id);
+  assert.deepEqual(plain(await f.bridge.sources()), { status: 'busy' });
+  assert.deepEqual(plain(await f.bridge.protection()), { status: 'busy' });
+  assert.deepEqual(plain(await f.credentials.changePassword({ currentPassword: 'current', newPassword: 'replacement' })), { status: 'busy' });
+  f.bridge.cancelSourceConnection('extra');
+  f.bridge.cancelRegeneration();
+  assert.equal(f.sent.length, 0);
+  f.bridge.cancelSourceConnection(); f.bridge.cancelSourceConnection();
+  assert.deepEqual(f.sent, [[channels.cancelSourceConnection]]);
+  finish({ status: 'cancelled', path: '/secret' });
+  assert.deepEqual(plain(await work), { status: 'cancelled' });
+  f.bridge.cancelSourceConnection();
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.invoked.length, 1);
+});
+
+test('source lock discards late connection response and prevents further requests and cancellation', async () => {
+  const f = fixture();
+  let finish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  const work = f.bridge.connectSource(sourceFolder().id);
+  f.bridge.lock();
+  finish({ status: 'connected', item: { ...sourceFolder(), connected: true } });
+  assert.deepEqual(plain(await work), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.sources()), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.disconnectSource(sourceFolder().id)), { status: 'unavailable' });
+  f.bridge.cancelSourceConnection();
+  assert.deepEqual(f.sent, [[channels.lock]]);
+  assert.equal(f.invoked.length, 1);
+});
+
+test('relocation exposes only an allowlisted status and one opaque source ID', async () => {
+  for (const status of ['relocated', 'cancelled', 'conflict', 'invalid', 'source-unavailable', 'busy', 'unavailable']) {
+    const f = fixture({ status, root: '/secret', digest: 'secret', review: { path: '/secret' } });
+    assert.deepEqual(plain(await f.bridge.relocateSource(sourceFolder().id)), { status });
+    assert.deepEqual(f.invoked, [[channels.relocateSource, sourceFolder().id]]);
+  }
+  for (const result of [null, undefined, true, [], '/secret', { status: 'ready', path: '/secret' }, new Error('/secret')]) {
+    const f = fixture(result);
+    assert.deepEqual(plain(await f.bridge.relocateSource(sourceFolder().id)), { status: 'unavailable' });
+  }
+});
+
+test('relocation shares the pending gate and source cancellation without exposing a late result after lock', async () => {
+  for (const locking of [false, true]) {
+    const f = fixture();
+    let finish!: (value: unknown) => void;
+    f.native(() => new Promise(resolve => { finish = resolve; }));
+    const work = f.bridge.relocateSource(sourceFolder().id);
+    for (const operation of [() => f.bridge.sources(), () => f.bridge.connectSource(sourceFolder().id),
+      () => f.bridge.relocateSource(sourceFolder().id), () => f.bridge.list({ query: '', offset: 0 })]) {
+      assert.deepEqual(plain(await operation()), { status: 'busy' });
+    }
+    f.bridge.cancelSourceConnection('extra'); f.bridge.cancelRegeneration();
+    assert.equal(f.sent.length, 0);
+    f.bridge.cancelSourceConnection(); f.bridge.cancelSourceConnection();
+    assert.deepEqual(f.sent, [[channels.cancelSourceConnection]]);
+    if (locking) { f.bridge.lock(); }
+    finish({ status: 'relocated', root: '/secret' });
+    assert.deepEqual(plain(await work), { status: locking ? 'unavailable' : 'relocated' });
+    f.bridge.cancelSourceConnection();
+    assert.equal(f.sent.length, locking ? 2 : 1);
+  }
+});
+
+
+test('original playback uses its narrow request and strips all fields except the opaque URL', async () => {
+  const url = 'theatrum://app/original/' + '0123456789abcdef'.repeat(4);
+  const f = fixture({ status: 'ready', url, path: '/private/source', fd: 12 });
+  const request = { id: 'a'.repeat(32), revision: 'b'.repeat(32) };
+  assert.deepEqual(plain(await f.bridge.playOriginal(request)), { status: 'ready', url });
+  assert.deepEqual(f.invoked, [[channels.playOriginal, request]]);
+  f.bridge.stopOriginal(); assert.deepEqual(f.sent, [[channels.stopOriginal]]);
+});
+
+test('original playback accepts only the exact capability origin, path and 64 lowercase hex token', async () => {
+  const valid = 'theatrum://app/original/' + 'a'.repeat(64);
+  const urls = ['', 'file:///private/source.mp4', 'https://example.com/video', valid + '\n', valid + '\0',
+    valid + '?v=1', valid + '#fragment', valid + '/', valid.slice(0, -1), valid + 'a',
+    valid.replace('app', 'other'), valid.replace('app/', 'app:80/'), valid.replace('app/', 'user@app/'),
+    valid.replace('/original/', '/originals/'), valid.replace('/original/', '/%6friginal/'),
+    valid.replace('a'.repeat(64), 'A'.repeat(64)), valid.replace('a'.repeat(64), 'g'.repeat(64))];
+  for (const url of urls) {
+    const f = fixture({ status: 'ready', url });
+    assert.deepEqual(plain(await f.bridge.playOriginal({ id: 'a'.repeat(32), revision: 'b'.repeat(32) })),
+      { status: 'unavailable' }, JSON.stringify(url));
+  }
+});
+
+test('original playback validates own data properties without reading getters or allowing extra fields', async () => {
+  let reads = 0;
+  const request = { id: 'a'.repeat(32), revision: 'b'.repeat(32) };
+  const f = fixture();
+  const invalid = [null, [], {}, { ...request, path: '/private/source' }, { ...request, [Symbol('secret')]: true },
+    { ...request, id: 'g'.repeat(32) }, { ...request, revision: 'a'.repeat(33) },
+    { id: request.id, get revision() { reads++; return request.revision; } }];
+  for (const value of invalid) { assert.deepEqual(plain(await f.bridge.playOriginal(value)), { status: 'unavailable' }); }
+  assert.deepEqual(plain(await f.bridge.playOriginal(request, 'extra')), { status: 'unavailable' });
+  f.bridge.stopOriginal('extra');
+  assert.equal(reads, 0); assert.deepEqual(f.invoked, []); assert.deepEqual(f.sent, []);
+});
+
+test('stop remains available during pending original start and discards a late ready response', async () => {
+  const f = fixture(); let finish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  const work = f.bridge.playOriginal({ id: 'a'.repeat(32), revision: 'b'.repeat(32) });
+  assert.deepEqual(plain(await f.bridge.sources()), { status: 'busy' });
+  f.bridge.stopOriginal(); assert.deepEqual(f.sent, [[channels.stopOriginal]]);
+  finish({ status: 'ready', url: 'theatrum://app/original/' + 'a'.repeat(64) });
+  assert.deepEqual(plain(await work), { status: 'cancelled' });
+});
+
+test('lock discards a pending original start and suppresses all later stop requests', async () => {
+  const f = fixture(); let finish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  const work = f.bridge.playOriginal({ id: 'a'.repeat(32), revision: 'b'.repeat(32) });
+  f.bridge.lock(); f.bridge.stopOriginal();
+  finish({ status: 'ready', url: 'theatrum://app/original/' + 'a'.repeat(64) });
+  assert.deepEqual(plain(await work), { status: 'unavailable' });
+  assert.deepEqual(f.sent, [[channels.lock]]);
+});
+
+test('original playback failure responses are a fixed path-free whitelist', async () => {
+  for (const status of ['cancelled', 'conflict', 'source-unavailable', 'wrong-folder', 'unsupported', 'busy', 'unavailable']) {
+    const f = fixture({ status, path: '/private/source', error: 'private detail' });
+    assert.deepEqual(plain(await f.bridge.playOriginal({ id: 'a'.repeat(32), revision: 'b'.repeat(32) })), { status });
+  }
+  const f = fixture({ status: 'granted', path: '/private/source' });
+  assert.deepEqual(plain(await f.bridge.playOriginal({ id: 'a'.repeat(32), revision: 'b'.repeat(32) })), { status: 'unavailable' });
+});
+
+
+test('import sends one exact opaque source ID and returns only fixed preselection statuses', async () => {
+  for (const status of ['cancelled', 'conflict', 'invalid', 'duplicate', 'limit', 'source-unavailable', 'wrong-folder', 'busy', 'unavailable']) {
+    const f = fixture({ status, path: '/PRIVATE-IMPORT', item: { fileName: 'PRIVATE-IMPORT' }, error: 'PRIVATE-IMPORT' });
+    assert.deepEqual(plain(await f.bridge.importVideo(sourceFolder().id)), { status });
+    assert.deepEqual(f.invoked, [[channels.importVideo, sourceFolder().id]]);
+  }
+  const f = fixture();
+  for (const args of [[], [null], [{}], [['c'.repeat(32)]], ['c'.repeat(31)], ['C'.repeat(32)], ['c'.repeat(32) + '\n'],
+    ['c'.repeat(32) + '\0'], [sourceFolder().id, 'extra'], [{ id: sourceFolder().id, path: '/PRIVATE-IMPORT' }]]) {
+    assert.deepEqual(plain(await f.bridge.importVideo(...args)), { status: 'unavailable' });
+  }
+  assert.deepEqual(f.invoked, []);
+});
+
+test('malformed import responses and exceptions cannot expose native contents', async () => {
+  for (const response of [null, undefined, [], Object.assign([], { status: 'imported' }), '/PRIVATE-IMPORT',
+    { status: '__proto__' }, { status: 'constructor' }, { status: { toString: () => '/PRIVATE-IMPORT' } },
+    new Error('/PRIVATE-IMPORT'), { status: 'ready', path: '/PRIVATE-IMPORT' }]) {
+    const f = fixture(response);
+    assert.deepEqual(plain(await f.bridge.importVideo(sourceFolder().id)), { status: 'unavailable' });
+  }
+  let reads = 0;
+  const f = fixture({ get status() { return ++reads === 1 ? 'cancelled' : '/PRIVATE-IMPORT'; } });
+  assert.deepEqual(plain(await f.bridge.importVideo(sourceFolder().id)), { status: 'cancelled' });
+  assert.equal(reads, 1);
+});
+
+test('import cancellation is one-shot, does not release admission and cannot cancel unrelated work', async () => {
+  const f = fixture(); let finish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  f.bridge.cancelImport(); assert.deepEqual(f.sent, []);
+  const listing = f.bridge.sources(); f.bridge.cancelImport(); assert.deepEqual(f.sent, []);
+  finish({ status: 'ready', items: [] }); await listing;
+  const work = f.bridge.importVideo(sourceFolder().id);
+  f.bridge.cancelImport('extra'); f.bridge.cancelSourceConnection(); f.bridge.cancelRegeneration();
+  assert.deepEqual(f.sent, []);
+  f.bridge.cancelImport(); f.bridge.cancelImport();
+  assert.deepEqual(f.sent, [[channels.cancelImport]]);
+  for (const operation of [() => f.bridge.importVideo(sourceFolder().id), () => f.bridge.sources(),
+    () => f.bridge.detail(item().id), () => f.bridge.list({ query: '', offset: 0 }),
+    () => f.credentials.changePassword({ currentPassword: 'current', newPassword: 'replacement' })]) {
+    assert.deepEqual(plain(await operation()), { status: 'busy' });
+  }
+  finish(importResult());
+  assert.deepEqual(plain(await work), importResult(), 'Cancellation does not hide a completed catalogue publication');
+  f.bridge.cancelImport(); assert.equal(f.sent.length, 1);
+  f.native(async () => ({ status: 'ready', items: [] }));
+  assert.equal((await f.bridge.sources()).status, 'ready');
+});
+
+test('lock permanently suppresses an admitted import and prevents late import cancellation', async () => {
+  const f = fixture(); let finish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  const work = f.bridge.importVideo(sourceFolder().id);
+  f.bridge.lock(); f.bridge.cancelImport();
+  finish({ status: 'imported', path: '/PRIVATE-IMPORT' });
+  assert.deepEqual(plain(await work), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.importVideo(sourceFolder().id)), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.sources()), { status: 'unavailable' });
+  assert.deepEqual(f.sent, [[channels.lock]]); assert.equal(f.invoked.length, 1);
+});
+
+
+test('add source takes no renderer arguments and returns only a fixed status', async () => {
+  for (const status of ['added', 'cancelled', 'conflict', 'invalid', 'duplicate', 'limit', 'source-unavailable', 'busy', 'unavailable']) {
+    const f = fixture({ status, path: '/PRIVATE-SOURCE', source: { name: 'PRIVATE-SOURCE' }, error: 'PRIVATE-SOURCE' });
+    assert.deepEqual(plain(await f.bridge.addSource()), { status });
+    assert.deepEqual(f.invoked, [[channels.addSource]]);
+  }
+  const f = fixture();
+  for (const args of [[undefined], [null], [{}], [sourceFolder().id], ['/PRIVATE-SOURCE'], [1, 2]]) {
+    assert.deepEqual(plain(await f.bridge.addSource(...args)), { status: 'unavailable' });
+  }
+  assert.deepEqual(f.invoked, []);
+});
+
+test('malformed add-source responses and native errors expose no private contents', async () => {
+  for (const response of [null, undefined, [], Object.assign([], { status: 'added' }), '/PRIVATE-SOURCE',
+    { status: '__proto__' }, { status: 'constructor' }, { status: { toString: () => '/PRIVATE-SOURCE' } },
+    new Error('/PRIVATE-SOURCE'), { status: 'ready', path: '/PRIVATE-SOURCE' }, { get status() { throw new Error('/PRIVATE-SOURCE'); } }]) {
+    const f = fixture(response);
+    assert.deepEqual(plain(await f.bridge.addSource()), { status: 'unavailable' });
+  }
+  let reads = 0;
+  const f = fixture({ get status() { return ++reads === 1 ? 'added' : '/PRIVATE-SOURCE'; } });
+  assert.deepEqual(plain(await f.bridge.addSource()), { status: 'added' });
+  assert.equal(reads, 1);
+});
+
+test('source-add cancellation is one-shot and retains admission through committed saves', async () => {
+  const f = fixture(); let finish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  f.bridge.cancelSourceConnection(); assert.deepEqual(f.sent, []);
+  const work = f.bridge.addSource();
+  f.bridge.cancelSourceConnection('extra'); f.bridge.cancelImport(); f.bridge.cancelRegeneration();
+  assert.deepEqual(f.sent, []);
+  f.bridge.cancelSourceConnection(); f.bridge.cancelSourceConnection();
+  assert.deepEqual(f.sent, [[channels.cancelSourceConnection]]);
+  for (const operation of [() => f.bridge.addSource(), () => f.bridge.sources(), () => f.bridge.importVideo(sourceFolder().id),
+    () => f.bridge.detail(item().id), () => f.bridge.list({ query: '', offset: 0 }),
+    () => f.credentials.changePassword({ currentPassword: 'current', newPassword: 'replacement' })]) {
+    assert.deepEqual(plain(await operation()), { status: 'busy' });
+  }
+  finish({ status: 'added' });
+  assert.deepEqual(plain(await work), { status: 'added' });
+  f.bridge.cancelSourceConnection(); assert.equal(f.sent.length, 1);
+  f.native(async () => ({ status: 'ready', items: [] }));
+  assert.equal((await f.bridge.sources()).status, 'ready');
+});
+
+test('lock suppresses pending source-add responses and all later source actions', async () => {
+  const f = fixture(); let finish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  const work = f.bridge.addSource(); f.bridge.lock(); f.bridge.cancelSourceConnection();
+  finish({ status: 'added', path: '/PRIVATE-SOURCE' });
+  assert.deepEqual(plain(await work), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.addSource()), { status: 'unavailable' });
+  assert.deepEqual(f.sent, [[channels.lock]]); assert.equal(f.invoked.length, 1);
+});
+
+
+function importResult(overrides: Record<string, unknown> = {}): any {
+  return { status: 'finished', outcome: 'completed', total: 1, processed: 1, imported: 1, duplicates: 0, failed: 0, ...overrides };
+}
+
+test('batch import copies only validated counters and outcomes, stripping filenames and native errors', async () => {
+  for (const outcome of ['completed', 'cancelled', 'stopped']) {
+    const result = importResult({ outcome, total: 4, processed: outcome === 'completed' ? 4 : 3,
+      imported: 1, duplicates: 1, failed: outcome === 'completed' ? 2 : 1 });
+    const f = fixture({ ...result, paths: ['/PRIVATE-BATCH'], error: '/PRIVATE-BATCH', items: [{ title: '/PRIVATE-BATCH' }] });
+    assert.deepEqual(plain(await f.bridge.importVideo(sourceFolder().id)), result);
+  }
+  const empty = importResult({ outcome: 'cancelled', total: 100, processed: 0, imported: 0 });
+  assert.deepEqual(plain(await fixture(empty).bridge.importVideo(sourceFolder().id)), empty);
+});
+
+test('batch import and progress reject inconsistent, unbounded and malformed counters', async () => {
+  const malformed = [
+    ...['total', 'processed', 'imported', 'duplicates', 'failed'].flatMap(key =>
+      [undefined, null, -1, 101, 0.5, '1', NaN, Infinity, {}, Number.MAX_SAFE_INTEGER + 1].map(value => ({ [key]: value }))),
+    { total: 0, processed: 0, imported: 0 }, { total: 1, processed: 2, imported: 2 },
+    { processed: 1, imported: 0 }, { processed: 1, imported: 1, duplicates: 1 },
+  ];
+  for (const change of malformed) {
+    for (const mode of ['importVideo', 'scanSource', 'importProgress']) {
+      const f = fixture(importResult({ status: mode === 'importProgress' ? 'running' : 'finished', ...change }));
+      assert.deepEqual(plain(await f.bridge[mode](...(mode !== 'importProgress' ? [sourceFolder().id] : []))), { status: 'unavailable' });
+    }
+  }
+  for (const change of [{ outcome: 'PRIVATE-BATCH' }, { outcome: undefined }, { total: 2 }, { status: 'imported' }]) {
+    assert.deepEqual(plain(await fixture(importResult(change)).bridge.importVideo(sourceFolder().id)), { status: 'unavailable' });
+  }
+});
+
+test('progress has a zero-argument channel and copies only fixed status or bounded counters', async () => {
+  const running = { status: 'running', total: 100, processed: 3, imported: 1, duplicates: 1, failed: 1 };
+  for (const result of [running, { status: 'idle' }, { status: 'unavailable' }]) {
+    const f = fixture({ ...result, path: '/PRIVATE-BATCH', error: '/PRIVATE-BATCH' });
+    assert.deepEqual(plain(await f.bridge.importProgress()), result);
+    assert.deepEqual(f.invoked, [[channels.importProgress]]);
+  }
+  for (const result of [null, [], Object.assign([], running), { status: 'busy' }, importResult(),
+    { status: 'running' }, { status: 'toString' }, new Error('/PRIVATE-BATCH')]) {
+    assert.deepEqual(plain(await fixture(result).bridge.importProgress()), { status: 'unavailable' });
+  }
+  const f = fixture(running);
+  for (const args of [[null], [sourceFolder().id], [{}], [undefined]]) {
+    assert.deepEqual(plain(await f.bridge.importProgress(...args)), { status: 'unavailable' });
+  }
+  assert.deepEqual(f.invoked, []);
+});
+
+test('progress alone bypasses import admission while cancellation and other actions remain gated', async () => {
+  const f = fixture(); let finish!: (value: unknown) => void; let progressFinish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  const work = f.bridge.importVideo(sourceFolder().id);
+  f.native(() => new Promise(resolve => { progressFinish = resolve; }));
+  const progress = f.bridge.importProgress();
+  assert.deepEqual(plain(await f.bridge.importProgress()), { status: 'unavailable' }, 'Only one progress request is admitted at a time');
+  assert.deepEqual(plain(await f.bridge.sources()), { status: 'busy' });
+  f.bridge.cancelImport(); f.bridge.cancelImport();
+  assert.deepEqual(f.sent, [[channels.cancelImport]]);
+  progressFinish({ status: 'running', total: 2, processed: 1, imported: 1, duplicates: 0, failed: 0 });
+  assert.equal((await progress).status, 'running');
+  assert.deepEqual(plain(await f.bridge.importVideo(sourceFolder().id)), { status: 'busy' });
+  finish(importResult()); assert.deepEqual(plain(await work), importResult());
+  assert.deepEqual(f.invoked, [[channels.importVideo, sourceFolder().id], [channels.importProgress]]);
+});
+
+test('progress does not bypass unrelated operations, including credential admission', async () => {
+  for (const mode of ['list', 'addSource', 'password', 'touchId']) {
+    const f = fixture(); let finish!: (value: unknown) => void;
+    f.native(() => new Promise(resolve => { finish = resolve; }));
+    const work = mode === 'list' ? f.bridge.list({ query: '', offset: 0 }) : mode === 'addSource' ? f.bridge.addSource()
+      : mode === 'password' ? f.credentials.changePassword({ currentPassword: 'current', newPassword: 'new' }) : f.credentials.touchIdStatus();
+    assert.deepEqual(plain(await f.bridge.importProgress()), { status: 'unavailable' });
+    assert.equal(f.invoked.length, 1); finish({ status: 'unavailable' }); await work;
+  }
+});
+
+test('locking, completing or replacing an import suppresses outstanding progress responses', async () => {
+  for (const action of ['lock', 'complete', 'replace']) {
+    const f = fixture(); let finish!: (value: unknown) => void; let progressFinish!: (value: unknown) => void;
+    f.native(() => new Promise(resolve => { finish = resolve; }));
+    const work = f.bridge.importVideo(sourceFolder().id);
+    f.native(() => new Promise(resolve => { progressFinish = resolve; }));
+    const progress = f.bridge.importProgress();
+    if (action === 'lock') { f.bridge.lock(); }
+    finish(importResult()); await work;
+    let replacement: Promise<unknown> | undefined;
+    if (action === 'replace') {
+      f.native(() => new Promise(resolve => { finish = resolve; }));
+      replacement = f.bridge.importVideo(sourceFolder().id);
+    }
+    progressFinish({ status: 'running', total: 1, processed: 1, imported: 1, duplicates: 0, failed: 0 });
+    assert.deepEqual(plain(await progress), { status: 'unavailable' });
+    if (replacement) { finish(importResult()); await replacement; }
+    if (action === 'lock') { assert.deepEqual(plain(await f.bridge.importProgress()), { status: 'unavailable' }); }
+  }
+});
+
+
+test('list copies optional bounded collection/sort/direction fields and accepts legacy requests', async () => {
+  for (const collection of ['all', 'favourites', 'recent']) {
+    for (const sort of ['catalogue', 'name', 'date-added', 'last-played', 'rating', 'duration', 'file-size']) {
+      for (const direction of ['asc', 'desc']) {
+        const request = { query: 'Birds', offset: 48, collection, sort, direction };
+        const f = fixture(); await f.bridge.list(request);
+        assert.deepEqual(f.invoked, [[channels.list, request]]);
+      }
+    }
+  }
+  for (const extra of [{}, { collection: 'recent' }, { sort: 'name' }, { direction: 'desc' }]) {
+    const f = fixture(); const request = { query: '', offset: 0, ...extra };
+    await f.bridge.list(request); assert.deepEqual(f.invoked, [[channels.list, request]]);
+  }
+});
+
+test('list rejects unknown, inherited, accessor and symbolic query fields without executing accessors', async () => {
+  let reads = 0;
+  const requests = [
+    { query: '', offset: 0, collection: 'recently-played' }, { query: '', offset: 0, sort: 'path' },
+    { query: '', offset: 0, direction: 'DESC' }, { query: '', offset: 0, [Symbol('secret')]: 'secret' },
+    Object.create({ query: '', offset: 0 }),
+    ...['collection', 'sort', 'direction'].flatMap(key => [undefined, null, [], {}, 1, ''].map(value => ({ query: '', offset: 0, [key]: value }))),
+    ...['query', 'offset', 'collection', 'sort', 'direction'].map(key => Object.defineProperty({ query: '', offset: 0 }, key,
+      { get: () => { reads++; throw new Error('PRIVATE-QUERY'); }, enumerable: true })),
+    Object.defineProperty({ query: '', offset: 0 }, 'source', { value: '/PRIVATE-QUERY', enumerable: false }),
+  ];
+  for (const request of requests) {
+    const f = fixture(); assert.deepEqual(plain(await f.bridge.list(request)), { status: 'unavailable' });
+    assert.deepEqual(f.invoked, []);
+  }
+  assert.equal(reads, 0);
+});
+
+
+test('save accepts explicit integer ratings and omits untouched legacy rating data', async () => {
+  const request = { id: item().id, revision: item().revision, notes: 'Notes', tags: ['Tag'] };
+  for (const rating of [undefined, 0, 1, 2, 3, 4, 5]) {
+    const edit = { ...request, ...(rating === undefined ? {} : { rating }) };
+    const f = fixture({ status: 'saved', item: item() }); await f.bridge.save(edit);
+    assert.deepEqual(f.invoked, [[channels.save, edit]]);
+    assert.equal(Object.hasOwn((f.invoked[0][1] as any), 'rating'), rating !== undefined);
+  }
+});
+
+test('save rejects malformed rating values, symbolic/accessor/nonenumerable fields without evaluating them', async () => {
+  const base = { id: item().id, revision: item().revision, notes: '', tags: ['Tag'] };
+  let reads = 0;
+  const malformed = [
+    ...[undefined, null, '5', -1, 6, 0.5, NaN, Infinity, {}, []].map(rating => ({ ...base, rating })),
+    { ...base, favourite: true }, { ...base, [Symbol('rating')]: 5 }, Object.create(base),
+    ...['id', 'revision', 'notes', 'tags', 'rating'].flatMap(key => [
+      Object.defineProperty({ ...base }, key, { get: () => { reads++; return 'PRIVATE'; }, enumerable: true }),
+      Object.defineProperty({ ...base }, key, { value: key === 'rating' ? 5 : (base as any)[key], enumerable: false }),
+    ]),
+  ];
+  for (const edit of malformed) {
+    const f = fixture(); assert.deepEqual(plain(await f.bridge.save(edit)), { status: 'unavailable' });
+    assert.deepEqual(f.invoked, []);
+  }
+  assert.equal(reads, 0);
+});
+
+test('rating saves reject sparse, accessor, symbolic and extra tag properties before native IPC', async () => {
+  let reads = 0;
+  const getter = Object.defineProperty(['Tag'], '0', { get: () => { reads++; return 'PRIVATE'; }, enumerable: true });
+  const hidden = Object.defineProperty(['Tag'], '0', { value: 'Tag', enumerable: false });
+  const arrays = [Array(1), getter, hidden, Object.assign(['Tag'], { extra: '/PRIVATE' }),
+    Object.assign(['Tag'], { [Symbol('secret')]: '/PRIVATE' })];
+  for (const tags of arrays) {
+    const f = fixture();
+    assert.deepEqual(plain(await f.bridge.save({ id: item().id, revision: item().revision, notes: '', tags, rating: 5 })), { status: 'unavailable' });
+    assert.deepEqual(f.invoked, []);
+  }
+  assert.equal(reads, 0);
+});
+
+
+test('scan uses one exact opaque source identity and copies only fixed statuses or validated batch counts', async () => {
+  const statuses = ['nothing-new', 'scan-limit', 'cancelled', 'conflict', 'invalid', 'duplicate', 'limit', 'source-unavailable', 'wrong-folder', 'busy', 'unavailable'];
+  for (const result of [...statuses.map(status => ({ status })), importResult(), importResult({ outcome: 'stopped', total: 2 })]) {
+    const f = fixture({ ...result, path: '/PRIVATE-SCAN', names: ['PRIVATE-SCAN'], entries: [{ path: '/PRIVATE-SCAN' }] });
+    assert.deepEqual(plain(await f.bridge.scanSource(sourceFolder().id)), result);
+    assert.deepEqual(f.invoked, [[channels.scanSource, sourceFolder().id]]);
+  }
+  const f = fixture();
+  for (const args of [[], [null], [{}], [['c'.repeat(32)]], ['c'.repeat(32) + '\n'], [sourceFolder().id, {}],
+    [{ id: sourceFolder().id, root: '/PRIVATE-SCAN' }]]) {
+    assert.deepEqual(plain(await f.bridge.scanSource(...args)), { status: 'unavailable' });
+  }
+  assert.deepEqual(f.invoked, []);
+  for (const value of [undefined, null, [], Object.assign([], { status: 'nothing-new' }), { status: 'ready', paths: ['/PRIVATE-SCAN'] },
+    { status: 'finished', outcome: 'completed', total: 3 }, new Error('/PRIVATE-SCAN')]) {
+    assert.deepEqual(plain(await fixture(value).bridge.scanSource(sourceFolder().id)), { status: 'unavailable' });
+  }
+});
+
+test('scan holds ordinary admission while progress and one-shot cancellation remain available', async () => {
+  const f = fixture(); let finish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  const scan = f.bridge.scanSource(sourceFolder().id);
+  f.native(async () => ({ status: 'idle', root: '/PRIVATE-SCAN' }));
+  assert.deepEqual(plain(await f.bridge.importProgress()), { status: 'idle' });
+  f.native(async () => ({ status: 'running', total: 2, processed: 1, imported: 1, duplicates: 0, failed: 0 }));
+  assert.equal((await f.bridge.importProgress()).status, 'running');
+  for (const operation of [() => f.bridge.scanSource(sourceFolder().id), () => f.bridge.importVideo(sourceFolder().id),
+    () => f.bridge.sources(), () => f.bridge.addSource(), () => f.bridge.list({ query: '', offset: 0 })]) {
+    assert.deepEqual(plain(await operation()), { status: 'busy' });
+  }
+  f.bridge.cancelSourceConnection(); f.bridge.cancelRegeneration(); f.bridge.cancelImport('extra'); assert.deepEqual(f.sent, []);
+  f.bridge.cancelImport(); f.bridge.cancelImport(); assert.deepEqual(f.sent, [[channels.cancelImport]]);
+  finish(importResult({ outcome: 'cancelled', total: 2 }));
+  assert.deepEqual(plain(await scan), importResult({ outcome: 'cancelled', total: 2 }));
+  f.bridge.cancelImport(); assert.equal(f.sent.length, 1);
+});
+
+test('scan completion, replacement and lock suppress late progress and stale native responses', async () => {
+  for (const action of ['finish', 'replace', 'lock']) {
+    const f = fixture(); let finish!: (value: unknown) => void; let progressFinish!: (value: unknown) => void;
+    f.native(() => new Promise(resolve => { finish = resolve; }));
+    const scan = f.bridge.scanSource(sourceFolder().id);
+    f.native(() => new Promise(resolve => { progressFinish = resolve; })); const progress = f.bridge.importProgress();
+    if (action === 'lock') f.bridge.lock();
+    finish(importResult()); const result = await scan;
+    assert.deepEqual(plain(result), action === 'lock' ? { status: 'unavailable' } : importResult());
+    let later: Promise<unknown> | undefined;
+    if (action === 'replace') {
+      f.native(() => new Promise(resolve => { finish = resolve; })); later = f.bridge.scanSource(sourceFolder().id);
+    }
+    progressFinish({ status: 'running', total: 1, processed: 1, imported: 1, duplicates: 0, failed: 0 });
+    assert.deepEqual(plain(await progress), { status: 'unavailable' });
+    if (later) { finish({ status: 'nothing-new' }); await later; }
+    if (action === 'lock') {
+      assert.deepEqual(plain(await f.bridge.scanSource(sourceFolder().id)), { status: 'unavailable' });
+      assert.deepEqual(plain(await f.bridge.importProgress()), { status: 'unavailable' });
+    }
+  }
 });

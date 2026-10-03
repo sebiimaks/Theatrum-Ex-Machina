@@ -20,11 +20,17 @@ export interface PrivatePreviewSourceOptions extends PrivatePreviewSourceLocatio
 export interface PrivatePreviewSourceLease {
   /** Independently opened, caller-borrowed descriptor. Close only through this lease. */
   readonly fd: number;
+  /** Bounded positional read; the capability retains ownership until delivery. */
+  read(position: number, length: number): Promise<Buffer>;
   close(): Promise<void>;
 }
 
 export interface PrivatePreviewSource {
   readonly hash: string;
+  readonly byteLength: number;
+  /** Filesystem timestamps in milliseconds from the verified source snapshot. */
+  readonly birthtime: number;
+  readonly mtime: number;
   readonly signal: AbortSignal;
   /** Revalidates authority and identity synchronously, including before publication. */
   isCurrent(): boolean;
@@ -35,6 +41,7 @@ export interface PrivatePreviewSource {
 interface OwnedLease {
   handle: FileHandle;
   closing?: Promise<void>;
+  reads: Set<Promise<Buffer>>;
 }
 
 const capturedSources = new WeakSet<object>();
@@ -143,9 +150,12 @@ class CapturedSource implements PrivatePreviewSource {
     const relative = path.relative(this.#location.root, this.#filePath);
     if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) { throw unavailable(); }
     this.#root = fs.lstatSync(this.#location.root, { bigint: true });
+    if (!this.#root.isDirectory() || this.#root.isSymbolicLink()
+      || fs.realpathSync.native(this.#location.root) !== this.#location.root) { throw unavailable(); }
+    this.checkParents();
     this.#file = fs.lstatSync(this.#filePath, { bigint: true });
-    if (!this.#root.isDirectory() || this.#root.isSymbolicLink() || !this.#file.isFile() || this.#file.isSymbolicLink()
-      || this.#file.size < 0n || fs.realpathSync.native(this.#location.root) !== this.#location.root
+    if (!this.#file.isFile() || this.#file.isSymbolicLink() || this.#file.size < 0n
+      || this.#file.size > BigInt(Number.MAX_SAFE_INTEGER)
       || fs.realpathSync.native(this.#filePath) !== this.#filePath) { throw unavailable(); }
     this.#externalSignal?.addEventListener('abort', this.onAbort, { once: true });
     if (!this.isCurrent()) { throw unavailable(); }
@@ -153,6 +163,9 @@ class CapturedSource implements PrivatePreviewSource {
   }
 
   get hash(): string { return this.#location.hash; }
+  get byteLength(): number { return Number(this.#file.size); }
+  get birthtime(): number { return Number(this.#file.birthtimeMs); }
+  get mtime(): number { return Number(this.#file.mtimeMs); }
   get signal(): AbortSignal { return this.#controller.signal; }
 
   private authorized(): boolean {
@@ -163,14 +176,30 @@ class CapturedSource implements PrivatePreviewSource {
     finally { this.#checking = false; }
   }
 
+  /** Check each parent before probing the leaf; never traverse a saved directory symlink. */
+  private checkParents(): void {
+    let directory = this.#location.root;
+    const relative = path.relative(directory, path.dirname(this.#filePath));
+    for (const segment of relative.split(path.sep).filter(Boolean)) {
+      if (!this.authorized()) { throw unavailable(); }
+      directory = path.join(directory, segment);
+      const stat = fs.lstatSync(directory, { bigint: true });
+      if (!stat.isDirectory() || stat.isSymbolicLink()
+        || fs.realpathSync.native(directory) !== directory) { throw unavailable(); }
+    }
+    if (!this.authorized()) { throw unavailable(); }
+  }
+
   isCurrent(): boolean {
     try {
       if (!this.authorized()) { throw unavailable(); }
       const root = fs.lstatSync(this.#location.root, { bigint: true });
+      if (!root.isDirectory() || root.isSymbolicLink() || !sameIdentity(this.#root, root)
+        || fs.realpathSync.native(this.#location.root) !== this.#location.root) { throw unavailable(); }
+      this.checkParents();
       const file = fs.lstatSync(this.#filePath, { bigint: true });
-      if (!root.isDirectory() || root.isSymbolicLink() || !sameIdentity(this.#root, root) || !sameFile(this.#file, file)
-        || fs.realpathSync.native(this.#location.root) !== this.#location.root
-        || fs.realpathSync.native(this.#filePath) !== this.#filePath || !this.authorized()) { throw unavailable(); }
+      if (!sameFile(this.#file, file) || fs.realpathSync.native(this.#filePath) !== this.#filePath
+        || !this.authorized()) { throw unavailable(); }
       return true;
     } catch {
       this.revoke();
@@ -196,7 +225,8 @@ class CapturedSource implements PrivatePreviewSource {
     this.#pending.add(opening);
     return opening.finally(() => { this.#pending.delete(opening); }).then(lease => {
       if (!this.isCurrent()) { throw unavailable(); }
-      return Object.freeze({ fd: lease.handle.fd, close: () => this.closeLease(lease) });
+      return Object.freeze({ fd: lease.handle.fd, read: (position: number, length: number) => this.readLease(lease, position, length),
+        close: () => this.closeLease(lease) });
     });
   }
 
@@ -209,7 +239,7 @@ class CapturedSource implements PrivatePreviewSource {
       if (!this.isCurrent()) { throw unavailable(); }
       const opened = await handle.stat({ bigint: true });
       if (!sameFile(this.#file, opened) || !this.isCurrent()) { throw unavailable(); }
-      const lease: OwnedLease = { handle };
+      const lease: OwnedLease = { handle, reads: new Set() };
       this.#leases.add(lease);
       return lease;
     } catch {
@@ -224,9 +254,44 @@ class CapturedSource implements PrivatePreviewSource {
     }
   }
 
+  private readLease(lease: OwnedLease, position: number, length: number): Promise<Buffer> {
+    if (lease.closing || lease.reads.size !== 0 || !this.isCurrent()
+      || !Number.isSafeInteger(position) || position < 0 || !Number.isSafeInteger(length)
+      || length < 1 || length > 256 * 1024 || position > this.byteLength - length) {
+      return Promise.reject(unavailable());
+    }
+    // Register before any asynchronous file operation can reenter cancellation.
+    const work = Promise.resolve().then(async () => {
+      let bytes: Buffer | undefined;
+      try {
+        if (lease.closing || !this.isCurrent()) { throw unavailable(); }
+        bytes = Buffer.alloc(length);
+        let offset = 0;
+        while (offset < length) {
+          if (lease.closing || !this.isCurrent()) { throw unavailable(); }
+          const result = await lease.handle.read(bytes, offset, length - offset, position + offset);
+          if (lease.closing || !this.isCurrent() || result.bytesRead <= 0 || result.bytesRead > length - offset) { throw unavailable(); }
+          offset += result.bytesRead;
+        }
+        const after = await lease.handle.stat({ bigint: true });
+        if (lease.closing || !sameFile(this.#file, after) || !this.isCurrent()) { throw unavailable(); }
+        const result = bytes;
+        bytes = undefined;
+        return result;
+      } catch { throw unavailable(); }
+      finally { bytes?.fill(0); }
+    });
+    lease.reads.add(work);
+    void work.then(() => { lease.reads.delete(work); }, () => { lease.reads.delete(work); });
+    return work;
+  }
+
   private closeLease(lease: OwnedLease): Promise<void> {
     if (!lease.closing) {
-      lease.closing = Promise.resolve().then(() => lease.handle.close()).then(() => {
+      lease.closing = Promise.resolve().then(async () => {
+        await Promise.allSettled([...lease.reads]);
+        await lease.handle.close();
+      }).then(() => {
         this.#leases.delete(lease);
         this.#slots--;
       }, () => { this.#cleanupFailed = true; this.revoke(); throw cleanupFailure(); });

@@ -8,7 +8,7 @@ import { ffmpegPath, ffprobePath } from './media-tool-paths';
 import { buildPrivatePreviewPlan, parsePrivateProbe, privateProbeCommand, validatePrivateJpeg, type PrivateMediaCommandPlan, type PrivateVideoMetadata } from './private-preview-plan';
 
 const cwd = path.resolve(__dirname, '..');
-const metadata: PrivateVideoMetadata = { duration: 60, width: 1920, height: 1080, hasAudio: true };
+const metadata: PrivateVideoMetadata = { duration: 60, width: 1920, height: 1080, fps: 30, hasAudio: true };
 const settings: ScreenshotSettings = { fixed: true, n: 3, height: 144, clipHeight: 144, clipSnippets: 3, clipSnippetLength: 1 };
 const canary = 'PRIVATE-PREVIEW-METADATA-CANARY';
 
@@ -43,11 +43,25 @@ async function sourceFixture(t: TestContext, audio: boolean): Promise<string> {
 test('metadata parser returns only bounded video properties and skips attached cover images', () => {
   const parsed = parsePrivateProbe(Buffer.from(JSON.stringify({ streams: [
     { codec_type: 'video', width: 100, height: 100, disposition: { attached_pic: 1 } },
-    { codec_type: 'video', width: 1920, height: 1080, tags: { title: canary } }, { codec_type: 'audio' },
+    { codec_type: 'video', width: 1920, height: 1080, avg_frame_rate: '30000/1001', tags: { title: canary } }, { codec_type: 'audio' },
   ], format: { duration: '60.250000', filename: canary, tags: { comment: canary } } })));
-  assert.deepEqual(parsed, { duration: 60.25, width: 1920, height: 1080, hasAudio: true });
+  assert.deepEqual(parsed, { duration: 60.25, width: 1920, height: 1080, fps: 30000 / 1001, hasAudio: true });
   assert.equal(Object.isFrozen(parsed), true);
   assert.ok(!JSON.stringify(parsed).includes(canary));
+});
+
+test('optional average frame rate accepts bounded numbers and rational strings without trusting other metadata', () => {
+  const parse = (rate: unknown): number => parsePrivateProbe(Buffer.from(JSON.stringify({ streams: [
+    { codec_type: 'video', width: 160, height: 90, avg_frame_rate: rate, r_frame_rate: '120/1', tags: { frame_rate: canary } },
+  ], format: { duration: '4' } }))).fps;
+  for (const [value, expected] of [[30, 30], [29.97, 29.97], ['29.97', 29.97], ['30000/1001', 30000 / 1001],
+    ['24/1', 24], ['1000/1', 1000], ['1/1000', 0.001], [0, 0]] as const) {
+    assert.equal(parse(value), expected);
+  }
+  for (const value of [undefined, null, true, {}, [], '', 'N/A', '0/0', '30/0', '-30/1', '30/-1', '1e2', '30.0/1',
+    'Infinity', 'NaN', '30/1/1', '1/'.padEnd(100, '0'), '9007199254740993/9007199254740993', 1001, '1001/1', -1, NaN, Infinity]) {
+    assert.equal(parse(value), 0, String(value));
+  }
 });
 
 test('metadata rejects malformed, oversized, audio-only and unreasonable input', () => {
@@ -102,6 +116,7 @@ test('settings and intervals remain bounded without silently dropping requested 
     assert.throws(() => buildPrivatePreviewPlan(metadata, { ...settings, ...patch } as ScreenshotSettings));
   }
   assert.throws(() => buildPrivatePreviewPlan({ ...metadata, duration: Infinity }, settings));
+  for (const fps of [-1, Infinity, NaN, 1001]) { assert.throws(() => buildPrivatePreviewPlan({ ...metadata, fps }, settings)); }
   const interval = buildPrivatePreviewPlan({ ...metadata, duration: 7 * 24 * 60 * 60 }, { ...settings, fixed: false, n: 1 });
   assert.equal(interval.screenCount, 255);
   assert.ok(interval.width * interval.screenCount <= 65535);
@@ -115,6 +130,7 @@ test('real FFmpeg plans generate correctly sized JPEGs and audio-preserving cont
   const source = await sourceFixture(t, true);
   const probed = parsePrivateProbe(run(privateProbeCommand(), source));
   assert.equal(probed.hasAudio, true);
+  assert.equal(probed.fps, 30);
   const plan = buildPrivatePreviewPlan(probed, settings);
   const thumbnail = run(plan.thumbnail, source);
   validatePrivateJpeg(thumbnail, plan.width, plan.height);

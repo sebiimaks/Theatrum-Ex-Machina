@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isPrivateSourcePlaybackUrl, type PrivateSourcePlayback } from './private-source-playback';
 import type { PrivateHubSession } from './private-hub-session';
 import { parseTheatrumMediaRequest } from './theatrum-protocol-paths';
 import { resolvePrivateUiDirectory } from './private-ui-paths';
@@ -19,6 +20,7 @@ const TYPES: Readonly<Record<string, string>> = Object.freeze({
 export interface PrivateBrowserProtocolOptions {
   hub: PrivateHubSession;
   generation: number;
+  playback?: Pick<PrivateSourcePlayback, 'createResponse'>;
   appDirectory: string;
   /** Main-owned capsule lifetime check; never derived from request data. */
   isCurrent: () => boolean;
@@ -58,6 +60,7 @@ function allowedPath(url: string, method: string): string | undefined {
       const cacheKey = decodeURIComponent(parsed.search.slice(3));
       if (!/^[a-zA-Z0-9._~-]{1,256}$/.test(cacheKey)) { return undefined; }
     }
+    if (segments[0] === 'original') { return isPrivateSourcePlaybackUrl(url) ? rawPath : undefined; }
     if (segments[0] === 'media') {
       return parseTheatrumMediaRequest(url) ? rawPath : undefined;
     }
@@ -102,7 +105,7 @@ function validFile(stats: fs.BigIntStats): boolean {
  * No application globals, normal-hub resolver, Electron fetch, or file URL exists here.
  */
 export function createPrivateBrowserProtocolHandler(options: PrivateBrowserProtocolOptions): (request: Request) => Promise<Response> {
-  return createProtocolHandler(options, { hub: options.hub, generation: options.generation });
+  return createProtocolHandler(options, { hub: options.hub, generation: options.generation, playback: options.playback });
 }
 
 /** Credentials are entered before unlocking: only the three bundled prompt assets exist here. */
@@ -117,7 +120,7 @@ export function createPrivateConversionProtocolHandler(options: PrivateUnlockPro
 
 function createProtocolHandler(
   options: PrivateUnlockProtocolOptions,
-  mediaAuthority?: Pick<PrivateBrowserProtocolOptions, 'hub' | 'generation'>,
+  mediaAuthority?: Pick<PrivateBrowserProtocolOptions, 'hub' | 'generation' | 'playback'>,
   staticAssets = UNLOCK_ASSETS,
 ): (request: Request) => Promise<Response> {
   const capsuleCurrent = options.isCurrent;
@@ -197,10 +200,14 @@ function createProtocolHandler(
     let admittedStaticRead = false;
     try {
       const media = requestPath.startsWith('/media/') ? parseTheatrumMediaRequest(request.url) : undefined;
-      if (media) {
-        if (!mediaAuthority) { return empty(404); }
-        const kind = media.assetType === 'thumbnails' ? 'thumbnail' : media.assetType === 'filmstrips' ? 'filmstrip' : media.video ? 'clip' : 'clip-poster';
-        response = await mediaAuthority.hub.createPreviewResponse(mediaAuthority.generation, kind, media.hash, request, { isAuthorized: () => current(request) });
+      const original = requestPath.startsWith('/original/');
+      if (media || original) {
+        if (!mediaAuthority || (original && !mediaAuthority.playback)) { return empty(404); }
+        if (original) { response = await mediaAuthority.playback!.createResponse(request); }
+        else {
+          const kind = media!.assetType === 'thumbnails' ? 'thumbnail' : media!.assetType === 'filmstrips' ? 'filmstrip' : media!.video ? 'clip' : 'clip-poster';
+          response = await mediaAuthority.hub.createPreviewResponse(mediaAuthority.generation, kind, media!.hash, request, { isAuthorized: () => current(request) });
+        }
         check(request);
         const resultHeaders = new Headers(response.headers);
         headers().forEach((value, name) => resultHeaders.set(name, value));

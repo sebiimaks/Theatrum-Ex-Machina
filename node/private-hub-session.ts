@@ -8,11 +8,16 @@ import { createPrivateHubMediaResponse } from './private-hub-media-response';
 import { PRIVATE_HUB_MEDIA_CHUNK_BYTES } from './private-hub-media';
 import { generatePrivateHubPreviews, isPrivatePreviewGenerationCleanupFailure } from './private-hub-preview-generation';
 import type { PrivatePreviewSet } from './private-hub-preview-set';
-import { isPrivatePreviewSource, privatePreviewSourceMatchesLocation, type PrivatePreviewSource } from './private-preview-source';
+import { isPrivatePreviewSource, privatePreviewSourceMatchesLocation, type PrivatePreviewSource, type PrivatePreviewSourceLocation } from './private-preview-source';
+import type { PrivateVideoMetadata } from './private-preview-plan';
+import { checkPrivateVideoImport, createPrivateImportedVideo, snapshotPrivateVideoImportLocation,
+  type PrivateVideoImportResult } from './private-video-import';
 import { PrivateHubStore, isPrivateHubStoreCleanupFailure } from './private-hub-store';
 import { CATALOGUE_FILE_MAX_BYTES, parseVhaJson } from './vha-file-persistence';
 import { applyPrivateVideoMetadata, privateVideoRevision, snapshotPrivateVideoMetadataUpdate,
   type PrivateVideoMetadataUpdate, type PrivateVideoMetadataResult } from './private-hub-metadata';
+import { isPrivateSourceRelocationReview, type PrivateSourceRelocationReview } from './private-source-relocation';
+import { isPrivateSourceAdditionReview, privateSourceRootsOverlap, type PrivateSourceAdditionReview } from './private-source-addition';
 import { snapshotPrivateHubProtection, type PrivateHubProtection } from '../interfaces/private-hub-protection';
 import { readPrivateHubProtection, writePrivateHubProtection } from './private-hub-protection';
 import { snapshotPrivateHubPasswordChange, snapshotPrivateHubPlaintextCopyRequest, snapshotPrivateHubTouchIdEnable } from '../interfaces/private-hub-credentials';
@@ -728,6 +733,170 @@ export class PrivateHubSession {
     }
   }
 
+  /** Change only one saved root after a native-selected, main-owned review. */
+  /** Append one reviewed source location without scanning it or enabling watching. */
+  async addSource(
+    generation: number, review: PrivateSourceAdditionReview, isCurrent: () => boolean,
+  ): Promise<{ status: 'added' | 'conflict' | 'invalid' | 'duplicate' | 'limit' | 'busy' }> {
+    let outputBytes: Buffer | undefined;
+    let writeReservation: Buffer | undefined;
+    let revoked = false;
+    let checking = false;
+    let published = false;
+    const current = (): boolean => {
+      if (revoked || checking) { return false; }
+      checking = true;
+      try {
+        if (!this.isCurrent(generation) || typeof isCurrent !== 'function' || isCurrent() !== true
+          || !review.isCurrent() || !this.isCurrent(generation)) { revoked = true; }
+      } catch { revoked = true; }
+      finally { checking = false; }
+      return !revoked;
+    };
+    const check = (): void => { if (!current()) { throw unavailable(); } };
+    const storageFailure = (): never => {
+      // A write may already have published before an error/cancellation arrives.
+      // Close the live generation instead of continuing with uncertain authority.
+      if (this.isCurrent(generation)) { void this.lock('storage-error').catch(() => undefined); }
+      throw unavailable();
+    };
+    try {
+      this.assertCurrent(generation);
+      if (!isPrivateSourceAdditionReview(review)) { return { status: 'invalid' }; }
+      if (this.#previewJob || this.#protectionSaving || this.#passwordChanging || this.#plaintextCopying
+        || this.#pendingWrites.size || this.#pendingOperations >= MAX_PENDING_OPERATIONS) { return { status: 'busy' }; }
+      // Reserve before invoking authority predicates or the first await: even a
+      // reentrant native adapter cannot start generation/credentials over this write.
+      writeReservation = Buffer.alloc(0);
+      this.#pendingWrites.add(writeReservation);
+      check();
+      const result = await this.enqueue(generation, async store => {
+        check();
+        if (privateSourceRootsOverlap(review.newRoot, store.directory)) { return { status: 'invalid' } as const; }
+        let raw: Buffer | undefined;
+        let catalogue: FinalObject;
+        try {
+          try { raw = await store.readRecord('catalogue', CATALOGUE_FILE_MAX_BYTES); }
+          catch { return storageFailure(); }
+          check();
+          try {
+            parseVhaJson(raw);
+            // The validator normalizes legacy fields; persist only the raw record
+            // plus this one source entry so unknown/source preferences survive.
+            catalogue = JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, '')) as FinalObject;
+          } catch { return storageFailure(); }
+        } finally { raw?.fill(0); }
+        check();
+        if (!review.matchesCatalogue(catalogue)) { return { status: 'conflict' } as const; }
+        if (!await review.validate()) { throw unavailable(); }
+        check();
+        catalogue.inputDirs[review.sourceIndex] = { path: review.newRoot, watch: false };
+        const json = JSON.stringify(catalogue);
+        if (Buffer.byteLength(json) > CATALOGUE_FILE_MAX_BYTES) { return { status: 'limit' } as const; }
+        if (Buffer.byteLength(json) + this.#pendingWriteBytes > CATALOGUE_FILE_MAX_BYTES) { return { status: 'busy' } as const; }
+        try { parseVhaJson(json); }
+        catch { return { status: 'invalid' } as const; }
+        outputBytes = Buffer.from(json);
+        this.#pendingWrites.add(outputBytes);
+        this.#pendingWriteBytes += outputBytes.length;
+        check();
+        try {
+          const writing = store.writeRecord('catalogue', outputBytes, current);
+          outputBytes.fill(0);
+          await writing;
+          published = true;
+        } catch { return storageFailure(); }
+        check();
+        return { status: 'added' } as const;
+      });
+      check();
+      return result;
+    } catch {
+      if (published && this.isCurrent(generation)) { void this.lock('storage-error').catch(() => undefined); }
+      throw unavailable();
+    } finally {
+      if (writeReservation) { this.#pendingWrites.delete(writeReservation); }
+      if (outputBytes) {
+        outputBytes.fill(0);
+        if (this.#pendingWrites.delete(outputBytes)) { this.#pendingWriteBytes -= outputBytes.length; }
+      }
+    }
+  }
+
+  async relocateSource(
+    generation: number, review: PrivateSourceRelocationReview, isCurrent: () => boolean,
+  ): Promise<{ status: 'relocated' | 'conflict' | 'invalid' | 'busy' }> {
+    let outputBytes: Buffer | undefined;
+    let writeReservation: Buffer | undefined;
+    let revoked = false;
+    const current = (): boolean => {
+      if (revoked) { return false; }
+      try {
+        if (!this.isCurrent(generation) || typeof isCurrent !== 'function' || isCurrent() !== true
+          || !review.isCurrent() || !this.isCurrent(generation)) { revoked = true; }
+      } catch { revoked = true; }
+      return !revoked;
+    };
+    const check = (): void => { if (!current()) { throw unavailable(); } };
+    const storageFailure = (): never => {
+      if (current()) { void this.lock('storage-error').catch(() => undefined); }
+      throw unavailable();
+    };
+    try {
+      this.assertCurrent(generation);
+      if (!isPrivateSourceRelocationReview(review)) { return { status: 'invalid' }; }
+      check();
+      if (this.#previewJob || this.#passwordChanging || this.#plaintextCopying
+        || this.#pendingOperations >= MAX_PENDING_OPERATIONS) { return { status: 'busy' }; }
+      // Reserve writer admission before the first await, including review validation.
+      writeReservation = Buffer.alloc(0);
+      this.#pendingWrites.add(writeReservation);
+      const result = await this.enqueue(generation, async store => {
+        check();
+        let raw: Buffer | undefined;
+        let catalogue: FinalObject;
+        try {
+          try { raw = await store.readRecord('catalogue', CATALOGUE_FILE_MAX_BYTES); }
+          catch { return storageFailure(); }
+          check();
+          try {
+            parseVhaJson(raw);
+            // Preserve raw legacy/unknown fields, including source watch settings.
+            catalogue = JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, '')) as FinalObject;
+          } catch { return storageFailure(); }
+        } finally { raw?.fill(0); }
+        check();
+        if (!review.matchesCatalogue(catalogue)) { return { status: 'conflict' } as const; }
+        if (!await review.validate()) { throw unavailable(); }
+        check();
+        catalogue.inputDirs[review.sourceIndex].path = review.newRoot;
+        const json = JSON.stringify(catalogue);
+        if (Buffer.byteLength(json) > CATALOGUE_FILE_MAX_BYTES) { return { status: 'invalid' } as const; }
+        if (Buffer.byteLength(json) + this.#pendingWriteBytes > CATALOGUE_FILE_MAX_BYTES) { return { status: 'busy' } as const; }
+        outputBytes = Buffer.from(json);
+        this.#pendingWrites.add(outputBytes);
+        this.#pendingWriteBytes += outputBytes.length;
+        check();
+        try {
+          const writing = store.writeRecord('catalogue', outputBytes, current);
+          outputBytes.fill(0);
+          await writing;
+        } catch { return storageFailure(); }
+        check();
+        return { status: 'relocated' } as const;
+      });
+      check();
+      return result;
+    } catch { throw unavailable(); }
+    finally {
+      if (writeReservation) { this.#pendingWrites.delete(writeReservation); }
+      if (outputBytes) {
+        outputBytes.fill(0);
+        if (this.#pendingWrites.delete(outputBytes)) { this.#pendingWriteBytes -= outputBytes.length; }
+      }
+    }
+  }
+
   /**
    * Main-only regeneration of an existing authenticated catalogue location.
    * Settings and strip count come from storage, never the request. One job per
@@ -798,6 +967,146 @@ export class PrivateHubSession {
     return work.then(result => {
       this.assertCurrent(generation);
       if (externalSignal?.aborted) { throw unavailable(); }
+      return result;
+    }, error => { throw isPrivatePreviewGenerationCleanupFailure(error) ? error : unavailable(); });
+  }
+
+  /**
+   * Manual, main-owned import of one selected file. A fresh preview namespace
+   * is fully encrypted before a single catalogue append makes it reachable.
+   * Admitted work consumes the source; rejected admission leaves it to caller.
+   */
+  importVideo(
+    generation: number, source: PrivatePreviewSource, location: PrivatePreviewSourceLocation,
+    options: { signal?: AbortSignal; isCurrent: () => boolean },
+  ): Promise<PrivateVideoImportResult> {
+    let selected: Readonly<PrivatePreviewSourceLocation>;
+    let externalSignal: AbortSignal | undefined;
+    let authorized: () => boolean;
+    try {
+      this.assertCurrent(generation);
+      if (!isPrivatePreviewSource(source) || !options || typeof options.isCurrent !== 'function') { throw unavailable(); }
+      selected = snapshotPrivateVideoImportLocation(location);
+      externalSignal = options.signal;
+      authorized = options.isCurrent;
+      if ((externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) || externalSignal?.aborted
+        || !privatePreviewSourceMatchesLocation(source, selected) || !source.isCurrent() || authorized() !== true
+        || this.#previewJob || this.#protectionSaving || this.#passwordChanging || this.#plaintextCopying
+        || this.#pendingWrites.size > 0 || this.#pendingOperations >= MAX_PENDING_OPERATIONS) { throw unavailable(); }
+      this.assertCurrent(generation);
+      if (this.#previewJob || this.#protectionSaving || this.#passwordChanging || this.#plaintextCopying
+        || this.#pendingWrites.size > 0 || this.#pendingOperations >= MAX_PENDING_OPERATIONS || externalSignal?.aborted) {
+        throw unavailable();
+      }
+    } catch { return Promise.reject(unavailable()); }
+    const controller = new AbortController();
+    const abort = (): void => controller.abort();
+    this.#previewController = controller;
+    externalSignal?.addEventListener('abort', abort, { once: true });
+    const isCurrent = (): boolean => {
+      let current = false;
+      try {
+        current = !controller.signal.aborted && !externalSignal?.aborted && this.isCurrent(generation)
+          && authorized() === true && source.isCurrent() && this.isCurrent(generation)
+          && !controller.signal.aborted && !externalSignal?.aborted;
+      } catch { /* Main-owned callbacks cannot leak path-bearing errors. */ }
+      if (!current) { controller.abort(); }
+      return current;
+    };
+    const check = (): void => { if (!isCurrent()) { throw unavailable(); } };
+    const storageFailure = (): never => {
+      if (this.isCurrent(generation)) { void this.lock('storage-error').catch(() => undefined); }
+      throw unavailable();
+    };
+    // Deferral lets #previewJob close mutation admission before any callback,
+    // catalogue read or descriptor use can yield/reenter this session.
+    const work = Promise.resolve().then(async (): Promise<PrivateVideoImportResult> => {
+      let outputBytes: Buffer | undefined;
+      try {
+        check();
+        const catalogue = await this.enqueue(generation, async store => {
+          let raw: Buffer | undefined;
+          try {
+            try { raw = await store.readRecord('catalogue', CATALOGUE_FILE_MAX_BYTES); }
+            catch { return storageFailure(); }
+            check();
+            try {
+              parseVhaJson(raw);
+              // Retain unknown row/source fields and original exclusion order.
+              return JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, '')) as FinalObject;
+            } catch { return storageFailure(); }
+          } finally { raw?.fill(0); }
+        });
+        check();
+        const eligibility = checkPrivateVideoImport(catalogue, selected);
+        if (eligibility !== 'ready') { return { status: eligibility }; }
+        if (catalogue.images.length >= MAX_CATALOGUE_HASHES || catalogueHashes(catalogue).size >= MAX_CATALOGUE_HASHES) {
+          return { status: 'invalid' };
+        }
+        let metadata: PrivateVideoMetadata | undefined;
+        const set = await generatePrivateHubPreviews(this.assertCurrent(generation), source, catalogue.screenshotSettings,
+          { signal: controller.signal, isCurrent, onMetadata: value => {
+            check();
+            if (metadata) { throw unavailable(); }
+            metadata = Object.freeze({ ...value });
+          } });
+        check();
+        if (!metadata) { throw unavailable(); }
+        const index = catalogue.images.length;
+        catalogue.images.push(createPrivateImportedVideo(source, selected, metadata, set, index));
+        catalogue.numOfFolders = new Set(catalogue.images.map(image => image.partialPath)).size;
+        const json = JSON.stringify(catalogue);
+        if (Buffer.byteLength(json) + this.#pendingWriteBytes > CATALOGUE_FILE_MAX_BYTES) { return { status: 'invalid' }; }
+        const hashes = catalogueHashes(parseVhaJson(json));
+        outputBytes = Buffer.from(json);
+        this.#pendingWrites.add(outputBytes);
+        this.#pendingWriteBytes += outputBytes.length;
+        const snapshot = outputBytes;
+        check();
+        await this.enqueue(generation, async store => {
+          check();
+          try {
+            const writing = store.writeRecord('catalogue', snapshot, isCurrent);
+            snapshot.fill(0);
+            await writing;
+            // Publication may already have committed. Lost authority must lock
+            // rather than retain an old preview allowlist for the new catalogue.
+            check();
+            this.#hashes = hashes;
+          } catch { return storageFailure(); }
+        });
+        check();
+        return { status: 'imported', index };
+      } finally {
+        controller.abort();
+        externalSignal?.removeEventListener('abort', abort);
+        if (outputBytes) {
+          outputBytes.fill(0);
+          if (this.#pendingWrites.delete(outputBytes)) { this.#pendingWriteBytes -= outputBytes.length; }
+        }
+        await source.close();
+      }
+    }).catch(error => {
+      if (isPrivatePreviewGenerationCleanupFailure(error)) {
+        this.#previewCleanupFailure = error;
+        void this.lock('storage-error').catch(() => undefined);
+        throw error;
+      }
+      throw unavailable();
+    });
+    const drained = work.then(() => undefined, error => {
+      if (isPrivatePreviewGenerationCleanupFailure(error)) { throw error; }
+    });
+    this.#previewJob = drained;
+    const cleanup = (): void => {
+      if (this.#previewJob === drained) { this.#previewJob = undefined; }
+      if (this.#previewController === controller) { this.#previewController = undefined; }
+    };
+    void drained.then(cleanup, cleanup);
+    return work.then(result => {
+      this.assertCurrent(generation);
+      try { if (externalSignal?.aborted || authorized() !== true) { throw unavailable(); } }
+      catch { throw unavailable(); }
       return result;
     }, error => { throw isPrivatePreviewGenerationCleanupFailure(error) ? error : unavailable(); });
   }

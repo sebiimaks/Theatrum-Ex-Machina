@@ -17,11 +17,34 @@
       </div>
       <div class="privacy-controls">
         <span class="lock-state" id="lock-state"><span class="status-dot" aria-hidden="true"></span>Unlocked</span>
+        <button class="button button-secondary" id="source-folders-toggle" type="button" aria-expanded="false" aria-controls="source-folders-panel">Source folders</button>
         <button class="button button-secondary" id="protection-button" type="button" aria-expanded="false" aria-controls="protection-panel">Protection</button>
         <button class="button lock-button" id="lock-hub" type="button">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"></path></svg>
           Lock hub
         </button>
+        <section class="source-folders-panel" id="source-folders-panel" aria-labelledby="source-folders-heading" tabindex="-1" hidden>
+          <div class="protection-heading-row">
+            <h2 id="source-folders-heading">Source folders</h2>
+            <button class="icon-button" id="close-source-folders" type="button" aria-label="Close source folders">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+            </button>
+          </div>
+          <p id="source-folders-help">Connect for playback or previews. Add up to 100 videos from one folder with encrypted previews. Connections end when this hub locks.</p>
+          <div class="source-folder-add-row">
+            <button class="button button-secondary" id="add-source-folder" type="button" aria-describedby="add-source-help">Add folder…</button>
+            <p id="add-source-help">Saves a location without adding videos. Original files remain unchanged.</p>
+          </div>
+          <p class="source-folders-note">Moved your videos? Choose Change location.</p>
+          <ul class="source-folders-list" id="source-folders-list" aria-label="Saved source folders" aria-busy="false"></ul>
+          <p class="source-folders-note" id="source-scan-help">Find new videos skips links and ignored folders. Review up to 100 new videos before importing.</p>
+          <p id="source-folders-status" role="status" aria-live="polite"></p>
+          <div class="protection-actions">
+            <button class="button button-secondary" id="cancel-source-connection" type="button" hidden>Cancel connection</button>
+            <button class="button button-secondary" id="cancel-video-import" type="button" hidden>Cancel import</button>
+            <button class="button button-secondary" id="refresh-source-folders" type="button">Refresh</button>
+          </div>
+        </section>
         <section class="protection-panel" id="protection-panel" aria-labelledby="protection-heading" tabindex="-1" hidden>
           <div class="protection-heading-row">
             <h2 id="protection-heading">Protection</h2>
@@ -38,7 +61,7 @@
             <option value="15">15 minutes</option>
             <option value="30">30 minutes</option>
           </select>
-          <p id="protection-help">Locks after inactivity in this private window, including while a preview is playing or previews are regenerating. Locking clears unsaved edits.</p>
+          <p id="protection-help">Locks after inactivity in this private window, including during video playback or preview regeneration. Locking clears unsaved edits.</p>
           <p class="protection-storage-note">This setting is saved in this encrypted hub.</p>
           <p class="protection-storage-note">Copying and dragging are disabled. You can paste into password fields.</p>
           <p id="protection-status" role="status" aria-live="polite"></p>
@@ -108,6 +131,29 @@
         <input id="gallery-search" type="search" placeholder="Search videos and tags…" maxlength="200" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
       </div>
       <p class="result-summary" id="result-summary"></p>
+      <div class="gallery-browse-controls">
+        <div class="gallery-browse-field">
+          <label for="gallery-collection">Collection</label>
+          <select id="gallery-collection">
+            <option value="all">All videos</option>
+            <option value="favourites">Favourites</option>
+            <option value="recent">Recently played</option>
+          </select>
+        </div>
+        <div class="gallery-browse-field">
+          <label for="gallery-sort">Sort by</label>
+          <select id="gallery-sort">
+            <option value="catalogue">Catalogue order</option>
+            <option value="name">Name</option>
+            <option value="date-added">Date added</option>
+            <option value="last-played">Last played</option>
+            <option value="rating">Rating</option>
+            <option value="duration">Duration</option>
+            <option value="file-size">File size</option>
+          </select>
+        </div>
+        <button class="button button-secondary" id="gallery-sort-direction" type="button" data-direction="asc" aria-label="Sort ascending; activate for descending">↑ Ascending</button>
+      </div>
     </section>
 
     <main class="gallery-content" id="gallery-content" tabindex="-1" aria-label="Videos">
@@ -167,11 +213,16 @@
               <div class="preview-placeholder" id="detail-placeholder">No preview available</div>
               <img class="detail-poster" id="detail-poster" alt="" draggable="false" referrerpolicy="no-referrer" hidden>
               <video id="preview-video" preload="none" controls controlslist="nodownload noremoteplayback" disablepictureinpicture disableremoteplayback hidden></video>
-              <button class="button preview-button" id="play-preview" type="button" hidden>
+            </div>
+            <div class="playback-actions" aria-label="Video playback">
+              <button class="button save-button" id="play-original" type="button" hidden>Play video</button>
+              <button class="button button-secondary" id="play-preview" type="button" hidden>
                 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 5 11 7-11 7Z"></path></svg>
                 Play preview
               </button>
+              <button class="button button-secondary" id="stop-video" type="button" hidden>Stop video</button>
             </div>
+            <p id="playback-status" role="status" aria-live="polite"></p>
             <div class="generation-actions">
               <button class="button button-secondary" id="regenerate-previews" type="button" disabled>Regenerate previews</button>
               <button class="button button-secondary" id="cancel-regeneration" type="button" hidden>Cancel</button>
@@ -182,6 +233,19 @@
             <h3 id="details-title"></h3>
             <p class="detail-facts" id="details-facts"></p>
             <p class="detail-rating" id="details-rating"></p>
+            <div class="detail-rating-editor" id="details-rating-editor" hidden>
+              <label for="details-rating-input">Rating</label>
+              <select id="details-rating-input" aria-describedby="details-rating-help" disabled>
+                <option value="" id="details-rating-existing" disabled hidden>Keep existing rating</option>
+                <option value="0">Unrated</option>
+                <option value="1">1 star</option>
+                <option value="2">2 stars</option>
+                <option value="3">3 stars</option>
+                <option value="4">4 stars</option>
+                <option value="5">5 stars · Favourite</option>
+              </select>
+              <p id="details-rating-help">Five-star videos appear in Favourites. Choose Save changes to apply.</p>
+            </div>
             <div class="detail-tags" id="details-tags" aria-label="Video tags"></div>
             <div class="tag-entry" id="tag-entry">
               <label class="visually-hidden" for="tag-draft">Add a video tag</label>
