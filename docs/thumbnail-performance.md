@@ -2,7 +2,7 @@
 
 ## Source and scope
 
-- Privacy baseline: `676dc87b49b4dd67b8bc7502634f51f244c73023`, branch `codex/private-hubs`.
+- Privacy development baseline: `676dc87b49b4dd67b8bc7502634f51f244c73023`.
 - Production reference: `de9922a22cf2bee4b5b9456f4dfc03a77ab8ad79`, branch `main`.
 - Repository: `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`.
 - Working root: `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`.

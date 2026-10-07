@@ -2,7 +2,7 @@
 
 ## Status
 
-The macOS development build on `codex/private-hubs` now exposes password-based private hubs through **File → Create private copy…** and **File → Open private hub…**. The private gallery supports title/tag search, collections and sorting, encrypted previews, in-window original-video playback, notes/tag/rating editing, adding saved source folders, manual batches of selected videos, reviewed folder discovery, per-video preview regeneration, automatic locking, password changes and verified unprotected copies. Follow the [first-build guide](./private-hubs-first-build.md) to try the workflow. These features remain development-only.
+The macOS development build on `private-hubs` now exposes password-based private hubs through **File → Create private copy…** and **File → Open private hub…**. The private gallery supports title/tag search, collections and sorting, encrypted previews, in-window original-video playback, notes/tag/rating editing, adding saved source folders, manual batches of selected videos, reviewed folder discovery, per-video preview regeneration, automatic locking, password changes and verified unprotected copies. Follow the [first-build guide](./private-hubs-first-build.md) to try the workflow. These features remain development-only.
 
 Creating a private copy retains the original unencrypted `.scaena` file, previews, backups and source videos. The ordinary editor handoff saves pending drafts, pauses ordinary work and restores it after clean locking or cancellation. Native dialog, recent-document and single-instance adapters are controlled by the automated fixtures; broader platform and failure acceptance remains unfinished.
 

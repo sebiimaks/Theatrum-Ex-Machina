@@ -1,6 +1,6 @@
 # Try password-protected private hubs
 
-Private hubs are available in the macOS development build on `codex/private-hubs`. Touch ID is deferred; use a hub password for this build.
+Private hubs are available in the macOS development build on `private-hubs`. Touch ID is deferred; use a hub password for this build.
 
 ## Create a private copy
 

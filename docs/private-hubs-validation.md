@@ -8,7 +8,7 @@ This record covers experimental storage, generation, browser isolation, the dedi
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `de9922a22cf2bee4b5b9456f4dfc03a77ab8ad79` |
 | Worktree state | Dirty: private-hub implementation and documentation are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -34,7 +34,7 @@ The operation uses a new main-generated preview namespace. Complete encrypted pr
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `e436afe6845e33e06e486a54a900823936af4e41` |
 | Worktree state | Dirty; preceding history/reset/source-check work and this refresh stage are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -79,7 +79,7 @@ This is an unsigned local test build. No commit, push, promotion, publication, i
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `e436afe6845e33e06e486a54a900823936af4e41` |
 | Worktree state | Dirty; previous history/reset work and this source-check stage are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -126,7 +126,7 @@ Protection now provides separate **Reset Last played…** and **Reset Times play
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `e436afe6845e33e06e486a54a900823936af4e41` |
 | Worktree state | Dirty; earlier playback-history work and this maintenance stage are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -173,7 +173,7 @@ Protection settings now write version 2; an omitted history flag from an older i
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `e436afe6845e33e06e486a54a900823936af4e41` |
 | Worktree state | Dirty; playback-history changes are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -222,7 +222,7 @@ The directory API is path-based. Pre/post identity and realpath checks detect ob
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `dea0b90f016692d6b54dfa7a186a80e1047fdde4` |
 | Worktree state | Dirty; previous privacy stages and folder discovery are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -269,7 +269,7 @@ An optional integer `rating` extends the existing edit request. Only an explicit
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `dea0b90f016692d6b54dfa7a186a80e1047fdde4` |
 | Worktree state | Dirty; previous privacy stages and rating editing are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -316,7 +316,7 @@ Fixed optional selectors extend the existing list request; no IPC method or publ
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `dea0b90f016692d6b54dfa7a186a80e1047fdde4` |
 | Worktree state | Dirty; previous privacy stages and collections/sorting are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -379,7 +379,7 @@ The new `importProgress` bridge returns bounded numeric counters only. It requir
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `dea0b90f016692d6b54dfa7a186a80e1047fdde4` |
 | Worktree state | Dirty; previous privacy stages and batch import are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -434,7 +434,7 @@ The branded review reserves every configured or referenced source index, includi
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `dea0b90f016692d6b54dfa7a186a80e1047fdde4` |
 | Worktree state | Dirty; prior privacy stages and source-folder addition are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -483,7 +483,7 @@ Mutation admission is held through generation and publication. Cancel/lock drain
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `dea0b90f016692d6b54dfa7a186a80e1047fdde4` |
 | Worktree state | Dirty; prior privacy stages and manual import are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -506,7 +506,7 @@ Exact packaging command:
 test ! -e release-test-private-import && THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-import TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-import-stage/temp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-import-stage/build.log 2>&1
 ```
 
-Packaging and the corresponding-source archive completed. The final GUI smoke check inside the execution sandbox aborted during macOS application registration, leaving this combined command with exit status 1. The supplied crash report's time and Codex parent matched that launch, with a stack in HIServices/AppKit registration. The existing package was retained without rebuilding or replacing it, and the exact verifier succeeded outside the execution sandbox with an isolated workspace profile:
+Packaging and the corresponding-source archive completed. The final GUI smoke check inside the execution sandbox aborted during macOS application registration, leaving this combined command with exit status 1. The supplied crash report's time and parent process matched that launch, with a stack in HIServices/AppKit registration. The existing package was retained without rebuilding or replacing it, and the exact verifier succeeded outside the execution sandbox with an isolated workspace profile:
 
 ```sh
 env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-import-stage/temp node bin/verify-packaged-app.mjs './release-test-private-import/mac-arm64/Theatrum Ex Machina.app' > tmp/private-import-stage/package-verification.log 2>&1
@@ -532,7 +532,7 @@ The gallery leaves Escape to the fullscreen player before closing Details. Stop/
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `dea0b90f016692d6b54dfa7a186a80e1047fdde4` |
 | Worktree state | Dirty; prior source/relocation/playback work and this correction are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -574,7 +574,7 @@ One main-owned manager issues a random 64-hex capability URL and serves GET/HEAD
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `dea0b90f016692d6b54dfa7a186a80e1047fdde4` |
 | Worktree state | Dirty; source connections, relocation and playback are uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -622,7 +622,7 @@ The session reserves writer admission before queueing so preview generation and 
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `dea0b90f016692d6b54dfa7a186a80e1047fdde4` |
 | Worktree state | Dirty; source connections and relocation remain uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -666,7 +666,7 @@ The main process retains source paths and saved source identities. The renderer 
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `dea0b90f016692d6b54dfa7a186a80e1047fdde4` |
 | Worktree state | Dirty; source-folder stage uncommitted |
 | Release designation | `vha.releaseWorktree=false` |
@@ -708,7 +708,7 @@ All **60 focused conversion tests** passed: 30 review tests, including seven new
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `0bfe180d953875654d72354796770d648623e2ea` |
 | Worktree state | Dirty; preceding work preserved and changes uncommitted |
 | Release designation | `vha.releaseWorktree=false`; unsigned local test package |
@@ -745,7 +745,7 @@ Conversion failures now identify source inspection, changed source data, storage
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `0bfe180d953875654d72354796770d648623e2ea` |
 | Worktree state | Dirty; preceding work preserved and changes uncommitted |
 | Release designation | `vha.releaseWorktree=false`; unsigned local test package |
@@ -779,7 +779,7 @@ The native picker now selects an existing parent folder, with **New Folder** ava
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `0bfe180d953875654d72354796770d648623e2ea` |
 | Worktree state | Dirty; preceding work preserved and changes uncommitted |
 | Release designation | `vha.releaseWorktree=false`; unsigned local test package |
@@ -814,7 +814,7 @@ This fixes the reproduced selection and source-parent defects. Broader real-worl
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `0bfe180d953875654d72354796770d648623e2ea` |
 | Worktree state | Dirty; existing work and this milestone remain uncommitted |
 | Release designation | `vha.releaseWorktree=false`; unsigned local test package |
@@ -857,7 +857,7 @@ This first working test build covers the password-based create/edit/lock/reopen 
 | --- | --- |
 | Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
 | Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
-| Branch | `codex/private-hubs` |
+| Development workstream | Private hubs |
 | HEAD | `0bfe180d953875654d72354796770d648623e2ea` |
 | Worktree state | Dirty: preceding privacy work and this milestone remain uncommitted |
 | Release designation | `vha.releaseWorktree=false`; local unsigned test packaging only |
@@ -909,7 +909,7 @@ Main/renderer/worker and persistence TypeScript checks, lint, syntax checks and 
 
 ### Private-copy creation through the actual main host — 23 September 2026
 
-This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The worktree remains intentionally dirty with preceding privacy work. The existing compiled Angular assets in `tmp/private-transition-angular`, native helper and media tools were reused unchanged. No browser/helper build, application package, install, commit, push or release was performed.
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, the private-hub development worktree, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The worktree remains intentionally dirty with preceding privacy work. The existing compiled Angular assets in `tmp/private-transition-angular`, native helper and media tools were reused unchanged. No browser/helper build, application package, install, commit, push or release was performed.
 
 The extended native command passed all **12 stages**, including five new creation stages through actual `main.ts`, its transition singleton, ordinary source monitor/watcher and compiled Angular editor:
 
@@ -933,7 +933,7 @@ The main host is compiled in memory with the existing test-only readiness substi
 
 ### Isolated private-copy creation and verified activation — 23 September 2026
 
-This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The worktree remains intentionally dirty with preceding work and these changes. Existing native helpers and media tools were reused; no browser/helper build, application package, install, commit, push or release was performed.
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, the private-hub development worktree, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The worktree remains intentionally dirty with preceding work and these changes. Existing native helpers and media tools were reused; no browser/helper build, application package, install, commit, push or release was performed.
 
 The isolated **Create private copy** screen displays only inventory counts, takes a confirmed password and separate acknowledgements for retained originals and missing previews, and reports bounded progress. Its standalone preload exposes only state, one submission and cancellation. The main-owned native dialog chooses a new destination. Retirement aborts admitted work before draining the request, picker, conversion and browser cleanup; uncertain cleanup retains quarantine. First activation reopens and verifies the completed encrypted receipt and content through the existing session before showing the private gallery. The application adapter captures the authorized writable source, pauses normal work and saves ordinary drafts before review. Opening and creation share admission and the same ordinary restoration path.
 
@@ -958,7 +958,7 @@ This standalone harness calls the actual conversion workspace directly with a sy
 
 ### Storage cleanup and conversion inventory review — 23 September 2026
 
-This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The worktree remains intentionally dirty with the preceding work and these changes. No application package, browser build, install, commit, push or release was performed.
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, the private-hub development worktree, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The worktree remains intentionally dirty with the preceding work and these changes. No application package, browser build, install, commit, push or release was performed.
 
 The store now confirms closure of its read/write/directory-sync descriptors and both streamed directory handles. Failed or timed-out closure immediately revokes keys and new work, remains identity-branded through static create/open and session disposal, and retains a process-local directory quarantine after late settlement. Lease acquisition/release preserves unconfirmed helper or descriptor cleanup separately from safely rejected acquisition. Touch ID availability can no longer hide a storage cleanup failure behind an unavailable result. Repeated session close/unlock cannot reset the failure.
 
@@ -978,7 +978,7 @@ At this earlier milestone, the isolated conversion interface, native destination
 
 ### Actual main-host lifecycle and conversion cleanup — 23 September 2026
 
-This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The checkout remains intentionally dirty with the preceding uncommitted work and this milestone. The successful production Angular assets at `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-transition-angular` were reused unchanged. No additional browser build, application package, install, commit, push or release was performed.
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, the private-hub development worktree, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The checkout remains intentionally dirty with the preceding uncommitted work and this milestone. The successful production Angular assets at `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-transition-angular` were reused unchanged. No additional browser build, application package, install, commit, push or release was performed.
 
 The native command was:
 
@@ -1007,7 +1007,7 @@ At this earlier milestone, store-internal descriptor-close failures were not yet
 
 ### Actual Angular/native composition — 23 September 2026
 
-This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The checkout is intentionally dirty: the earlier filmstrip changes and this integration work are uncommitted. No commit, push, release package or installed-application change is part of this milestone.
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, the private-hub development worktree, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. The checkout is intentionally dirty: the earlier filmstrip changes and this integration work are uncommitted. No commit, push, release package or installed-application change is part of this milestone.
 
 The actual Angular browser assets were compiled with:
 
@@ -1041,7 +1041,7 @@ This harness uses synthetic startup, source pause/resume and media-queue callbac
 
 ### Encrypted filmstrip viewing — 23 September 2026
 
-This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, branch `codex/private-hubs`, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. Preflight found a clean checkout; the filmstrip changes are uncommitted. No native helper or application package was built, and no application was installed or released during this milestone.
+This milestone uses `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs`, the private-hub development worktree, HEAD `0bfe180d953875654d72354796770d648623e2ea`, origin `https://github.com/sebiimaks/Theatrum-Ex-Machina.git`, and `vha.releaseWorktree=false`. Preflight found a clean checkout; the filmstrip changes are uncommitted. No native helper or application package was built, and no application was installed or released during this milestone.
 
 The targeted gallery suites passed **260 tests**: 91 request tests, 39 preload tests and 130 UI tests. They cover detail-only filmstrip projection, exact preview URLs, shared image admission, finite retries, cancellation and stale callbacks, draft preservation, credential-operation cleanup, regenerated URLs and editing controls during clean, dirty, saving and conflicting states. `npm run check`, persistence TypeScript checking, scoped JavaScript/TypeScript lint and `git diff --check` passed. Scoped lint has zero errors and the existing test-file `any`/import warnings. The full 1,643-test checkpoint below was not repeated for this change. Logs are `tmp/private-filmstrip-request.log`, `tmp/private-filmstrip-preload.log`, `tmp/private-filmstrip-ui-tests.log`, `tmp/private-filmstrip-check.log` and `tmp/private-filmstrip-types.log`.
 
@@ -1069,7 +1069,7 @@ The native Electron fixture exercises the actual UI, preload, bridge, store, ses
 
 Review corrected two failure paths that treated uncertain native cleanup as ordinary unavailability. A poisoned status query now locks and quarantines its session; a poisoned unlock-capability query retires the prompt and rejects its disposal. A failed fingerprint/enrollment capability does not imply that an earlier Keychain item is absent: the interface retains a removal action and reports unsuccessful deletion honestly. Password changes invalidate the full-header binding even when a different or unsigned identity cannot inspect an old credential.
 
-Development compilation uses `npm run privacy:build`, which builds the advisory-lock helper and runs `node bin/build-touch-id.mjs` on macOS. The Touch ID artifact is `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/build/privacy-tools/private-touch-id.node`, built from the dirty `codex/private-hubs` worktree at `de9922a22cf2bee4b5b9456f4dfc03a77ab8ad79`, with the root and fork recorded above. No application was packaged, signed, installed, committed or pushed. See [Touch ID controls and signing acceptance](./private-hubs-touch-id.md).
+Development compilation uses `npm run privacy:build`, which builds the advisory-lock helper and runs `node bin/build-touch-id.mjs` on macOS. The Touch ID artifact is `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/build/privacy-tools/private-touch-id.node`, built from the dirty private-hub development worktree at `de9922a22cf2bee4b5b9456f4dfc03a77ab8ad79`, with the root and fork recorded above. No application was packaged, signed, installed, committed or pushed. See [Touch ID controls and signing acceptance](./private-hubs-touch-id.md).
 
 ### Native menu and clipboard controls milestone
 
