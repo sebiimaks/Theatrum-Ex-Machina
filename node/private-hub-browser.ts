@@ -463,6 +463,22 @@ export class PrivateHubBrowser {
       this.#disposeGalleryRequest = registerPrivateGalleryRequest({
         contents, hub: this.#hub!, generation: this.#generation!, playback: this.#playback, isCurrent: this.current, onLock: () => this.retire(),
         onProtectionChanged: settings => this.#idleLock?.setMinutes(settings.autoLockMinutes) === true,
+        confirmPlaybackHistoryReset: async (metric, count) => {
+          this.assertCurrent();
+          if (window.isDestroyed() || (metric !== 'lastPlayed' && metric !== 'timesPlayed')
+            || !Number.isSafeInteger(count) || count < 1 || count > 100_000) { throw unavailable(); }
+          const label = metric === 'lastPlayed' ? 'Last played' : 'Times played';
+          const retained = metric === 'lastPlayed' ? 'Times played' : 'Last played';
+          const result = await dialog.showMessageBox(window, {
+            type: 'question', title: `Reset ${label}?`,
+            message: `Reset ${label} for ${count} ${count === 1 ? 'catalogue entry' : 'catalogue entries'}?`,
+            detail: `This resets ${label} only in the current encrypted catalogue. ${retained} and the Record playback history setting will be kept. `
+              + 'Encrypted recovery backups and separate copies can retain earlier values.',
+            buttons: [`Reset ${label}`, 'Cancel'], defaultId: 1, cancelId: 1, noLink: true,
+          });
+          this.assertCurrent();
+          return !window.isDestroyed() && result.response === 0;
+        },
         chooseUnprotectedCopyDestination: async () => {
           this.assertCurrent();
           if (window.isDestroyed()) { throw unavailable(); }

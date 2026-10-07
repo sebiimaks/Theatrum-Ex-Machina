@@ -71,7 +71,7 @@ test('a session reauthenticates, preserves catalogue/settings and reopens only w
   await assert.rejects(f.session.unlock(f.directory, password));
   const reopened = await f.session.unlock(f.directory, replacement);
   assert.deepEqual(reopened.catalogue, f.catalogue);
-  assert.deepEqual(await f.session.readProtection(reopened.generation), { autoLockMinutes: 15 });
+  assert.deepEqual(await f.session.readProtection(reopened.generation), { autoLockMinutes: 15, recordPlaybackHistory: false });
 });
 
 test('invalid requests do not invoke storage or lock a healthy session', async t => {

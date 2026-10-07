@@ -10,7 +10,7 @@ const item = () => ({ id: 'a'.repeat(32), title: 'Private video', duration: 12, 
   rating: 4, favourite: false, tags: ['Birds'], thumbnailUrl: 'theatrum://app/media/thumbnails/hash-1.jpg',
   notes: 'Private notes', clipUrl: 'theatrum://app/media/clips/hash-1.mp4',
   posterUrl: 'theatrum://app/media/clips/hash-1.jpg', filmstripUrl: 'theatrum://app/media/filmstrips/hash-1.jpg',
-  truncated: false, editable: true, regenerable: true, playable: true, revision: 'b'.repeat(32) });
+  truncated: false, editable: true, regenerable: true, refreshable: true, playable: true, revision: 'b'.repeat(32) });
 const page = () => ({ status: 'ready', total: 1, offset: 0, items: [item()] });
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 function fixture(...results: unknown[]) {
@@ -30,13 +30,13 @@ function fixture(...results: unknown[]) {
     native: (next: typeof native) => { native = next; } };
 }
 
-test('sandbox preload keeps twenty gallery methods and exposes six separate frozen credential methods', () => {
+test('sandbox preload keeps twenty-four gallery methods and exposes six separate frozen credential methods', () => {
   const f = fixture();
   assert.deepEqual(f.imported, ['electron']);
   assert.deepEqual(Object.keys(f.exposed), ['privateGallery', 'privateCredentials']);
   assert.deepEqual(Object.keys(f.credentials).sort(), ['cancelUnprotectedCopy', 'changePassword', 'createUnprotectedCopy', 'disableTouchId', 'enableTouchId', 'touchIdStatus']);
   assert.equal(Object.isFrozen(f.credentials), true);
-  assert.deepEqual(Object.keys(f.bridge).sort(), ['addSource', 'cancelImport', 'cancelRegeneration', 'cancelSourceConnection', 'connectSource', 'detail', 'disconnectSource', 'importProgress', 'importVideo', 'list', 'lock', 'playOriginal', 'protection', 'regenerate', 'relocateSource', 'save', 'scanSource', 'setProtection', 'sources', 'stopOriginal']);
+  assert.deepEqual(Object.keys(f.bridge).sort(), ['ackOriginalPlayback', 'addSource', 'cancelImport', 'cancelRegeneration', 'cancelSourceConnection', 'checkSource', 'connectSource', 'detail', 'disconnectSource', 'importProgress', 'importVideo', 'list', 'lock', 'playOriginal', 'protection', 'refreshVideo', 'regenerate', 'relocateSource', 'resetPlaybackHistory', 'save', 'scanSource', 'setProtection', 'sources', 'stopOriginal']);
   assert.equal(Object.isFrozen(f.bridge), true);
   for (const key of ['ipc', 'on', 'send', 'invoke', 'files', 'clipboard', 'unlock', 'password', 'process']) {
     assert.equal(f.bridge[key], undefined);
@@ -70,9 +70,9 @@ test('fixed media URLs accept an optional exact opaque refresh token in every re
   versioned.filmstripUrl += version;
   const listing = fixture({ ...page(), items: [versioned] });
   assert.equal((await listing.bridge.list({ query: '', offset: 0 })).items[0].thumbnailUrl, versioned.thumbnailUrl);
-  for (const [mode, status] of [['detail', 'ready'], ['save', 'saved'], ['regenerate', 'generated']]) {
+  for (const [mode, status] of [['detail', 'ready'], ['save', 'saved'], ['regenerate', 'generated'], ['refreshVideo', 'refreshed']]) {
     const f = fixture({ status, item: versioned });
-    const request = mode === 'detail' ? versioned.id : mode === 'regenerate'
+    const request = mode === 'detail' ? versioned.id : ['regenerate', 'refreshVideo'].includes(mode)
       ? { id: versioned.id, revision: versioned.revision }
       : { id: versioned.id, revision: versioned.revision, notes: '', tags: [] };
     assert.deepEqual(plain(await f.bridge[mode](request)), { status, item: versioned });
@@ -271,11 +271,11 @@ test('locking suppresses regeneration completion and malformed success cannot le
 
 test('protection methods use dedicated bounded channels and strip native-only fields', async () => {
   const f = fixture({ status: 'ready', autoLockMinutes: 5, path: '/secret', password: 'secret' });
-  assert.deepEqual(plain(await f.bridge.protection()), { status: 'ready', autoLockMinutes: 5 });
+  assert.deepEqual(plain(await f.bridge.protection()), { status: 'ready', autoLockMinutes: 5, recordPlaybackHistory: false });
   assert.deepEqual(f.invoked, [[channels.protection]]);
   for (const minutes of [0, 1, 5, 15, 30]) {
     f.native(async () => ({ status: 'saved', autoLockMinutes: minutes, path: '/secret' }));
-    assert.deepEqual(plain(await f.bridge.setProtection({ autoLockMinutes: minutes })), { status: 'saved', autoLockMinutes: minutes });
+    assert.deepEqual(plain(await f.bridge.setProtection({ autoLockMinutes: minutes })), { status: 'saved', autoLockMinutes: minutes, recordPlaybackHistory: false });
     assert.deepEqual(plain(f.invoked.at(-1)), [channels.setProtection, { autoLockMinutes: minutes }]);
   }
 });
@@ -363,7 +363,7 @@ test('credential work shares all gallery admission gates and Lock suppresses lat
   for (const [method, args] of [
     ['list', [{ query: '', offset: 0 }]], ['detail', [item().id]],
     ['save', [{ id: item().id, revision: item().revision, notes: '', tags: [] }]],
-    ['regenerate', [{ id: item().id, revision: item().revision }]], ['protection', []],
+    ['regenerate', [{ id: item().id, revision: item().revision }]], ['refreshVideo', [{ id: item().id, revision: item().revision }]], ['protection', []],
     ['setProtection', [{ autoLockMinutes: 1 }]],
   ] as const) {
     assert.deepEqual(plain(await f.bridge[method](...args)), { status: 'busy' });
@@ -377,7 +377,7 @@ test('credential work shares all gallery admission gates and Lock suppresses lat
 
 test('pending gallery requests prevent credential IPC and incorrect passwords permit retries', async () => {
   for (const [method, args] of [['list', [{ query: '', offset: 0 }]], ['protection', []],
-    ['regenerate', [{ id: item().id, revision: item().revision }]]] as const) {
+    ['regenerate', [{ id: item().id, revision: item().revision }]], ['refreshVideo', [{ id: item().id, revision: item().revision }]]] as const) {
     const f = fixture(); let finish!: (value: unknown) => void;
     f.native(() => new Promise(resolve => { finish = resolve; }));
     const work = f.bridge[method](...args);
@@ -454,7 +454,7 @@ test('copy preload shares admission, sends cancel once only for its own operatio
   for (const [method, args] of [
     ['list', [{ query: '', offset: 0 }]], ['detail', [item().id]],
     ['save', [{ id: item().id, revision: item().revision, notes: '', tags: [] }]],
-    ['regenerate', [{ id: item().id, revision: item().revision }]], ['protection', []],
+    ['regenerate', [{ id: item().id, revision: item().revision }]], ['refreshVideo', [{ id: item().id, revision: item().revision }]], ['protection', []],
     ['setProtection', [{ autoLockMinutes: 1 }]],
   ] as const) {
     assert.deepEqual(plain(await f.bridge[method](...args)), { status: 'busy' });
@@ -1099,6 +1099,287 @@ test('scan completion, replacement and lock suppress late progress and stale nat
     if (action === 'lock') {
       assert.deepEqual(plain(await f.bridge.scanSource(sourceFolder().id)), { status: 'unavailable' });
       assert.deepEqual(plain(await f.bridge.importProgress()), { status: 'unavailable' });
+    }
+  }
+});
+
+test('playback acknowledgement accepts only one exact opaque original URL and strips every native detail', async () => {
+  const url = 'theatrum://app/original/' + 'a'.repeat(64);
+  for (const status of ['recorded', 'disabled', 'ignored', 'conflict', 'invalid', 'busy', 'unavailable']) {
+    const f = fixture({ status, path: '/PRIVATE', lastPlayed: 123, timesPlayed: 2 });
+    assert.deepEqual(plain(await f.bridge.ackOriginalPlayback(url)), { status });
+    assert.deepEqual(f.invoked, [[channels.ackOriginalPlayback, url]]);
+  }
+  for (const value of [null, undefined, { status: 'ready' }, { status: '__proto__' }, new Error('PRIVATE')]) {
+    const f = fixture(value);
+    assert.deepEqual(plain(await f.bridge.ackOriginalPlayback(url)), { status: 'unavailable' });
+  }
+});
+
+test('malformed playback acknowledgements never cross IPC', async () => {
+  const f = fixture({ status: 'recorded' }); const prefix = 'theatrum://app/original/';
+  const token = 'a'.repeat(64);
+  for (const value of [undefined, null, 1, {}, [prefix + token], { url: prefix + token }, 'file:///PRIVATE',
+    prefix + 'a'.repeat(63), prefix + 'a'.repeat(65), prefix + 'A'.repeat(64), prefix + token + '\n',
+    prefix + token + '?x=1', prefix + token + '#1', 'https://app/original/' + token,
+    'theatrum://user@app/original/' + token, 'theatrum://app/media/clips/0.mp4']) {
+    assert.deepEqual(plain(await f.bridge.ackOriginalPlayback(value)), { status: 'unavailable' });
+  }
+  assert.deepEqual(plain(await f.bridge.ackOriginalPlayback()), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.ackOriginalPlayback(prefix + token, 'extra')), { status: 'unavailable' });
+  assert.deepEqual(f.invoked, []);
+});
+
+test('pending playback acknowledgement serializes requests while Stop remains immediate and preserves admitted reply', async () => {
+  let resolve!: (value: unknown) => void;
+  const f = fixture(); f.native(() => new Promise(yes => { resolve = yes; }));
+  const work = f.bridge.ackOriginalPlayback('theatrum://app/original/' + 'a'.repeat(64));
+  assert.deepEqual(plain(await f.bridge.list({ query: '', offset: 0 })), { status: 'busy' });
+  assert.deepEqual(plain(await f.bridge.ackOriginalPlayback('theatrum://app/original/' + 'b'.repeat(64))), { status: 'busy' });
+  f.bridge.stopOriginal(); assert.deepEqual(f.sent, [[channels.stopOriginal]]);
+  resolve({ status: 'recorded' }); assert.deepEqual(plain(await work), { status: 'recorded' });
+  f.native(async () => page()); assert.equal((await f.bridge.list({ query: '', offset: 0 })).status, 'ready');
+});
+
+test('lock retires acknowledgement responses and prevents subsequent acknowledgement IPC', async () => {
+  let resolve!: (value: unknown) => void;
+  const f = fixture(); f.native(() => new Promise(yes => { resolve = yes; }));
+  const url = 'theatrum://app/original/' + 'a'.repeat(64);
+  const work = f.bridge.ackOriginalPlayback(url); f.bridge.lock();
+  resolve({ status: 'recorded' }); assert.deepEqual(plain(await work), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.ackOriginalPlayback(url)), { status: 'unavailable' });
+  assert.equal(f.invoked.length, 1);
+});
+
+test('protection bridge sends explicit history booleans and preserves an omitted legacy input', async () => {
+  for (const history of [false, true]) {
+    const f = fixture({ status: 'saved', autoLockMinutes: 5, recordPlaybackHistory: history, source: 'PRIVATE' });
+    const request = { recordPlaybackHistory: history, autoLockMinutes: 5 };
+    assert.deepEqual(plain(await f.bridge.setProtection(request)), { status: 'saved', autoLockMinutes: 5, recordPlaybackHistory: history });
+    assert.deepEqual(f.invoked, [[channels.setProtection, { autoLockMinutes: 5, recordPlaybackHistory: history }]]);
+  }
+  const legacy = fixture({ status: 'saved', autoLockMinutes: 15, recordPlaybackHistory: true });
+  assert.deepEqual(plain(await legacy.bridge.setProtection({ autoLockMinutes: 15 })), { status: 'saved', autoLockMinutes: 15, recordPlaybackHistory: true });
+  assert.deepEqual(legacy.invoked, [[channels.setProtection, { autoLockMinutes: 15 }]]);
+});
+
+test('protection history rejects malformed values, getters, hidden fields and symbols before IPC', async () => {
+  const f = fixture();
+  const hidden = Object.defineProperty({ autoLockMinutes: 5 }, 'recordPlaybackHistory', { value: true });
+  const hiddenLock = Object.defineProperty({ recordPlaybackHistory: true }, 'autoLockMinutes', { value: 5 });
+  const getter = { autoLockMinutes: 5, get recordPlaybackHistory() { throw new Error('Must not read'); } };
+  for (const value of [null, 0, 1, 'true', [], {}]) {
+    assert.deepEqual(plain(await f.bridge.setProtection({ autoLockMinutes: 5, recordPlaybackHistory: value })), { status: 'unavailable' });
+  }
+  for (const value of [hidden, hiddenLock, getter, { autoLockMinutes: 5, recordPlaybackHistory: true, [Symbol('x')]: 1 },
+    Object.defineProperty({ autoLockMinutes: 5 }, 'secret', { value: 'PRIVATE' })]) {
+    assert.deepEqual(plain(await f.bridge.setProtection(value)), { status: 'unavailable' });
+  }
+  assert.deepEqual(f.invoked, []);
+});
+
+test('protection history response rejects malformed booleans while old snapshots normalize to Off', async () => {
+  for (const status of ['ready', 'saved']) {
+    for (const value of [null, 1, 'false', {}, []]) {
+      const f = fixture({ status, autoLockMinutes: 5, recordPlaybackHistory: value });
+      const result = status === 'ready' ? await f.bridge.protection() : await f.bridge.setProtection({ autoLockMinutes: 5, recordPlaybackHistory: false });
+      assert.deepEqual(plain(result), { status: 'unavailable' });
+    }
+    const f = fixture({ status, autoLockMinutes: 5 });
+    const result = status === 'ready' ? await f.bridge.protection() : await f.bridge.setProtection({ autoLockMinutes: 5 });
+    assert.deepEqual(plain(result), { status, autoLockMinutes: 5, recordPlaybackHistory: false });
+  }
+});
+
+test('history reset bridge sends only the selected metric and strips native response fields', async () => {
+  for (const metric of ['lastPlayed', 'timesPlayed']) {
+    const f = fixture({ status: 'reset', count: 100_000, metric, path: '/PRIVATE', rows: ['SECRET'] });
+    assert.deepEqual(plain(await f.bridge.resetPlaybackHistory(metric)), { status: 'reset', count: 100_000 });
+    assert.deepEqual(f.invoked, [[channels.resetPlaybackHistory, metric]]);
+  }
+  for (const status of ['unchanged', 'cancelled', 'busy', 'invalid', 'unavailable']) {
+    const f = fixture({ status, count: 5, path: '/PRIVATE', rows: ['SECRET'] });
+    assert.deepEqual(plain(await f.bridge.resetPlaybackHistory('lastPlayed')), { status });
+  }
+});
+
+test('history reset accepts exact metric strings only without coercing objects or invoking getters', async () => {
+  const f = fixture();
+  let accessed = 0;
+  const hostile = { toString() { accessed++; return 'lastPlayed'; }, get metric() { accessed++; return 'lastPlayed'; } };
+  for (const metric of [undefined, null, 1, true, '', 'lastPlayed\n', 'lastplayed', 'timesPlayed ', 'both',
+    ['lastPlayed'], { metric: 'lastPlayed' }, hostile, Symbol('lastPlayed')]) {
+    assert.deepEqual(plain(await f.bridge.resetPlaybackHistory(metric)), { status: 'unavailable' });
+  }
+  assert.deepEqual(plain(await f.bridge.resetPlaybackHistory()), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.resetPlaybackHistory('lastPlayed', 'timesPlayed')), { status: 'unavailable' });
+  assert.equal(accessed, 0); assert.deepEqual(f.invoked, []);
+});
+
+test('history reset bridge rejects malformed counts and statuses', async () => {
+  for (const count of [undefined, null, 0, -1, 1.5, 100_001, NaN, Infinity, '1', {}, []]) {
+    const f = fixture({ status: 'reset', count });
+    assert.deepEqual(plain(await f.bridge.resetPlaybackHistory('timesPlayed')), { status: 'unavailable' });
+  }
+  for (const result of [null, undefined, [], 'reset', { status: '__proto__' }, { status: 'saved', count: 1 },
+    Object.assign([], { status: 'reset', count: 1 })]) {
+    const f = fixture(result);
+    assert.deepEqual(plain(await f.bridge.resetPlaybackHistory('lastPlayed')), { status: 'unavailable' });
+  }
+});
+
+test('history reset serializes other bridge calls and Lock rejects a late reset result', async () => {
+  let resolve!: (value: unknown) => void;
+  const f = fixture(); f.native(() => new Promise(yes => { resolve = yes; }));
+  const work = f.bridge.resetPlaybackHistory('lastPlayed');
+  assert.deepEqual(plain(await f.bridge.resetPlaybackHistory('timesPlayed')), { status: 'busy' });
+  assert.deepEqual(plain(await f.bridge.list({ query: '', offset: 0 })), { status: 'busy' });
+  assert.deepEqual(plain(await f.bridge.setProtection({ autoLockMinutes: 5, recordPlaybackHistory: true })), { status: 'busy' });
+  f.bridge.lock(); assert.deepEqual(f.sent, [[channels.lock]]);
+  resolve({ status: 'reset', count: 1 }); assert.deepEqual(plain(await work), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.resetPlaybackHistory('lastPlayed')), { status: 'unavailable' });
+  assert.equal(f.invoked.length, 1);
+});
+
+test('history reset IPC rejection releases the pending gate without native error text', async () => {
+  const f = fixture(new Error('/PRIVATE/reset'));
+  assert.deepEqual(plain(await f.bridge.resetPlaybackHistory('timesPlayed')), { status: 'unavailable' });
+  f.native(async () => ({ status: 'unchanged' }));
+  assert.deepEqual(plain(await f.bridge.resetPlaybackHistory('timesPlayed')), { status: 'unchanged' });
+});
+
+
+const sourceCheckResult = (changes: Record<string, unknown> = {}) => ({ status: 'checked', total: 15,
+  sameSize: 1, differentSize: 2, missing: 3, unverified: 4, ignored: 5, ...changes });
+
+test('source check accepts one exact opaque ID and projects only validated location counts', async () => {
+  const result = sourceCheckResult();
+  const f = fixture({ ...result, path: '/PRIVATE-CHECK', filenames: ['PRIVATE-CHECK.mp4'], revision: 'PRIVATE-CHECK' });
+  assert.deepEqual(plain(await f.bridge.checkSource(sourceFolder().id)), result);
+  assert.deepEqual(f.invoked, [[channels.checkSource, sourceFolder().id]]);
+  const empty = sourceCheckResult({ total: 0, sameSize: 0, differentSize: 0, missing: 0, unverified: 0, ignored: 0 });
+  assert.deepEqual(plain(await fixture(empty).bridge.checkSource(sourceFolder().id)), empty);
+  const limit = sourceCheckResult({ total: 10_000, sameSize: 10_000, differentSize: 0, missing: 0, unverified: 0, ignored: 0 });
+  assert.deepEqual(plain(await fixture(limit).bridge.checkSource(sourceFolder().id)), limit);
+  const invalid = fixture();
+  for (const args of [[], [undefined], [null], [{}], [['c'.repeat(32)]], ['c'.repeat(32) + '\n'], ['C'.repeat(32)],
+    ['c'.repeat(31)], ['c'.repeat(33)], [sourceFolder().id, undefined], [{ id: sourceFolder().id, path: '/PRIVATE-CHECK' }]]) {
+    assert.deepEqual(plain(await invalid.bridge.checkSource(...args)), { status: 'unavailable' });
+  }
+  assert.deepEqual(invalid.invoked, []);
+});
+
+test('source check projects status-only failures and rejects malformed counts and getter properties', async () => {
+  for (const status of ['cancelled', 'conflict', 'invalid', 'limit', 'wrong-folder', 'source-unavailable', 'busy', 'unavailable']) {
+    const f = fixture({ ...sourceCheckResult(), status, path: '/PRIVATE-CHECK' });
+    assert.deepEqual(plain(await f.bridge.checkSource(sourceFolder().id)), { status });
+  }
+  const malformed: unknown[] = [null, undefined, 'PRIVATE-CHECK', [], new Error('/PRIVATE-CHECK'),
+    Object.assign([], sourceCheckResult()), sourceCheckResult({ total: 14 }), sourceCheckResult({ status: 'success' }),
+    Object.create(sourceCheckResult()), Object.defineProperty(sourceCheckResult(), 'sameSize', { get() { throw new Error('/PRIVATE-CHECK'); } }),
+    Object.defineProperty(sourceCheckResult(), 'status', { get() { throw new Error('/PRIVATE-CHECK'); } }),
+    Object.defineProperty(sourceCheckResult(), 'sameSize', { value: 1, enumerable: false })];
+  for (const key of ['total', 'sameSize', 'differentSize', 'missing', 'unverified', 'ignored']) {
+    for (const value of [undefined, '1', -1, 0.5, Infinity, NaN, 10_001]) { malformed.push(sourceCheckResult({ [key]: value })); }
+  }
+  for (const value of malformed) {
+    assert.deepEqual(plain(await fixture(value).bridge.checkSource(sourceFolder().id)), { status: 'unavailable' });
+  }
+});
+
+test('source check serializes operations and sends source cancellation only once while active', async () => {
+  const f = fixture(); let finish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  f.bridge.cancelSourceConnection(); assert.deepEqual(f.sent, []);
+  const pending = f.bridge.checkSource(sourceFolder().id);
+  f.bridge.cancelSourceConnection('extra'); f.bridge.cancelImport(); f.bridge.cancelRegeneration(); assert.deepEqual(f.sent, []);
+  for (const invoke of [() => f.bridge.checkSource(sourceFolder().id), () => f.bridge.sources(), () => f.bridge.addSource(),
+    () => f.bridge.list({ query: '', offset: 0 }), () => f.bridge.scanSource(sourceFolder().id)]) {
+    assert.deepEqual(plain(await invoke()), { status: 'busy' });
+  }
+  f.bridge.cancelSourceConnection(); f.bridge.cancelSourceConnection();
+  assert.deepEqual(f.sent, [[channels.cancelSourceConnection]]);
+  finish({ status: 'cancelled' }); assert.deepEqual(plain(await pending), { status: 'cancelled' });
+  f.bridge.cancelSourceConnection(); assert.equal(f.sent.length, 1);
+  f.native(async () => sourceCheckResult());
+  assert.deepEqual(plain(await f.bridge.checkSource(sourceFolder().id)), sourceCheckResult());
+});
+
+test('locking suppresses late source check results and prevents subsequent source calls', async () => {
+  const f = fixture(); let finish!: (value: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  const pending = f.bridge.checkSource(sourceFolder().id); f.bridge.lock(); f.bridge.cancelSourceConnection();
+  finish(sourceCheckResult()); assert.deepEqual(plain(await pending), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.checkSource(sourceFolder().id)), { status: 'unavailable' });
+  assert.deepEqual(f.sent, [[channels.lock]]);
+  assert.equal(f.invoked.length, 1);
+});
+
+
+test('video refresh projects only the updated detail and bounded status vocabulary', async () => {
+  const request = { id: item().id, revision: item().revision };
+  const f = fixture({ status: 'refreshed', item: { ...item(), width: 640, height: 360, sourcePath: '/secret/video' }, nativeError: 'secret' });
+  assert.deepEqual(plain(await f.bridge.refreshVideo(request)), { status: 'refreshed', item: { ...item(), width: 640, height: 360 } });
+  assert.deepEqual(plain(f.invoked), [[channels.refreshVideo, request]]);
+  for (const status of ['cancelled', 'conflict', 'invalid', 'source-unavailable', 'wrong-folder', 'busy', 'unavailable']) {
+    f.native(async () => ({ status, nativeError: '/secret/video' }));
+    assert.deepEqual(plain(await f.bridge.refreshVideo(request)), { status });
+  }
+  for (const status of ['generated', 'ready', 'saved', 'unknown']) {
+    f.native(async () => ({ status, item: item() }));
+    assert.deepEqual(plain(await f.bridge.refreshVideo(request)), { status: 'unavailable' });
+  }
+});
+
+test('video refresh requires an exact own data id/revision pair without invoking getters', async () => {
+  const request = { id: item().id, revision: item().revision };
+  const f = fixture();
+  let getters = 0;
+  for (const args of [[], [null], [{}], [request, 'extra'], [{ ...request, path: '/secret' }],
+    [{ ...request, id: 'bad' }], [{ ...request, revision: 'bad' }],
+    [{ ...request, [Symbol('path')]: '/secret' }], [Object.create(request)],
+    [Object.defineProperty({ revision: request.revision }, 'id', { value: request.id })],
+    [{ revision: request.revision, get id() { getters++; return request.id; } }]]) {
+    assert.deepEqual(plain(await f.bridge.refreshVideo(...args)), { status: 'unavailable' });
+  }
+  assert.equal(getters, 0); assert.equal(f.invoked.length, 0);
+});
+
+test('video refresh shares cancellation drainage and cannot overlap regeneration or other requests', async () => {
+  const f = fixture(); let resolve!: (value: unknown) => void;
+  f.native(() => new Promise(yes => { resolve = yes; }));
+  const request = { id: item().id, revision: item().revision };
+  const work = f.bridge.refreshVideo(request);
+  f.bridge.cancelRegeneration('extra'); assert.equal(f.sent.length, 0);
+  f.bridge.cancelRegeneration(); f.bridge.cancelRegeneration();
+  assert.deepEqual(f.sent, [[channels.cancelRegeneration]]);
+  for (const next of [f.bridge.regenerate(request), f.bridge.refreshVideo(request), f.bridge.detail(request.id)]) {
+    assert.deepEqual(plain(await next), { status: 'busy' });
+  }
+  resolve({ status: 'cancelled' }); assert.deepEqual(plain(await work), { status: 'cancelled' });
+  f.bridge.cancelRegeneration(); assert.equal(f.sent.length, 1);
+});
+
+test('lock permanently suppresses video refresh completion and its cancellation channel', async () => {
+  const f = fixture(); let resolve!: (value: unknown) => void;
+  f.native(() => new Promise(yes => { resolve = yes; }));
+  const request = { id: item().id, revision: item().revision };
+  const work = f.bridge.refreshVideo(request);
+  f.bridge.lock(); f.bridge.cancelRegeneration();
+  resolve({ status: 'refreshed', item: item() });
+  assert.deepEqual(plain(await work), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.refreshVideo(request)), { status: 'unavailable' });
+  assert.deepEqual(f.sent, [[channels.lock]]); assert.equal(f.invoked.length, 1);
+});
+
+test('refreshable is an explicit boolean in every detailed response projection', async () => {
+  for (const refreshable of [undefined, null, 0, 1, 'true', {}, []]) {
+    for (const [mode, status] of [['detail', 'ready'], ['save', 'saved'], ['regenerate', 'generated'], ['refreshVideo', 'refreshed']]) {
+      const value = { ...item(), refreshable };
+      const f = fixture({ status, item: value });
+      const request = mode === 'detail' ? value.id : mode === 'save'
+        ? { id: value.id, revision: value.revision, notes: '', tags: [] } : { id: value.id, revision: value.revision };
+      assert.deepEqual(plain(await f.bridge[mode](request)), { status: 'unavailable' });
     }
   }
 });

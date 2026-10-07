@@ -31,6 +31,7 @@ interface Playback {
   operations: Set<Operation>;
   sourceAborted: () => void;
   retired: boolean;
+  deliveredData: boolean;
   closing?: Promise<void>;
 }
 function unavailable(): Error { return new Error('Private video is unavailable.'); }
@@ -136,7 +137,7 @@ export class PrivateSourcePlayback {
     this.#active = undefined;
     const previous = [...this.#entries].map(entry => this.retire(entry));
     const entry: Playback = { source, type, url: PREFIX + randomBytes(32).toString('hex'), controller: new AbortController(),
-      operations: new Set(), retired: false, sourceAborted: () => { void this.retire(entry).catch(() => undefined); } };
+      operations: new Set(), retired: false, deliveredData: false, sourceAborted: () => { void this.retire(entry).catch(() => undefined); } };
     this.#entries.add(entry);
     source.signal.addEventListener('abort', entry.sourceAborted, { once: true });
     try {
@@ -150,6 +151,13 @@ export class PrivateSourcePlayback {
       await this.retire(entry);
       throw unavailable();
     }
+  }
+
+  /** Delivery is necessary for a playing acknowledgement, but does not prove decoding. */
+  hasDeliveredData(url: string): boolean {
+    const entry = this.#active;
+    return !!entry && isPrivateSourcePlaybackUrl(url) && entry.url === url
+      && entry.deliveredData && this.entryCurrent(entry);
   }
 
   /** Revoke tokens and delivery synchronously; resolve only after descriptors and reads drain. */
@@ -237,7 +245,9 @@ export class PrivateSourcePlayback {
             owned = await lease!.read(position, Math.min(CHUNK_BYTES, selected.end - position));
             if (!authorized()) { throw unavailable(); }
             position += owned.length;
+            const delivered = owned.length > 0;
             controller.enqueue(owned); owned = undefined;
+            if (delivered) { entry.deliveredData = true; }
             if (position === selected.end) { controller.close(); void finish().catch(() => undefined); }
           } catch {
             owned?.fill(0); owned = undefined;

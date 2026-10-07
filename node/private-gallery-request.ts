@@ -5,11 +5,13 @@ import type { FinalObject, ImageElement } from '../interfaces/final-object.inter
 import { getImageLocations } from '../interfaces/media-locations';
 import { PRIVATE_GALLERY_CHANNELS as channels, PRIVATE_GALLERY_PAGE_SIZE, PRIVATE_GALLERY_SOURCE_LIMIT, PRIVATE_GALLERY_IMPORT_LIMIT,
   type PrivateGallerySource, type PrivateGallerySources, type PrivateGallerySourceConnection, type PrivateGallerySourceDisconnection,
+  type PrivateGallerySourceCheck, type PrivateGallerySourceCheckCounts,
   type PrivateGallerySourceRelocation, type PrivateGallerySourceAddition, type PrivateGalleryOriginalPlayback, type PrivateGalleryImportResponse,
+  type PrivateGalleryPlaybackAcknowledgement, type PrivateGalleryPlaybackHistoryReset, type PrivateGalleryPlaybackHistoryMetric,
   type PrivateGalleryImportCounts, type PrivateGalleryImportProgress,
   type PrivateGalleryDetail, type PrivateGalleryItem, type PrivateGalleryPage, type PrivateGalleryQuery,
   type PrivateGalleryEdit, type PrivateGallerySave, type PrivateGallerySelection,
-  type PrivateGalleryRegeneration, type PrivateGalleryProtection, type PrivateGalleryProtectionSave,
+  type PrivateGalleryRegeneration, type PrivateGalleryRefresh, type PrivateGalleryProtection, type PrivateGalleryProtectionSave,
   type PrivateCredentialsPasswordChange, type PrivateCredentialsUnprotectedCopy,
   type PrivateCredentialsTouchIdStatus, type PrivateCredentialsTouchIdEnable, type PrivateCredentialsTouchIdDisable } from '../interfaces/private-gallery';
 import { snapshotPrivateHubPasswordChange, snapshotPrivateHubPlaintextCopyRequest, snapshotPrivateHubTouchIdEnable,
@@ -20,7 +22,8 @@ import type { PrivateHubSession } from './private-hub-session';
 import { isPrivateHubPlaintextExportCleanupFailure } from './private-hub-plaintext-export';
 import { privateVideoMetadataEditable, privateVideoRevision, snapshotPrivateVideoTags } from './private-hub-metadata';
 import { PrivateSourceAccess } from './private-source-access';
-import { privateSourcePlaybackType, type PrivateSourcePlayback } from './private-source-playback';
+import { isPrivateSourcePlaybackUrl, privateSourcePlaybackType, type PrivateSourcePlayback } from './private-source-playback';
+import { checkPrivateSource, privateSourceCheckRevision } from './private-source-check';
 import { reviewPrivateSourceRelocation, type PrivateSourceRelocationReview } from './private-source-relocation';
 import { reviewPrivateSourceAddition, type PrivateSourceAdditionReview } from './private-source-addition';
 import { reviewPrivateSourceScan, isPrivateSourceScanCleanupFailure, type PrivateSourceScanReview } from './private-source-scan';
@@ -28,7 +31,9 @@ import { isPrivatePreviewGenerationCleanupFailure } from './private-hub-preview-
 import { capturePrivatePreviewSource, isPrivatePreviewSourceCleanupFailure, type PrivatePreviewSource } from './private-preview-source';
 
 import { isPrivateTouchIdCleanupFailure } from './private-touch-id';
-import { checkPrivateVideoImport } from './private-video-import';
+import { checkPrivateVideoImport, snapshotPrivateVideoImportLocation } from './private-video-import';
+import { sourceFolderPathIsIgnored } from '../interfaces/source-folder-path';
+import { checkPrivateVideoRefresh } from './private-video-refresh';
 
 const ENTRY_URL = 'theatrum://app/index.html';
 const HASH = /^[a-zA-Z0-9_-]{1,200}$/;
@@ -43,6 +48,8 @@ export interface PrivateGalleryRequestOptions {
   readonly onLock: () => void;
   /** Applies a saved setting to the main-owned timer; never a renderer heartbeat. */
   readonly onProtectionChanged: (settings: PrivateHubProtection) => boolean;
+  /** Count-only native confirmation for resetting one metric in the encrypted catalogue. */
+  readonly confirmPlaybackHistoryReset?: (metric: PrivateGalleryPlaybackHistoryMetric, count: number) => Promise<boolean>;
   /** Native main-owned picker. Never accept a path from the renderer. */
   /** Main-owned descriptor playback; no source paths cross this bridge. */
   readonly playback?: PrivateSourcePlayback;
@@ -108,6 +115,25 @@ function sourceRows(catalogue: FinalObject): SourceRow[] {
   return sources;
 }
 
+/** Snapshot only the bounded count report; main-only source revision never crosses IPC. */
+function sourceCheckCounts(value: unknown): (PrivateGallerySourceCheckCounts & { revision: string }) | undefined {
+  try {
+    if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) { return; }
+    const counts = ['total', 'sameSize', 'differentSize', 'missing', 'unverified', 'ignored'] as const;
+    const expected = ['status', 'revision', ...counts];
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== expected.length || keys.some(key => typeof key !== 'string' || !expected.includes(key))) { return; }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (expected.some(key => !descriptors[key]?.enumerable || !Object.hasOwn(descriptors[key], 'value'))) { return; }
+    if (descriptors.status.value !== 'checked' || typeof descriptors.revision.value !== 'string'
+      || !/^[a-f0-9]{64}$/.test(descriptors.revision.value)) { return; }
+    const result = Object.fromEntries(counts.map(key => [key, descriptors[key].value])) as unknown as PrivateGallerySourceCheckCounts;
+    if (counts.some(key => !Number.isSafeInteger(result[key]) || result[key] < 0 || result[key] > 10_000)
+      || result.sameSize + result.differentSize + result.missing + result.unverified + result.ignored !== result.total) { return; }
+    return { ...result, revision: descriptors.revision.value };
+  } catch { return; }
+}
+
 // Main-owned row identity, never exposed to the private page. A reordered or
 // replaced row cannot inherit the previous row's editing authority.
 function identity(image: ImageElement): string {
@@ -127,7 +153,7 @@ function timestamp(value: unknown): number | undefined {
 function positiveMetric(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= Number.MAX_SAFE_INTEGER ? value : undefined;
 }
-function project(image: ImageElement, index: number, regenerable = false, playable = false): Row {
+function project(image: ImageElement, index: number, regenerable = false, playable = false, refreshable = false): Row {
   if (!HASH.test(image.hash)) { throw new Error(); }
   const title = text(image.cleanName, 2048) || 'Untitled video';
   const notes = text(image.notes, 65_536);
@@ -144,7 +170,7 @@ function project(image: ImageElement, index: number, regenerable = false, playab
       duration: positiveMetric(image.duration),
       rating: [0.5, 1.5, 2.5, 3.5, 4.5, 5.5].includes(image.stars) ? rating : undefined },
     display: { title, notes, tags, duration: number(image.duration), width: number(image.width), height: number(image.height),
-      rating, favourite: image.stars === 5.5, editable: privateVideoMetadataEditable(image), regenerable, playable,
+      rating, favourite: image.stars === 5.5, editable: privateVideoMetadataEditable(image), regenerable, playable, refreshable,
       revision: randomBytes(16).toString('hex'),
       thumbnailUrl: createTheatrumMediaUrl('thumbnails', image.hash, false, previewKey),
       clipUrl: createTheatrumMediaUrl('clips', image.hash, true, previewKey),
@@ -185,6 +211,26 @@ function playbackLocation(catalogue: FinalObject, image: ImageElement) {
     if (root === path.parse(root).root) { return undefined; }
     return { ...location, hash: image.hash, root };
   } catch { return undefined; }
+}
+
+/** Refresh replaces one unambiguous saved file, including its preview namespace. */
+function refreshLocation(catalogue: FinalObject, image: ImageElement) {
+  try {
+    if (image.deleted || image.cleanName === '*FOLDER*') { return; }
+    const locations = getImageLocations(image);
+    if (locations.length !== 1) { return; }
+    const location = locations[0];
+    const folder = catalogue.inputDirs?.[location.inputSource];
+    if (!folder || sourceFolderPathIsIgnored(location.partialPath, folder.ignoredSubdirectories)) { return; }
+    return snapshotPrivateVideoImportLocation({ ...location, root: folder.path, hash: image.hash });
+  } catch { return; }
+}
+
+/** Tombstones and folder rows may still own an encrypted preview namespace. */
+function refreshHashes(catalogue: FinalObject): Set<string> {
+  const counts = new Map<string, number>();
+  for (const image of catalogue.images) { counts.set(image.hash, (counts.get(image.hash) ?? 0) + 1); }
+  return new Set([...counts].filter(([, count]) => count === 1).map(([hash]) => hash));
 }
 
 function uniqueHashes(catalogue: FinalObject): Set<string> {
@@ -274,6 +320,19 @@ function regenerationRequest(value: unknown): { id: string; revision: string } |
   } catch { return; }
 }
 
+/** Strict renderer request: no accessor, symbol, hidden field or native path. */
+function refreshRequest(value: unknown): { id: string; revision: string } | undefined {
+  try {
+    if (!value || typeof value !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) { return; }
+    const fields = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== 2 || keys.some(key => key !== 'id' && key !== 'revision')) { return; }
+    if (['id', 'revision'].some(key => !fields[key]?.enumerable || !Object.hasOwn(fields[key], 'value')
+      || typeof fields[key].value !== 'string' || !/^[a-f0-9]{32}$/.test(fields[key].value))) { return; }
+    return { id: fields.id.value, revision: fields.revision.value };
+  } catch { return; }
+}
+
 /** One bounded metadata bridge for one private main frame and unlocked generation. */
 export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOptions): () => Promise<void> {
   if (activeRequest || typeof options?.isCurrent !== 'function' || typeof options?.onLock !== 'function'
@@ -301,6 +360,10 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
   const lifetime = new AbortController();
   let original: AbortController | undefined;
   let originalDrain: Promise<void> | undefined;
+  let originalReceipt: { url: string; controller: AbortController; row: Row; id: string;
+    revision: string; grantCurrent: () => boolean; acknowledged: boolean } | undefined;
+  let historyDrain: Promise<void> | undefined;
+  let historyResetDrain: Promise<void> | undefined;
   let playbackDrain: Promise<void> | undefined;
   let regeneration: AbortController | undefined;
   let regenerationDrain: Promise<void> | undefined;
@@ -340,6 +403,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     return playbackDrain;
   };
   const retireOriginal = (): Promise<void> => {
+    originalReceipt = undefined;
     original?.abort(); original = undefined;
     return drainPlayback();
   };
@@ -372,6 +436,8 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     chooseDirectory: root => options.chooseSourceDirectory ? options.chooseSourceDirectory(root) : Promise.resolve(undefined) });
   const eligible = (catalogue: FinalObject, image: ImageElement, hashes = uniqueHashes(catalogue)): boolean =>
     !!options.chooseSourceDirectory && hashes.has(image.hash) && !!sourceLocation(catalogue, image);
+  const refreshable = (catalogue: FinalObject, image: ImageElement, hashes = refreshHashes(catalogue)): boolean =>
+    !!options.chooseSourceDirectory && hashes.has(image.hash) && !!refreshLocation(catalogue, image);
   const playable = (catalogue: FinalObject, image: ImageElement): boolean => {
     const location = playbackLocation(catalogue, image);
     return !!options.playback && !!options.chooseSourceDirectory && !!location
@@ -387,10 +453,11 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     if (!current() || !Array.isArray(catalogue.images)) { throw new Error(); }
     const projected: Row[] = [];
     const hashes = uniqueHashes(catalogue);
+    const refreshableHashes = refreshHashes(catalogue);
     for (const [index, image] of catalogue.images.entries()) {
       if (image.deleted || image.cleanName === '*FOLDER*') { continue; }
       if (projected.length >= MAX_ROWS) { throw new Error(); }
-      projected.push(project(image, index, eligible(catalogue, image, hashes), playable(catalogue, image)));
+      projected.push(project(image, index, eligible(catalogue, image, hashes), playable(catalogue, image), refreshable(catalogue, image, refreshableHashes)));
     }
     if (!current()) { throw new Error(); }
     rows = projected;
@@ -463,6 +530,78 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
         return { status: 'connected', item };
       } catch { return stopped(); }
       finally { if (granted && !connected) { access.disconnect(source.root); } }
+    });
+    const drain = work.then(() => undefined, () => undefined);
+    sourceConnectionDrain = drain;
+    try {
+      const result = await work;
+      if (!authorized()) { if (granted) { access.disconnect(source.root); } return stopped(); }
+      return result;
+    } finally {
+      pending = false;
+      if (sourceConnection === controller) { sourceConnection = undefined; }
+      if (sourceConnectionDrain === drain) { sourceConnectionDrain = undefined; }
+    }
+  };
+  const checkSource = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGallerySourceCheck> => {
+    if (!trusted(event) || args.length !== 1 || typeof args[0] !== 'string' || !/^[a-f0-9]{32}$/.test(args[0])
+      || !options.chooseSourceDirectory) { return { status: 'unavailable' }; }
+    if (pending) { return { status: 'busy' }; }
+    const source = issuedSources.get(args[0]);
+    if (!source) { return { status: 'unavailable' }; }
+    pending = true;
+    const controller = new AbortController();
+    sourceConnection = controller;
+    const authorized = (): boolean => !controller.signal.aborted && trusted(event) && !controller.signal.aborted;
+    const stopped = (): PrivateGallerySourceCheck => trusted(event) && controller.signal.aborted
+      ? { status: 'cancelled' } : { status: 'unavailable' };
+    let granted = false;
+    let checked = false;
+    // Install drainage before any catalogue, playback or native-picker callback
+    // can reenter Lock. This operation changes neither catalogue nor row cache.
+    const work = Promise.resolve().then(async (): Promise<PrivateGallerySourceCheck> => {
+      try {
+        if (!authorized() || (options.playback && !await stopForOperation(event)) || !authorized()) { return stopped(); }
+        const before = sourceRows(await hub.readCatalogue(generation));
+        if (!authorized()) { return stopped(); }
+        if (!before.some(row => row.identity === source.identity)) {
+          access.disconnect(source.root);
+          return { status: 'conflict' };
+        }
+        access.isConnected(source.root); // Existing grants alone may probe; first access still requires the picker.
+        const grant = await access.authorize(source.root, controller.signal, authorized);
+        granted = grant.status === 'granted';
+        if (!authorized()) { return stopped(); }
+        if (grant.status !== 'granted') { return { status: grant.status }; }
+        const catalogue = await hub.readCatalogue(generation);
+        if (!authorized()) { return stopped(); }
+        if (!sourceRows(catalogue).some(row => row.identity === source.identity)) { return { status: 'conflict' }; }
+        if (!grant.isCurrent()) { return { status: 'source-unavailable' }; }
+        const result = await checkPrivateSource({ catalogue, sourceIndex: source.index, signal: controller.signal,
+          isCurrent: () => authorized() && grant.isCurrent() && authorized() });
+        if (!authorized()) { return stopped(); }
+        if (!grant.isCurrent()) { return { status: 'source-unavailable' }; }
+        if (result.status !== 'checked') {
+          return ['cancelled', 'invalid', 'limit', 'source-unavailable'].includes(result.status)
+            ? { status: result.status } : { status: 'invalid' };
+        }
+        const snapshot = sourceCheckCounts(result);
+        if (!snapshot) { return { status: 'invalid' }; }
+        const latest = await hub.readCatalogue(generation);
+        if (!authorized()) { return stopped(); }
+        if (!grant.isCurrent()) { return { status: 'source-unavailable' }; }
+        if (!sourceRows(latest).some(row => row.identity === source.identity)) { return { status: 'conflict' }; }
+        let revision: string;
+        try { revision = privateSourceCheckRevision(latest, source.index); }
+        catch { return { status: 'conflict' }; }
+        if (revision !== snapshot.revision) { return { status: 'conflict' }; }
+        if (!authorized()) { return stopped(); }
+        if (!grant.isCurrent()) { return { status: 'source-unavailable' }; }
+        checked = true;
+        const { revision: _revision, ...counts } = snapshot;
+        return { status: 'checked', ...counts };
+      } catch { return authorized() ? { status: 'source-unavailable' } : stopped(); }
+      finally { if (granted && !checked) { access.disconnect(source.root); } }
     });
     const drain = work.then(() => undefined, () => undefined);
     sourceConnectionDrain = drain;
@@ -809,7 +948,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
         if (!image || image.deleted || image.cleanName === '*FOLDER*' || identity(image) !== row.identity) {
           return { status: 'unavailable' };
         }
-        const latest = project(image, row.index, eligible(catalogue, image), playable(catalogue, image));
+        const latest = project(image, row.index, eligible(catalogue, image), playable(catalogue, image), refreshable(catalogue, image));
         // Re-reading the same record does not invalidate another unchanged draft.
         if (latest.persistedRevision === row.persistedRevision) { latest.display.revision = row.display.revision; }
         Object.assign(row, latest);
@@ -838,7 +977,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
         if (!trusted(event)) { return { status: 'unavailable' }; }
         if (result.status !== 'saved') { return { status: result.status }; }
         if (identity(result.image) !== row.identity) { return { status: 'unavailable' }; }
-        Object.assign(row, project(result.image, row.index, row.display.regenerable, row.display.playable));
+        Object.assign(row, project(result.image, row.index, row.display.regenerable, row.display.playable, row.display.refreshable));
         return { status: 'saved', item: { ...row.display, id: request.id, tags: [...row.display.tags] } };
       } finally { pending = false; }
     } catch { return { status: 'unavailable' }; }
@@ -894,6 +1033,8 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
         const owned = source; source = undefined; // Manager consumes even rejected starts.
         const url = await options.playback!.start(owned, type);
         if (!authorized() || !grant.isCurrent()) { await retireOriginal(); return stopped(); }
+        originalReceipt = { url, controller, row, id: value.id, revision: row.persistedRevision,
+          grantCurrent: grant.isCurrent, acknowledged: false };
         ready = true;
         return { status: 'ready', url };
       } catch (error) {
@@ -920,6 +1061,105 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
   };
   const stopOriginal = (event: IpcMainEvent, ...args: unknown[]): void => {
     if (trusted(event) && args.length === 0) { void retireOriginal(); }
+  };
+  const ackOriginalPlayback = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGalleryPlaybackAcknowledgement> => {
+    if (!trusted(event) || !options.playback) { return { status: 'unavailable' }; }
+    if (args.length !== 1 || typeof args[0] !== 'string' || !isPrivateSourcePlaybackUrl(args[0])) {
+      return { status: 'invalid' };
+    }
+    const receipt = originalReceipt;
+    if (!receipt || receipt.url !== args[0] || receipt.acknowledged || original !== receipt.controller
+      || receipt.controller.signal.aborted || issued.get(receipt.id) !== receipt.row
+      || receipt.row.persistedRevision !== receipt.revision) { return { status: 'ignored' }; }
+    if (pending) { return { status: 'busy' }; }
+    try {
+      if (!receipt.grantCurrent() || !options.playback.hasDeliveredData(receipt.url)) { return { status: 'ignored' }; }
+    } catch { return { status: 'unavailable' }; }
+    if (!trusted(event) || originalReceipt !== receipt || original !== receipt.controller
+      || receipt.controller.signal.aborted || receipt.acknowledged) { return { status: 'ignored' }; }
+    // Consume before any async admission. A failed or disabled acknowledgement
+    // must not replay an uncertain publication or record later enablement.
+    receipt.acknowledged = true;
+    pending = true;
+    const playedAt = Date.now();
+    // Register drainage before invoking the session, which can synchronously
+    // reenter lock/dispose. Once admitted, Stop does not undo a playback fact;
+    // navigation, lock and generation revocation still cancel publication.
+    const work = Promise.resolve().then(async (): Promise<PrivateGalleryPlaybackAcknowledgement> => {
+      if (!trusted(event)) { return { status: 'unavailable' }; }
+      const result = await hub.recordVideoPlayback(generation, {
+        index: receipt.row.index, revision: receipt.revision, playedAt,
+      }, () => trusted(event));
+      if (!trusted(event)) { return { status: 'unavailable' }; }
+      if (result.status !== 'recorded') { return { status: result.status }; }
+      const row = receipt.row;
+      if (issued.get(receipt.id) !== row || row.persistedRevision !== receipt.revision
+        || identity(result.image) !== row.identity) { return { status: 'unavailable' }; }
+      // The encrypted transaction changed only playback metadata. Keep the
+      // existing editing revision so an unsaved notes/tags/rating draft remains
+      // valid, while its next CAS uses the newly persisted complete-row hash.
+      row.persistedRevision = privateVideoRevision(result.image);
+      row.metrics.lastPlayed = timestamp(result.image.lastPlayed);
+      return { status: 'recorded' };
+    });
+    const drain = work.then(() => undefined, () => undefined);
+    historyDrain = drain;
+    try { return await work; }
+    catch { return { status: 'unavailable' }; }
+    finally {
+      pending = false;
+      if (historyDrain === drain) { historyDrain = undefined; }
+    }
+  };
+  const resetPlaybackHistory = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGalleryPlaybackHistoryReset> => {
+    if (!trusted(event) || typeof options.confirmPlaybackHistoryReset !== 'function') { return { status: 'unavailable' }; }
+    if (args.length !== 1 || (args[0] !== 'lastPlayed' && args[0] !== 'timesPlayed')) { return { status: 'invalid' }; }
+    if (pending) { return { status: 'busy' }; }
+    const metric = args[0];
+    pending = true;
+    // A native dialog or session adapter can synchronously reenter Lock. Install
+    // drainage before either callback, then recheck frame/session authority on
+    // both sides of confirmation so a late answer cannot publish after Lock.
+    const work = Promise.resolve().then(async (): Promise<PrivateGalleryPlaybackHistoryReset> => {
+      if (!trusted(event) || (options.playback && !await stopForOperation(event)) || !trusted(event)) {
+        return { status: 'unavailable' };
+      }
+      try {
+        const result = await hub.resetPlaybackHistory(generation, metric, () => trusted(event), async count => {
+          if (!trusted(event) || !Number.isSafeInteger(count) || count < 1 || count > MAX_ROWS) { return false; }
+          const confirmed = await options.confirmPlaybackHistoryReset!(metric, count);
+          return trusted(event) && confirmed === true;
+        });
+        if (!trusted(event) || !result || typeof result !== 'object' || Object.getPrototypeOf(result) !== Object.prototype) {
+          return { status: 'unavailable' };
+        }
+        const fields = Object.getOwnPropertyDescriptors(result);
+        const names = Reflect.ownKeys(fields);
+        if (!fields.status?.enumerable || !Object.hasOwn(fields.status, 'value')) { return { status: 'unavailable' }; }
+        const status = fields.status.value;
+        if (status === 'reset' && names.length === 2 && fields.count?.enumerable && Object.hasOwn(fields.count, 'value')
+          && Number.isSafeInteger(fields.count.value) && fields.count.value >= 1 && fields.count.value <= MAX_ROWS) {
+          return { status: 'reset', count: fields.count.value };
+        }
+        if (names.length === 1 && (status === 'unchanged' || status === 'cancelled' || status === 'busy' || status === 'invalid')) {
+          return { status };
+        }
+        return { status: 'unavailable' };
+      } finally {
+        // Every admitted review may have observed newer catalogue contents.
+        // Retire all public revisions, even for cancellation/no-op, while saved
+        // source access grants remain explicitly controlled by the user.
+        rows = undefined; issued.clear(); ids.clear(); issuedSources.clear();
+      }
+    });
+    const drain = work.then(() => undefined, () => undefined);
+    historyResetDrain = drain;
+    try { return await work; }
+    catch { return { status: 'unavailable' }; }
+    finally {
+      pending = false;
+      if (historyResetDrain === drain) { historyResetDrain = undefined; }
+    }
   };
   const regenerate = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGalleryRegeneration> => {
     if (!trusted(event) || args.length !== 1) { return { status: 'unavailable' }; }
@@ -969,7 +1209,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
         if (!authorized() || !grant.isCurrent()) { return stopped(); }
         await hub.generatePreviews(generation, source, { signal: controller.signal });
         if (!authorized()) { return stopped(); }
-        Object.assign(row, project(refreshed, row.index, true, playable(latest, refreshed)));
+        Object.assign(row, project(refreshed, row.index, true, playable(latest, refreshed), refreshable(latest, refreshed)));
         return { status: 'generated', item: { ...row.display, id, tags: [...row.display.tags] } };
       } catch (error) {
         if (isPrivatePreviewGenerationCleanupFailure(error)) {
@@ -987,6 +1227,121 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     try {
       const result = await work;
       return cleanupFailed || !trusted(event) ? { status: 'unavailable' } : controller.signal.aborted ? stopped() : result;
+    } finally {
+      pending = false;
+      if (regeneration === controller) { regeneration = undefined; }
+      if (regenerationDrain === drain) { regenerationDrain = undefined; }
+    }
+  };
+  const refreshVideo = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGalleryRefresh> => {
+    if (!trusted(event) || !options.chooseSourceDirectory) { return { status: 'unavailable' }; }
+    const value = args.length === 1 ? refreshRequest(args[0]) : undefined;
+    if (!value) { return { status: 'invalid' }; }
+    if (pending) { return { status: 'busy' }; }
+    const id = value.id;
+    const row = issued.get(id);
+    if (!row || !row.display.refreshable) { return { status: 'unavailable' }; }
+    if (value.revision !== row.display.revision) { return { status: 'conflict' }; }
+    pending = true;
+    const controller = new AbortController();
+    regeneration = controller;
+    const authorized = (): boolean => !controller.signal.aborted && trusted(event) && !controller.signal.aborted;
+    const stopped = (): PrivateGalleryRefresh => trusted(event) && controller.signal.aborted
+      ? { status: 'cancelled' } : { status: 'unavailable' };
+    const oldIdentity = row.identity;
+    const oldRevision = row.persistedRevision;
+    let location: ReturnType<typeof refreshLocation>;
+    let replacementHash: string | undefined;
+    let granted = false;
+    let refreshed = false;
+    const retire = (): void => { rows = undefined; issued.clear(); ids.clear(); };
+    // Register the complete drain before any catalogue, playback, capture or
+    // native-picker adapter can synchronously reenter Lock/disposal.
+    const work = Promise.resolve().then(async (): Promise<PrivateGalleryRefresh> => {
+      let outcome: PrivateGalleryRefresh = { status: 'unavailable' };
+      let source: PrivatePreviewSource | undefined;
+      try {
+        outcome = await (async (): Promise<PrivateGalleryRefresh> => {
+          if (!authorized() || (options.playback && !await stopForOperation(event)) || !authorized()) { return stopped(); }
+          const catalogue = await hub.readCatalogue(generation);
+          if (!authorized()) { return stopped(); }
+          const image = catalogue.images[row.index];
+          if (!image || identity(image) !== oldIdentity || privateVideoRevision(image) !== oldRevision) { return { status: 'conflict' }; }
+          location = refreshLocation(catalogue, image);
+          if (!location || !refreshable(catalogue, image)) { return { status: 'invalid' }; }
+          access.isConnected(location.root);
+          const grant = await access.authorize(location.root, controller.signal, authorized);
+          granted = grant.status === 'granted';
+          if (!authorized()) { return stopped(); }
+          if (grant.status !== 'granted') { return { status: grant.status }; }
+          const latest = await hub.readCatalogue(generation);
+          if (!authorized()) { return stopped(); }
+          const selected = latest.images[row.index];
+          if (!selected || identity(selected) !== oldIdentity || privateVideoRevision(selected) !== oldRevision
+            || !refreshable(latest, selected) || JSON.stringify(refreshLocation(latest, selected)) !== JSON.stringify(location)) {
+            return { status: 'conflict' };
+          }
+          if (!grant.isCurrent()) { return { status: 'source-unavailable' }; }
+          // A refresh never overwrites the old preview set, including when its
+          // catalogue publication is cancelled or fails after media generation.
+          replacementHash = randomBytes(16).toString('hex');
+          if (latest.images.some(candidate => candidate.hash === replacementHash)) { return { status: 'conflict' }; }
+          const replacement = { ...location, hash: replacementHash };
+          const eligibility = checkPrivateVideoRefresh(latest, replacement, { index: row.index, revision: oldRevision });
+          if (eligibility !== 'ready') { return { status: eligibility }; }
+          const fileCurrent = (): boolean => authorized() && grant.isCurrent() && authorized();
+          try { source = await capturePrivatePreviewSource({ ...replacement, signal: controller.signal, isCurrent: fileCurrent }); }
+          catch (error) {
+            if (isPrivatePreviewSourceCleanupFailure(error)) { quarantine(); }
+            return authorized() && !cleanupFailed ? { status: 'source-unavailable' } : stopped();
+          }
+          if (!authorized()) { return stopped(); }
+          if (!grant.isCurrent()) { return { status: 'source-unavailable' }; }
+          const result = await hub.refreshVideo(generation, source, replacement, { index: row.index, revision: oldRevision },
+            { signal: controller.signal, isCurrent: fileCurrent });
+          if (!authorized()) { return stopped(); }
+          if (!grant.isCurrent()) { return { status: 'source-unavailable' }; }
+          if (result.status !== 'refreshed') {
+            return ['conflict', 'invalid', 'busy'].includes(result.status) ? { status: result.status } : { status: 'unavailable' };
+          }
+          // The returned image is not enough: publication may have completed
+          // before cancellation or another main-owned writer changed the row.
+          refreshed = true;
+          return { status: 'unavailable' };
+        })();
+      } catch (error) {
+        if (isPrivatePreviewGenerationCleanupFailure(error) || isPrivatePreviewSourceCleanupFailure(error)) { quarantine(); }
+        outcome = stopped();
+      } finally {
+        try { await source?.close(); } catch { quarantine(); }
+      }
+      try {
+        if (!trusted(event)) { return { status: 'unavailable' }; }
+        // Reconcile even cancellation or uncertain publication. Only the same
+        // row at the original index can retain its issued public identifier.
+        const latest = await hub.readCatalogue(generation);
+        if (!trusted(event)) { return { status: 'unavailable' }; }
+        const saved = latest.images[row.index];
+        const savedLocation = saved && refreshLocation(latest, saved);
+        const replacedHere = !!saved && !!location && !!replacementHash && saved.hash === replacementHash
+          && refreshHashes(latest).has(replacementHash) && !!savedLocation
+          && JSON.stringify({ ...savedLocation, hash: location.hash }) === JSON.stringify(location);
+        if (!saved || saved.deleted || saved.cleanName === '*FOLDER*'
+          || (identity(saved) !== oldIdentity && !replacedHere)) { retire(); return { status: 'conflict' }; }
+        Object.assign(row, project(saved, row.index, eligible(latest, saved), playable(latest, saved), refreshable(latest, saved)));
+        if (controller.signal.aborted) { return stopped(); }
+        if (refreshed && replacedHere) {
+          return { status: 'refreshed', item: { ...row.display, id, tags: [...row.display.tags] } };
+        }
+        return refreshed ? { status: 'conflict' } : outcome;
+      } catch { retire(); return stopped(); }
+    });
+    const drain = work.then(() => undefined, () => undefined);
+    regenerationDrain = drain;
+    try {
+      const result = await work;
+      if (granted && result.status !== 'refreshed' && location) { access.disconnect(location.root); }
+      return cleanupFailed || !trusted(event) ? { status: 'unavailable' } : result;
     } finally {
       pending = false;
       if (regeneration === controller) { regeneration = undefined; }
@@ -1218,7 +1573,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     let playbackDisposal: Promise<void> | undefined;
     try { playbackDisposal = options.playback?.dispose(); } catch { cleanupFailed = true; }
     const disposedPlayback = Promise.resolve(playbackDisposal).catch(() => { cleanupFailed = true; });
-    disposal = Promise.all([access.dispose(), originalDrain, playbackDrain, disposedPlayback,
+    disposal = Promise.all([access.dispose(), originalDrain, historyDrain, historyResetDrain, playbackDrain, disposedPlayback,
       regenerationDrain, sourceConnectionDrain, importDrain, credentialDrain, unprotectedCopyDrain]).then(() => {
       if (cleanupFailed) { throw new Error('Private gallery cleanup unavailable'); }
     });
@@ -1228,6 +1583,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     ipcMain.handle(channels.sources, sources); installed.push(channels.sources);
     ipcMain.handle(channels.addSource, addSource); installed.push(channels.addSource);
     ipcMain.handle(channels.connectSource, connectSource); installed.push(channels.connectSource);
+    ipcMain.handle(channels.checkSource, checkSource); installed.push(channels.checkSource);
     ipcMain.handle(channels.disconnectSource, disconnectSource); installed.push(channels.disconnectSource);
     ipcMain.handle(channels.relocateSource, relocateSource); installed.push(channels.relocateSource);
     ipcMain.handle(channels.importVideo, importVideo); installed.push(channels.importVideo);
@@ -1237,7 +1593,10 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     ipcMain.handle(channels.detail, detail); installed.push(channels.detail);
     ipcMain.handle(channels.save, save); installed.push(channels.save);
     ipcMain.handle(channels.playOriginal, playOriginal); installed.push(channels.playOriginal);
+    ipcMain.handle(channels.ackOriginalPlayback, ackOriginalPlayback); installed.push(channels.ackOriginalPlayback);
+    ipcMain.handle(channels.resetPlaybackHistory, resetPlaybackHistory); installed.push(channels.resetPlaybackHistory);
     ipcMain.handle(channels.regenerate, regenerate); installed.push(channels.regenerate);
+    ipcMain.handle(channels.refreshVideo, refreshVideo); installed.push(channels.refreshVideo);
     ipcMain.handle(channels.protection, protection); installed.push(channels.protection);
     ipcMain.handle(channels.setProtection, setProtection); installed.push(channels.setProtection);
     ipcMain.handle(channels.changePassword, changePassword); installed.push(channels.changePassword);

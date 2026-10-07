@@ -1,6 +1,6 @@
-# Private-hub development validation — updated 3 October 2026
+# Private-hub development validation — updated 7 October 2026
 
-This record covers experimental storage, generation, browser isolation, the dedicated password/opening and private-copy workflows, the normal-application pause boundary, the saved-document/application transition adapters, the connected ordinary renderer safeguards, the main host lifecycle integration, and the private gallery with collections and sorting, encrypted notes/tag/rating editing, isolated original-video playback, native source selection, session source-folder connections and saved-location changes, manual selected-video batch import, reviewed source-folder discovery, saved source-folder addition, per-video encrypted preview regeneration, encrypted automatic-lock settings, authenticated password changes, verified unprotected copies, and native menu/clipboard controls. It is not an application release. The latest macOS development build enables native File menu entry for the password workflow; earlier milestones below describe its previously disabled state. All published verification results below use synthetic catalogue and media fixtures. Touch ID work is deferred at the user's request.
+This record covers experimental storage, generation, browser isolation, the dedicated password/opening and private-copy workflows, the normal-application pause boundary, the saved-document/application transition adapters, the connected ordinary renderer safeguards, the main host lifecycle integration, and the private gallery with collections and sorting, encrypted notes/tag/rating editing, optional encrypted playback history and metric resets, isolated original-video playback, native source selection, session source-folder connections, saved-location changes and read-only saved-file checks, manual selected-video batch import, reviewed source-folder discovery, saved source-folder addition, per-video encrypted preview regeneration and single-location technical metadata refresh, encrypted automatic-lock settings, authenticated password changes, verified unprotected copies, and native menu/clipboard controls. It is not an application release. The latest macOS development build enables native File menu entry for the password workflow; earlier milestones below describe its previously disabled state. All published verification results below use synthetic catalogue and media fixtures. Touch ID work is deferred at the user's request.
 
 ## Earlier checkout and native helper build
 
@@ -23,6 +23,192 @@ The table above records the earlier integration milestones before commit `0bfe18
 ## Checks
 
 Run commands from the repository root above, with `TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp` for filesystem tests.
+
+### Single-location video refresh — 7 October 2026
+
+The private gallery now provides **Refresh video** separately from **Regenerate previews**. It refreshes technical metadata and all configured encrypted previews from a single saved, authorized source location. Entries with alternate locations or shared preview identifiers are refused. Notes, tags, title, rating, playback history, playlist membership, date added and unknown raw fields are retained. Invalid or out-of-range default-frame selections are cleared; missing flags and import-error metadata are preserved.
+
+The operation uses a new main-generated preview namespace. Complete encrypted previews are prepared before one guarded catalogue write replaces the row’s hash and measured technical fields together. Before that write the previous catalogue/preview pair remains authoritative; the old namespace is never overwritten. The controller re-reads storage after admitted outcomes, including cancellation after publication, and retires stale row authority. Uncertain publication and unproven descriptor/decoder cleanup lock or quarantine the session. Old encrypted previews, recovery backups and unused staged records remain; this is not secure erasure.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `codex/private-hubs` |
+| HEAD | `e436afe6845e33e06e486a54a900823936af4e41` |
+| Worktree state | Dirty; preceding history/reset/source-check work and this refresh stage are uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2`, Electron `42.11.1` |
+| Artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-refresh/mac-arm64/Theatrum Ex Machina.app` |
+
+The full privacy suite passed **2,293 tests across 78 files**, with no failures, skips or cancellations. Focused verification passed **27 refresh-helper, 24 refresh-session, 384 controller, 86 browser, 341 UI and 94 preload tests**. TypeScript and lint passed. Independent storage and controller/UI cross-reviews found no blocking issues. Coverage includes namespace collisions, retained/deleted namespace owners, raw metadata and optional omissions, stale rows and source/settings changes, source replacement, invalid probe results, write admission before reentrant callbacks, no-write cancellation, Lock and descriptor drainage, post-publication uncertainty, strict bridge projection, draft/IME/Protection/credential guards, and late responses or retired selection IDs.
+
+```sh
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-refresh-stage/temp npm run test:private-hubs > tmp/private-refresh-stage/full-private-tests.log 2>&1
+npm run check > tmp/private-refresh-stage/check.log 2>&1
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-refresh-stage/temp npm run test:private-browser:native > tmp/private-refresh-stage/native-browser-restart.log 2>&1
+```
+
+Native acceptance passed two phases and fourteen checkpoints. A dedicated synthetic encrypted hub started with stale 1,920×1,080, twenty-frame metadata for a 32×18, four-second source. Refresh replaced its technical fields and three-frame encrypted filmstrip while preserving user/unknown metadata and leaving the alternate-location entry and original bytes unchanged. Native picker cancellation performed no catalogue or preview writes. A dirty notes draft blocked refresh and remained intact. The existing source grant was reused. A held response after actual catalogue publication allowed cancellation; the gallery correctly loaded the newly saved preview namespace. Saved metadata and previews survived both reopening and a new Electron process.
+
+The refresh button passed bounds and hit tests at 600×400, and `tmp/private-refresh-stage/compact-refresh.png` was visually inspected. Existing source-check, import/discovery, playback/history/reset, regeneration, password/export and isolation checks also passed. Sixteen persistence scans performed 304 profile-file and 1,404 encrypted-file checks. Synthetic private markers were absent; measured network counters, default-session private requests and private disk-cache sizes were zero. Intentional plaintext sources/exports and review screenshots are excluded from those scan targets. Native picker answers remain fixture-controlled; these observations do not establish real permission-dialog behavior, OS-wide erasure or signed Touch ID acceptance.
+
+All local `main` commits through `7a569c7936f8f71b2af2af097ddad03aa2510e3e` are included; `git rev-list --count HEAD..main` returned zero. No merge or branch switch was needed.
+
+Exact local test-packaging command:
+
+```sh
+test ! -e release-test-private-refresh && THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-refresh TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-refresh-stage/temp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-refresh-stage/build.log 2>&1
+```
+
+Packaging, runtime startup and licensing verification passed. Seventeen packaged implementation files matched the tested workspace byte for byte, including the new video-refresh helper. ASAR SHA-256: `0ff0953cb6a34946cd79d11fcd736d91c18d6b925d929da5937ea92ed783f158`. The file list is recorded in `tmp/private-refresh-stage/package-source-verification.json`.
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-refresh TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-refresh-stage/temp npm run test:private-package:host > tmp/private-refresh-stage/packaged-host.log 2>&1
+```
+
+Packaged-host acceptance passed all five checkpoints using the unchanged packaged main and registered native menus. Creation, encrypted preview decoding, notes save, restoration, reopening and ordinary close passed without private recent-history writes. Six scans checked 215 profile, 35 encrypted-hub and 62 ordinary-hub files; eighteen unpacked files were verified. The new refresh interaction was tested by native browser acceptance, with the packaged implementation separately matched to those tested files.
+
+This is an unsigned local test build. No commit, push, promotion, publication, installation or replacement of the installed app was performed. Touch ID remains deferred. Alternate-location reconciliation, custom-thumbnail operations, broader filesystem/lifecycle fault acceptance and other-platform verification remain separate work.
+
+### Read-only saved-source checks — 5 October 2026
+
+**Source folders → Check saved files…** explicitly checks catalogue-listed locations under one granted source folder. It returns only counts for the same recorded size, different size, missing, not verified and ignored. Multiple stored locations count separately. Matching size is not content verification. Unknown recorded sizes, symbolic links, non-file locations and inaccessible paths are not verified; ignored locations are not probed. A lost or replaced root refuses the report instead of misreporting all videos as missing. There is no directory enumeration, media-content read, decoder, catalogue write, preview change, missing-flag update or watcher.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `codex/private-hubs` |
+| HEAD | `e436afe6845e33e06e486a54a900823936af4e41` |
+| Worktree state | Dirty; previous history/reset work and this source-check stage are uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2`, Electron `42.11.1` |
+| Artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-source-check/mac-arm64/Theatrum Ex Machina.app` |
+
+The full privacy suite passed **2,177 tests across 76 files**, with no failures, skips or cancellations. Focused suites passed **36 source-check, 345 controller, 86 browser, 320 UI and 89 preload tests**. TypeScript and lint passed. Independent helper and controller/bridge reviews found no blocking issues.
+
+Coverage includes validation before source access, bounded catalogue/location handling, aliases, ignored paths, unknown sizes, permission errors versus missing files, root/ancestor/leaf replacements, strict count-only responses, native grant reuse and revocation, late reader/picker results, Lock and cancellation drainage, stale catalogue/source configuration, and draft/selection preservation. The helper is bounded to 100,000 catalogue rows/raw locations, 256 sources, 10,000 selected references and 8,388,608 cumulative relative-path characters. Paths deeper than 32 parent levels are not probed. Path-based pre/post identity checks detect observed replacements; they are not a descriptor-relative traversal sandbox or a content-integrity guarantee.
+
+```sh
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-source-check-stage/temp npm run test:private-hubs > tmp/private-source-check-stage/full-private-tests.log 2>&1
+npm run check > tmp/private-source-check-stage/check.log 2>&1
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-source-check-stage/temp npm run test:private-browser:native > tmp/private-source-check-stage/native-browser-layout.log 2>&1
+```
+
+Native acceptance passed two phases and thirteen checkpoints. A dedicated synthetic encrypted hub checked nine saved locations: three the same recorded size, one different size, one missing, three not verified and one ignored. The UI displayed the counts; its bridge omitted the internal revision and paths. Cancellation in the native picker did not start metadata checking. Cancellation during a held metadata request waited for settlement and discarded the report. Root disconnection refused the check; reconnecting recovered. Lock drained a held native picker and refused its late grant. Unsaved notes remained intact throughout checks and were not silently saved on Lock. Encrypted catalogue and original-file fingerprints remained unchanged; reopening cleared session connections and transient results.
+
+The initial native run caught the extra action wrapping and clipping the first source row at 600×400. Widening the source panel from 430px to 500px while preserving its viewport clamp fixed the layout; the existing visibility assertion remained unchanged. Both the action and report passed the rerun, and `tmp/private-source-check-stage/compact-check.png` and `compact-report.png` were visually inspected. Existing history/reset, import, playback/fullscreen, source relocation, regeneration, password/export and isolation acceptance also passed.
+
+Fifteen persistence scans performed 284 profile-file and 1,218 encrypted-file checks. Synthetic private markers were absent from scanned files; measured network counters, default-session private requests and private disk-cache sizes were zero. Intentional plaintext sources/exports and review screenshots are outside those scan targets. The native picker/system adapters remain controlled fixtures, and these checks do not establish OS-wide erasure or real permission-dialog behavior.
+
+Exact local test-packaging command:
+
+```sh
+test ! -e release-test-private-source-check && THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-source-check TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-source-check-stage/temp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-source-check-stage/build.log 2>&1
+```
+
+Packaging, runtime startup and licensing verification passed. Sixteen packaged implementation files matched the tested workspace byte for byte, including the new source-check helper. ASAR SHA-256: `f0465871215143ddbb27237da1677e40234c005b922c8c2a1e569959c205acb0`. The file list is recorded in `tmp/private-source-check-stage/package-source-verification.json`.
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-source-check TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-source-check-stage/temp npm run test:private-package:host > tmp/private-source-check-stage/packaged-host.log 2>&1
+```
+
+Packaged-host acceptance passed all five checkpoints using the untouched packaged main and registered native menus. Creation, encrypted preview decoding, notes save, restoration, reopening and ordinary close passed without private recent-history writes. Six scans checked 215 profile, 35 encrypted-hub and 62 ordinary-hub files; eighteen unpacked files were verified. The source-check interaction was exercised by native browser acceptance, with the packaged implementation separately matched to those tested files.
+
+This is an unsigned local test build. No commit, push, promotion, publication, installation or replacement of the installed app was performed. Touch ID remains deferred. Changed-file reconciliation, custom-thumbnail operations, broader filesystem/lifecycle fault acceptance and other-platform verification remain separate work.
+
+### Playback-history maintenance — 4 October 2026
+
+Protection now provides separate **Reset Last played…** and **Reset Times played…** actions. Each operates on the current encrypted catalogue after a count-only native confirmation whose default is Cancel. The recording preference and unrelated raw catalogue fields stay unchanged. Missing and already-zero fields do not need a write. Explicit reset includes malformed metric values and retained deleted/folder entries. Existing encrypted recovery backups are retained; this is not secure erasure.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `codex/private-hubs` |
+| HEAD | `e436afe6845e33e06e486a54a900823936af4e41` |
+| Worktree state | Dirty; earlier playback-history work and this maintenance stage are uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2`, Electron `42.11.1` |
+| Artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-history-reset/mac-arm64/Theatrum Ex Machina.app` |
+
+The full privacy suite passed **2,083 tests across 75 files**, with no failures, skips or cancellations. Focused suites passed **18 reset-session, 306 controller, 86 browser, 305 UI and 85 preload tests**. Coverage includes queue ownership through confirmation, input and response bounds, raw-field preservation, malformed/deleted entries, duplicate no-op requests, no-write cancellation, history independence, encrypted backup retention, Lock during confirmation, stale publication authority, storage failures, pending cleanup, unsaved drafts, credential/composition guards, and stale gallery IDs. TypeScript and lint passed. Independent storage and UI/bridge reviews found no blocking issues.
+
+```sh
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-history-reset-stage/temp npm run test:private-hubs > tmp/private-history-reset-stage/full-private-tests.log 2>&1
+npm run check > tmp/private-history-reset-stage/check.log 2>&1
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-history-reset-stage/temp npm run test:private-browser:native > tmp/private-history-reset-stage/native-browser-verified.log 2>&1
+```
+
+Native acceptance passed two phases and twelve checkpoints. The reset stage checked cancellation without writes, each metric independently, repeated no-op resets without another prompt or write, the unchanged recording preference, Recently played refresh, retired selection IDs, and unchanged notes, other metadata and original bytes. Lock held restoration until an outstanding confirmation returned, then refused its late affirmative answer without writing. Both reset buttons passed bounds and hit tests at 600×400; `tmp/private-history-reset-stage/compact-reset.png` was visually inspected. Reopening and a fresh process retained the reset values. The existing playback-history recording, imports, source management, preview generation, encryption, password, export and isolation acceptance also passed.
+
+The first native run completed all application checks but failed the harness's final expected-checkpoint list, which omitted the newly added reset checkpoint. Adding that expected checkpoint produced the successful rerun without changing product behavior. Fourteen persistence scans performed 264 profile-file and 1,049 encrypted-file checks. Scanned synthetic private markers were absent; measured network counters, default-session private requests and private disk-cache sizes were zero. Intentional plaintext sources/exports and synthetic review screenshots are outside those scan targets. These checks do not establish OS-wide erasure or signing acceptance.
+
+Exact local test-packaging command:
+
+```sh
+test ! -e release-test-private-history-reset && THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-history-reset TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-history-reset-stage/temp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-history-reset-stage/build.log 2>&1
+```
+
+Packaging, runtime startup and licensing verification passed. Fifteen packaged files matched the tested workspace byte for byte, including the gallery, preload, interfaces, controller, browser, session and playback-history module. ASAR SHA-256: `af0d63d8c49c8309d33b94c79c093c87c2c285450d07533f941538907dec07d9`. The file list is recorded in `tmp/private-history-reset-stage/package-source-verification.json`.
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-history-reset TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-history-reset-stage/temp npm run test:private-package:host > tmp/private-history-reset-stage/packaged-host.log 2>&1
+```
+
+Packaged-host acceptance passed all five checkpoints using the unchanged packaged main and registered native menus. It covered private-copy creation, preview decoding and notes save, restoration, reopening and normal close without private recent-history writes. Six scans checked 215 profile, 35 encrypted-hub and 62 ordinary-hub files; eighteen unpacked files were verified. The new reset workflow was exercised by native browser acceptance, with the packaged implementation separately matched to those tested sources.
+
+This is an unsigned local test build. No commit, push, promotion, publication, installation or replacement of the installed app was performed. Touch ID remains deferred. Source reconciliation/watching, broader filesystem/lifecycle fault acceptance and other-platform verification remain separate work.
+
+### Optional encrypted playback history — 4 October 2026
+
+**Protection → Record playback history** defaults Off, including hubs with missing settings or older version-1 settings. Enabling it records Last played and increments Times played once after an original video starts playing. Previews, loading, failed starts, pause/resume, seek and loops do not add plays. A new explicit Play video action can add another. Turning recording off preserves existing history. Notes/tag/rating drafts remain separate from the automatic history update.
+
+The UI acknowledges only the first trusted original `playing` event. Main accepts an exact current opaque URL, checks the source grant and actual byte delivery, binds the saved row/revision, supplies its own timestamp and consumes the acknowledgement once. Delivery does not prove decoding; the controlled gallery event is the playback indication. The session reads encrypted policy inside the same serial transaction as raw-catalogue full-row CAS and guarded publication. Missing metrics can initialize; malformed and overflowing metrics remain unchanged. The known history-only mutation advances the main cached persisted revision and sorting metric while preserving the editor's public revision. Ordinary Stop allows an already admitted play to finish recording; lock/frame revocation cancels authority and drains it. No renderer-supplied timestamp, count or filesystem path is accepted.
+
+Protection settings now write version 2; an omitted history flag from an older in-process caller preserves the saved policy. Reading legacy version 1 does not rewrite it. Earlier builds reject the new settings version, so hubs whose Protection settings are saved here require this or a later compatible build. Damaged settings, uncertain writes, session isolation, source authority and inactivity limits retain their fail-closed behavior.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `codex/private-hubs` |
+| HEAD | `e436afe6845e33e06e486a54a900823936af4e41` |
+| Worktree state | Dirty; playback-history changes are uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2`, Electron `42.11.1` |
+| Artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-history/mac-arm64/Theatrum Ex Machina.app` |
+
+The full privacy suite passed **2,001 tests across 74 test files**, with no failures, skips or cancellations. Focused tests passed: **7 history-helper, 21 history-session, 21 protection, 9 password-session, 270 request-controller, 81 browser, 20 source-playback, 287 UI and 80 preload tests**. They cover migration/default-off/no-write behavior, policy ordering, strict snapshots, raw-field preservation, queue limits and buffer clearing, malformed metrics, CAS conflicts, duplicate/stale acknowledgements, delivered-data gating, main-owned time, delayed Stop/Lock outcomes, dirty-draft preservation, deferred list refresh, and late playback callback messages. TypeScript and lint passed.
+
+```sh
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-history-stage/temp npm run test:private-hubs > tmp/private-history-stage/full-private-tests.log 2>&1
+npm run check > tmp/private-history-stage/check.log 2>&1
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-history-stage/temp npm run test:private-browser:native > tmp/private-history-stage/native-browser-verified.log 2>&1
+```
+
+Native acceptance passed two phases and eleven checkpoints. Default-off original playback left the encrypted catalogue unchanged. Enabling recording and starting an imported synthetic video saved one play; seeking, pause/resume and an attempted duplicate acknowledgement did not increment it. Its unsaved note remained a draft and subsequently saved without a conflict. A separate start recorded a second play, Recently played included the video, and previews added no plays. Disabling recording preserved both plays and prevented another increment. The count, last-played timestamp, saved note and disabled policy survived process restart; source video bytes remained unchanged.
+
+Earlier fixture attempts exposed timing assumptions in navigation clicks during a pending acknowledgement and an incorrect empty-string expectation for absent imported notes. The final fixture waits for the existing pending gate and asserts that absent notes remain absent. No recording behavior was weakened for those checks. The new Protection select was bounds- and hit-tested at 600×400 after panel scrolling, and `tmp/private-history-stage/compact-history.png` was visually inspected. Existing source management, discovery/import, rating, collections, encrypted previews, playback/fullscreen, protection, export and lock checks also passed.
+
+Thirteen persistence scans covered 244 profile and 940 encrypted-file checks. Synthetic secret markers were absent from the scanned files; measured network counters, default-session private requests and disk-cache sizes were zero. Plaintext synthetic sources, intentional exports and review screenshots are excluded. These observations do not establish OS-wide erasure, native permission/picker-history behavior or proof of decoding independent of the trusted gallery event.
+
+Exact local test-packaging command:
+
+```sh
+test ! -e release-test-private-history && THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-history TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-history-stage/temp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-history-stage/build.log 2>&1
+```
+
+Packaging, runtime startup and licensing verification passed. Fifteen packaged files matched their tested workspace sources byte for byte: gallery HTML/CSS/JavaScript, preload, both interfaces, request controller, playback-history helper, protection helper, session, browser, protocol, source playback, captured source and metadata helper. ASAR SHA-256: `899569273e88285e9686d10469119feb9168534490c7ec155c2b76d29929696e`. Results are recorded in `tmp/private-history-stage/package-source-verification.json`.
+
+Packaged-host acceptance passed all five checkpoints using the untouched packaged main and registered menus: private-copy creation, encrypted preview decoding and notes save, lock/restoration, password reopening, and ordinary close without private recent-history entries. Six scans checked 215 profile files, 35 encrypted files and 62 ordinary fixture files; eighteen unpacked files were verified. The new playback-history interaction is covered by the native browser workflow above; its package files were separately matched byte for byte.
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-history TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-history-stage/temp npm run test:private-package:host > tmp/private-history-stage/packaged-host.log 2>&1
+```
+
+This is an unsigned local test build. No commit, push, promotion, publication, installation or replacement of the installed app was performed. Touch ID remains deferred. Source reconciliation/watching, broader failure/reconnection acceptance and other-platform verification remain separate work.
 
 ### Reviewed source-folder discovery — 3 October 2026
 

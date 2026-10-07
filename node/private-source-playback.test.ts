@@ -339,3 +339,46 @@ test('owner revocation denies metadata, retires the source and cannot be undone 
   f.state.allowed = true;
   assert.equal((await f.player.createResponse(new Request(url))).status, 404);
 });
+
+
+test('history evidence requires delivered original bytes and remains bound to a current capability', async t => {
+  const f = await fixture(t);
+  const url = await f.player.start(await f.capture(), 'video/mp4');
+  assert.equal(f.player.hasDeliveredData(url), false);
+  assert.equal((await f.player.createResponse(new Request(url, { method: 'HEAD' }))).status, 200);
+  assert.equal(f.player.hasDeliveredData(url), false);
+  const unconsumed = await f.player.createResponse(new Request(url));
+  await tick();
+  assert.equal(f.player.hasDeliveredData(url), false);
+  await unconsumed.body!.cancel();
+  assert.equal(f.player.hasDeliveredData(url), false);
+  const response = await f.player.createResponse(new Request(url, { headers: { Range: 'bytes=0-3' } }));
+  await response.arrayBuffer();
+  assert.equal(f.player.hasDeliveredData(url), true);
+  for (const other of [url + '?x=1', url + '\n', 'theatrum://app/original/' + '0'.repeat(64)]) {
+    assert.equal(f.player.hasDeliveredData(other), false);
+  }
+  const next = await f.player.start(await f.capture(), 'video/mp4');
+  assert.equal(f.player.hasDeliveredData(url), false);
+  assert.equal(f.player.hasDeliveredData(next), false);
+  await (await f.player.createResponse(new Request(next))).arrayBuffer();
+  assert.equal(f.player.hasDeliveredData(next), true);
+  f.state.allowed = false;
+  assert.equal(f.player.hasDeliveredData(next), false);
+  await f.player.stop();
+  assert.equal(f.player.hasDeliveredData(next), false);
+});
+
+test('empty originals and replaced sources cannot provide current playback history evidence', async t => {
+  const empty = await fixture(t, Buffer.alloc(0));
+  const emptyUrl = await empty.player.start(await empty.capture(), 'video/mp4');
+  await (await empty.player.createResponse(new Request(emptyUrl))).arrayBuffer();
+  assert.equal(empty.player.hasDeliveredData(emptyUrl), false);
+  const f = await fixture(t);
+  const url = await f.player.start(await f.capture(), 'video/mp4');
+  await (await f.player.createResponse(new Request(url))).arrayBuffer();
+  assert.equal(f.player.hasDeliveredData(url), true);
+  await fs.promises.rename(f.file, f.file + '-old');
+  await fs.promises.writeFile(f.file, f.bytes);
+  assert.equal(f.player.hasDeliveredData(url), false);
+});

@@ -18,15 +18,18 @@ export async function readPrivateHubProtection(store: PrivateHubStore): Promise<
       try { bytes = await store.readBackupRecord(RECORD, MAXIMUM_BYTES); }
       catch (backupError) {
         if (!missing(backupError)) { throw backupError; }
-        return { autoLockMinutes: PRIVATE_HUB_DEFAULT_AUTO_LOCK_MINUTES };
+        return { autoLockMinutes: PRIVATE_HUB_DEFAULT_AUTO_LOCK_MINUTES, recordPlaybackHistory: false };
       }
       throw unavailable();
     }
     const value: unknown = JSON.parse(bytes.toString('utf8'));
-    if (!value || typeof value !== 'object' || Array.isArray(value)
-      || Object.keys(value).sort().join(',') !== 'autoLockMinutes,version'
-      || (value as { version?: unknown }).version !== 1) { throw unavailable(); }
-    const settings = snapshotPrivateHubProtection({ autoLockMinutes: (value as PrivateHubProtection).autoLockMinutes });
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { throw unavailable(); }
+    const fields = value as Record<string, unknown>;
+    const keys = Object.keys(value).sort().join(',');
+    if (!(fields.version === 1 && keys === 'autoLockMinutes,version')
+      && !(fields.version === 2 && keys === 'autoLockMinutes,recordPlaybackHistory,version')) { throw unavailable(); }
+    const settings = snapshotPrivateHubProtection({ autoLockMinutes: fields.autoLockMinutes,
+      recordPlaybackHistory: fields.version === 1 ? false : fields.recordPlaybackHistory });
     if (!settings) { throw unavailable(); }
     return settings;
   } catch { throw unavailable(); }
@@ -38,13 +41,17 @@ export async function writePrivateHubProtection(
 ): Promise<PrivateHubProtection> {
   let bytes: Buffer | undefined;
   try {
-    const settings = snapshotPrivateHubProtection(value);
-    if (!settings || isCurrent() !== true) { throw unavailable(); }
+    const snapshot = snapshotPrivateHubProtection(value);
+    if (!snapshot || isCurrent() !== true) { throw unavailable(); }
     // Authenticate existing settings before replacing them, including the
     // missing-primary/surviving-backup case. Preserve explicit recovery.
-    await readPrivateHubProtection(store);
+    const previous = await readPrivateHubProtection(store);
     if (isCurrent() !== true) { throw unavailable(); }
-    bytes = Buffer.from(JSON.stringify({ version: 1, ...settings }));
+    // Older in-process auto-lock callers cannot accidentally disable an
+    // explicitly enabled history policy by omitting the newer field.
+    const settings: PrivateHubProtection = { autoLockMinutes: snapshot.autoLockMinutes,
+      recordPlaybackHistory: snapshot.recordPlaybackHistory ?? previous.recordPlaybackHistory === true };
+    bytes = Buffer.from(JSON.stringify({ version: 2, ...settings }));
     const writing = store.writeRecord(RECORD, bytes, isCurrent);
     bytes.fill(0);
     await writing;

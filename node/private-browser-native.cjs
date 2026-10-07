@@ -625,6 +625,9 @@ async function originalPlaybackAcceptance(window, directory) {
     const url = await evaluate(window, "document.getElementById('preview-video').currentSrc");
     assert.match(url, /^theatrum:\/\/app\/original\/[a-f0-9]{64}$/);
     await evaluate(window, "document.getElementById('preview-video').pause(); true");
+    // The optional history acknowledgement briefly serializes catalogue work.
+    // Wait until navigation is available before testing Close/selection.
+    await waitForRenderer(window, "!document.getElementById('gallery-search').disabled");
     return url;
   };
   const denied = async url => {
@@ -1208,6 +1211,279 @@ async function ratingEditingAcceptance(window) {
     ratingDetailsRetained: true, ratingOrderRefreshed: true, ratingOriginalsUnchanged: true, ratingCompactFits: true };
 }
 
+
+async function playbackHistoryAcceptance(window, directory, marker) {
+  setStage('gallery-playback-history');
+  const source = path.join(fixture, 'relocated-source', 'Synthetic imported video.mp4');
+  const originalHash = createHash('sha256').update(fs.readFileSync(source)).digest('hex');
+  const fingerprint = () => Object.fromEntries(fs.readdirSync(directory).sort().map(name =>
+    [name, createHash('sha256').update(fs.readFileSync(path.join(directory, name))).digest('hex')]));
+  const oldRecord = PrivateHubSession.prototype.recordVideoPlayback;
+  const observations = [];
+  PrivateHubSession.prototype.recordVideoPlayback = async function(...args) {
+    const result = await oldRecord.apply(this, args);
+    observations.push(result.status === 'recorded' ? { status: result.status, count: result.image.timesPlayed,
+      time: result.image.lastPlayed, notes: result.image.notes } : { status: result.status });
+    return result;
+  };
+  const waitObservation = async count => {
+    for (let attempt = 0; attempt < 500 && observations.length < count; attempt++) { await delay(10); }
+    assert.equal(observations.length, count, 'One history transaction per playback.');
+    await waitForRenderer(window, "!document.getElementById('gallery-search').disabled");
+  };
+  const search = async value => evaluate(window, `(() => { const input = document.getElementById('gallery-search');
+    input.value = ${JSON.stringify(value)}; input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  const openProtection = async () => {
+    await evaluate(window, "document.getElementById('protection-button').click(); true");
+    await waitForRenderer(window, "!document.getElementById('record-playback-history').disabled");
+  };
+  const setHistory = async value => {
+    await openProtection();
+    await evaluate(window, `(() => { const input = document.getElementById('record-playback-history'); input.value = ${JSON.stringify(value)};
+      input.dispatchEvent(new Event('change', { bubbles: true })); document.getElementById('save-protection').click(); })()`);
+    await waitForRenderer(window, "document.getElementById('protection-status').textContent === 'Protection settings saved.'");
+    await evaluate(window, "document.getElementById('close-protection').click(); true");
+  };
+  const start = async () => {
+    await waitForRenderer(window, "!document.getElementById('play-original').disabled && !document.getElementById('play-original').hidden");
+    await evaluate(window, "document.getElementById('play-original').click(); true");
+    await waitForRenderer(window, "document.getElementById('preview-video').currentSrc.includes('/original/') && document.getElementById('preview-video').currentTime > 0");
+    await evaluate(window, "document.getElementById('preview-video').pause(); true");
+  };
+  const stop = async () => {
+    await evaluate(window, "document.getElementById('stop-video').click(); true");
+    await waitForRenderer(window, "!document.getElementById('preview-video').hasAttribute('src') && !document.getElementById('play-original').disabled && document.getElementById('gallery-grid').getAttribute('aria-busy') === 'false'");
+  };
+  try {
+    await search('Synthetic imported video');
+    await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 1 && document.querySelector('.video-title').textContent === 'Synthetic imported video'");
+    await evaluate(window, "document.querySelector('#gallery-grid .video-card').click(); true");
+    await waitForRenderer(window, "document.getElementById('details-title').textContent === 'Synthetic imported video'");
+    await openProtection();
+    assert.equal(await evaluate(window, "document.getElementById('record-playback-history').value"), 'off');
+    const size = window.getSize(); window.setSize(600, 400); window.show();
+    await delay(100);
+    await evaluate(window, "document.getElementById('record-playback-history').scrollIntoView({block: 'center'}); true");
+    await evaluate(window, "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    const fits = await evaluate(window, `(() => { const el = document.getElementById('record-playback-history'); const r = el.getBoundingClientRect();
+      const p = document.getElementById('protection-panel').getBoundingClientRect();
+      return r.left >= p.left && r.right <= p.right && r.top >= p.top && r.bottom <= p.bottom
+        && r.bottom <= innerHeight && el.contains(document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2)); })()`);
+    assert.equal(fits, true);
+    fs.writeFileSync(path.join(repository, 'tmp/private-history-stage/compact-history.png'), (await window.webContents.capturePage()).toPNG());
+    window.setSize(...size);
+    await evaluate(window, "document.getElementById('close-protection').click(); true");
+    setStage('history-default-off');
+    const beforeOff = fingerprint();
+    await start(); await waitObservation(1); await stop();
+    assert.deepEqual(observations[0], { status: 'disabled' });
+    assert.deepEqual(fingerprint(), beforeOff, 'Default-off playback writes no catalogue/history records.');
+    setStage('history-enable');
+    await setHistory('on');
+    const draft = marker + ' — playback draft';
+    await evaluate(window, `(() => { const notes = document.getElementById('details-notes'); notes.value = ${JSON.stringify(draft)};
+      notes.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    setStage('history-first-play');
+    await start(); await waitObservation(2);
+    assert.equal(observations[1].status, 'recorded'); assert.equal(observations[1].count, 1);
+    assert.equal(observations[1].notes, undefined, 'History preserves absent notes instead of saving an unsaved draft.');
+    assert.equal(await evaluate(window, 'document.getElementById("details-notes").value'), draft);
+    setStage('history-replay');
+    assert.deepEqual(await evaluate(window, "window.privateGallery.ackOriginalPlayback(document.getElementById('preview-video').currentSrc)"), { status: 'ignored' });
+    await evaluate(window, "(() => { const v = document.getElementById('preview-video'); v.currentTime = 0.1; return v.play(); })()");
+    await delay(100);
+    await evaluate(window, "document.getElementById('preview-video').pause(); true");
+    assert.equal(observations.length, 2, 'Pause/resume and seeking reuse the consumed playback acknowledgement.');
+    setStage('history-draft-save');
+    await stop();
+    await waitForRenderer(window, "!document.getElementById('save-details').disabled");
+    await evaluate(window, "document.getElementById('save-details').click(); true");
+    await waitForRenderer(window, "document.getElementById('edit-status').textContent === 'Changes saved.' && document.getElementById('gallery-grid').getAttribute('aria-busy') === 'false'");
+    setStage('history-second-play');
+    await start(); await waitObservation(3); await stop();
+    assert.equal(observations[2].status, 'recorded'); assert.equal(observations[2].count, 2);
+    assert.equal(observations[2].notes, draft);
+    assert.ok(observations[2].time >= observations[1].time);
+    await evaluate(window, `(() => { const input = document.getElementById('gallery-collection'); input.value = 'recent';
+      input.dispatchEvent(new Event('change', {bubbles:true})); })()`);
+    await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 1 && document.querySelector('.video-title').textContent === 'Synthetic imported video' && document.getElementById('gallery-grid').getAttribute('aria-busy') === 'false'");
+    await evaluate(window, "document.querySelector('#gallery-grid .video-card').click(); true");
+    await waitForRenderer(window, "!document.getElementById('play-preview').disabled");
+    setStage('history-preview');
+    const beforePreview = fingerprint();
+    await evaluate(window, "document.getElementById('play-preview').click(); true");
+    await waitForRenderer(window, "document.getElementById('preview-video').currentTime > 0");
+    await stop(); assert.equal(observations.length, 3); assert.deepEqual(fingerprint(), beforePreview);
+    setStage('history-disable');
+    await setHistory('off');
+    const afterOff = fingerprint();
+    await start(); await waitObservation(4); await stop();
+    assert.deepEqual(observations[3], { status: 'disabled' }); assert.deepEqual(fingerprint(), afterOff);
+    assert.equal(createHash('sha256').update(fs.readFileSync(source)).digest('hex'), originalHash);
+    await evaluate(window, `(() => { const input = document.getElementById('gallery-collection'); input.value = 'all';
+      input.dispatchEvent(new Event('change', {bubbles:true})); })()`);
+    await waitForRenderer(window, "document.getElementById('gallery-grid').getAttribute('aria-busy') === 'false'");
+    await search('coastal');
+    await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 1 && document.querySelector('.video-title').textContent === 'Synthetic coastal clip'");
+    await evaluate(window, "document.querySelector('#gallery-grid .video-card').click(); true");
+    await waitForRenderer(window, "!document.getElementById('play-preview').disabled");
+    return { historyDefaultOffNoWrite: true, historyEnabledRecorded: true, historyRepeatedEventsOnce: true,
+      historyNewPlaybackCounted: true, historyDraftPreservedAndSaved: true, historyRecentRefreshed: true,
+      historyPreviewNoWrite: true, historyDisabledNoWrite: true, historyOriginalUnchanged: true, historyCompactFits: true };
+  } catch (error) {
+    // Synthetic fixture diagnostics stay in the workspace, outside scan targets.
+    fs.writeFileSync(path.join(repository, 'tmp/private-history-stage/history-failure.txt'), String(error?.stack || error));
+    throw error;
+  } finally { PrivateHubSession.prototype.recordVideoPlayback = oldRecord; }
+}
+
+async function playbackResetAcceptance(directory, password) {
+  setStage('playback-reset-opening');
+  const beforeStore = await PrivateHubStore.open(directory, password);
+  let expected;
+  try {
+    const bytes = await beforeStore.readRecord('catalogue');
+    try { expected = JSON.parse(bytes.toString('utf8')); } finally { bytes.fill(0); }
+  } finally { await beforeStore.lock(); }
+  assert.equal(expected.images[50].timesPlayed, 2);
+  assert.ok(expected.images[50].lastPlayed > 0, 'Previously recorded history survived reopening.');
+  const fingerprint = () => Object.fromEntries(fs.readdirSync(directory).sort().map(name =>
+    [name, createHash('sha256').update(fs.readFileSync(path.join(directory, name))).digest('hex')]));
+  const source = path.join(fixture, 'relocated-source', 'Synthetic imported video.mp4');
+  const sourceDigest = createHash('sha256').update(fs.readFileSync(source)).digest('hex');
+  const oldReset = PrivateHubSession.prototype.resetPlaybackHistory;
+  const oldWrite = PrivateHubStore.prototype.writeRecord;
+  const oldDialog = dialog.showMessageBox;
+  const results = []; const writes = []; const confirmations = [];
+  let answer = 1; let hold = false; let release;
+  PrivateHubSession.prototype.resetPlaybackHistory = async function(...args) {
+    try { const result = await oldReset.apply(this, args); results.push(result); return result; }
+    catch (error) { results.push({ status: 'unavailable' }); throw error; }
+  };
+  PrivateHubStore.prototype.writeRecord = async function(id, bytes, ...args) {
+    if (id === 'catalogue') { writes.push(JSON.parse(Buffer.from(bytes).toString('utf8'))); }
+    return oldWrite.call(this, id, bytes, ...args);
+  };
+  dialog.showMessageBox = async (owner, options) => {
+    assert.equal(owner, currentWindow());
+    assert.equal(options.defaultId, 1); assert.equal(options.cancelId, 1);
+    assert.equal(options.buttons[1], 'Cancel'); assert.equal(options.noLink, true);
+    const text = [options.title, options.message, options.detail].join('\n');
+    assert.match(text, /Last played|Times played/);
+    assert.ok(!text.includes(directory) && !text.includes(source));
+    assert.match(text, /backup/i);
+    confirmations.push(text);
+    if (hold) { await new Promise(resolve => { release = resolve; }); }
+    return { response: answer, checkboxChecked: false };
+  };
+  let window;
+  const open = async () => {
+    assert.equal(await completeWorkspacePrompt(workspace.open({ directory, isAuthorized: () => true }), password), 'opened');
+    window = currentWindow();
+    await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 48");
+  };
+  const protection = async () => {
+    await evaluate(window, "document.getElementById('protection-button').click(); true");
+    await waitForRenderer(window, "!document.getElementById('reset-last-played').disabled");
+    assert.equal(await evaluate(window, "document.getElementById('record-playback-history').value"), 'off');
+  };
+  const reset = async metric => {
+    const count = results.length + 1;
+    await evaluate(window, `document.getElementById(${JSON.stringify(metric === 'lastPlayed' ? 'reset-last-played' : 'reset-times-played')}).click(); true`);
+    for (let attempt = 0; attempt < 500 && results.length < count; attempt++) { await delay(10); }
+    assert.equal(results.length, count);
+    await waitForRenderer(window, "!document.getElementById('reset-last-played').disabled && document.getElementById('gallery-grid').getAttribute('aria-busy') === 'false'");
+    return results.at(-1);
+  };
+  const clearExpected = metric => {
+    let count = 0;
+    for (const image of expected.images) {
+      if (Object.hasOwn(image, metric) && image[metric] !== 0) { image[metric] = 0; count++; }
+    }
+    return count;
+  };
+  try {
+    await open(); await protection();
+    setStage('playback-reset-cancel');
+    const beforeCancel = fingerprint();
+    assert.deepEqual(await reset('lastPlayed'), { status: 'cancelled' });
+    assert.equal(confirmations.length, 1); assert.equal(writes.length, 0);
+    assert.deepEqual(fingerprint(), beforeCancel);
+    setStage('playback-reset-times');
+    answer = 0;
+    const expectedTimesCount = clearExpected('timesPlayed');
+    assert.deepEqual(await reset('timesPlayed'), { status: 'reset', count: expectedTimesCount });
+    assert.equal(writes.length, 1); assert.deepEqual(writes[0], expected);
+    assert.equal(await evaluate(window, "document.getElementById('record-playback-history').value"), 'off');
+    const afterTimes = fingerprint();
+    assert.deepEqual(await reset('timesPlayed'), { status: 'unchanged' });
+    assert.equal(confirmations.length, 2); assert.equal(writes.length, 1); assert.deepEqual(fingerprint(), afterTimes);
+    setStage('playback-reset-lock-pending');
+    hold = true;
+    await evaluate(window, "document.getElementById('reset-last-played').click(); true");
+    for (let attempt = 0; attempt < 500 && !release; attempt++) { await delay(10); }
+    assert.equal(typeof release, 'function');
+    const settled = workspace.settled;
+    let finished = false; void settled.then(() => { finished = true; });
+    void evaluate(window, "document.getElementById('lock-hub').click(); true").catch(() => undefined);
+    await delay(30);
+    assert.equal(finished, false, 'Lock must drain the outstanding native confirmation.');
+    release(); await settled;
+    assert.equal(window.isDestroyed(), true); assert.equal(writes.length, 1);
+    assert.deepEqual(fingerprint(), afterTimes, 'A late confirmation cannot reset history after locking.');
+    assertRestoredMenu();
+    hold = false; release = undefined;
+    setStage('playback-reset-last');
+    await open();
+    await evaluate(window, `(() => { const el = document.getElementById('gallery-collection'); el.value = 'recent';
+      el.dispatchEvent(new Event('change', {bubbles:true})); })()`);
+    await waitForRenderer(window, "document.getElementById('gallery-grid').getAttribute('aria-busy') === 'false' && document.querySelectorAll('#gallery-grid .video-card').length > 0");
+    const oldPage = await evaluate(window, "window.privateGallery.list({query:'',offset:0,collection:'recent'})");
+    assert.equal(oldPage.status, 'ready'); assert.ok(oldPage.items.length > 0);
+    await protection();
+    window.setSize(600, 400); window.show(); await delay(100);
+    let compact = true;
+    for (const id of ['reset-last-played', 'reset-times-played']) {
+      await evaluate(window, `document.getElementById(${JSON.stringify(id)}).scrollIntoView({block:'center'}); true`);
+      await evaluate(window, "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+      compact &&= await evaluate(window, `(() => { const el = document.getElementById(${JSON.stringify(id)}); const r = el.getBoundingClientRect();
+        const p = document.getElementById('protection-panel').getBoundingClientRect();
+        return r.left >= p.left && r.right <= p.right && r.top >= p.top && r.bottom <= p.bottom
+          && r.bottom <= innerHeight && el.contains(document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2)); })()`);
+    }
+    assert.equal(compact, true);
+    fs.writeFileSync(path.join(repository, 'tmp/private-history-reset-stage/compact-reset.png'), (await window.webContents.capturePage()).toPNG());
+    window.setSize(1200, 800);
+    const expectedLastCount = clearExpected('lastPlayed');
+    assert.deepEqual(await reset('lastPlayed'), { status: 'reset', count: expectedLastCount });
+    assert.equal(writes.length, 2); assert.deepEqual(writes[1], expected);
+    assert.equal(await evaluate(window, "document.getElementById('gallery-collection').value"), 'recent');
+    assert.equal(await evaluate(window, "document.querySelectorAll('#gallery-grid .video-card').length"), 0);
+    assert.deepEqual(await evaluate(window, `window.privateGallery.detail(${JSON.stringify(oldPage.items[0].id)})`), { status: 'unavailable' });
+    const afterLast = fingerprint();
+    assert.deepEqual(await reset('lastPlayed'), { status: 'unchanged' });
+    assert.equal(writes.length, 2); assert.equal(confirmations.length, 4); assert.deepEqual(fingerprint(), afterLast);
+    assert.equal(createHash('sha256').update(fs.readFileSync(source)).digest('hex'), sourceDigest);
+    await workspace.cancel(); assertRestoredMenu();
+    const store = await PrivateHubStore.open(directory, password);
+    try {
+      const bytes = await store.readRecord('catalogue');
+      try { assert.deepEqual(JSON.parse(bytes.toString('utf8')), expected); } finally { bytes.fill(0); }
+    } finally { await store.lock(); }
+    await checkpoint('playback-history-reset', { resetCancelledNoWrite: true, resetTimesIndependent: true,
+      resetLastIndependent: true, resetNoOpNoWrite: true, resetRecordingUnchanged: true,
+      resetRecentRefreshed: true, resetRetiredIds: true, resetLockDrained: true, resetLateConfirmationRefused: true,
+      resetOtherMetadataPreserved: true, resetOriginalUnchanged: true, resetCompactFits: true, resetReopened: true });
+  } catch (error) {
+    fs.writeFileSync(path.join(repository, 'tmp/private-history-reset-stage/native-failure.txt'), String(error?.stack || error));
+    throw error;
+  } finally {
+    release?.(); dialog.showMessageBox = oldDialog;
+    PrivateHubSession.prototype.resetPlaybackHistory = oldReset;
+    PrivateHubStore.prototype.writeRecord = oldWrite;
+  }
+}
+
 async function workspaceOpening(directory, password, newPassword, marker) {
   workspace = createPrivateHubWorkspace({ appDirectory: path.join(repository, 'private-gallery'), promptVisible: false });
   const lifetime = new AbortController();
@@ -1227,8 +1503,8 @@ async function workspaceOpening(directory, password, newPassword, marker) {
     methods: Object.keys(window.privateGallery).sort(), credentials: Object.keys(window.privateCredentials).sort(), ordinary: typeof window.theatrum,
     unlock: typeof window.privateUnlock, node: typeof window.require, process: typeof window.process,
   })`);
-  assert.deepEqual(surface, { methods: ['addSource', 'cancelImport', 'cancelRegeneration', 'cancelSourceConnection', 'connectSource', 'detail', 'disconnectSource', 'importProgress', 'importVideo', 'list', 'lock',
-    'playOriginal', 'protection', 'regenerate', 'relocateSource', 'save', 'scanSource', 'setProtection', 'sources', 'stopOriginal'],
+  assert.deepEqual(surface, { methods: ['ackOriginalPlayback', 'addSource', 'cancelImport', 'cancelRegeneration', 'cancelSourceConnection', 'checkSource', 'connectSource', 'detail', 'disconnectSource', 'importProgress', 'importVideo', 'list', 'lock',
+    'playOriginal', 'protection', 'refreshVideo', 'regenerate', 'relocateSource', 'resetPlaybackHistory', 'save', 'scanSource', 'setProtection', 'sources', 'stopOriginal'],
     credentials: ['cancelUnprotectedCopy', 'changePassword', 'createUnprotectedCopy', 'disableTouchId', 'enableTouchId', 'touchIdStatus'], ordinary: 'undefined', unlock: 'undefined', node: 'undefined', process: 'undefined' });
   setStage('gallery-list');
   await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 48");
@@ -1241,7 +1517,7 @@ async function workspaceOpening(directory, password, newPassword, marker) {
     const select = document.getElementById('auto-lock-minutes'); select.value = '1';
     select.dispatchEvent(new Event('change', { bubbles: true })); document.getElementById('save-protection').click();
   })()`);
-  await waitForRenderer(window, "document.getElementById('protection-status').textContent === 'Protection setting saved.'");
+  await waitForRenderer(window, "document.getElementById('protection-status').textContent === 'Protection settings saved.'");
   window.show();
   await delay(100);
   const protectionScreenshot = await window.webContents.capturePage();
@@ -1508,6 +1784,7 @@ async function workspaceOpening(directory, password, newPassword, marker) {
   const sourceAdditionChecks = await sourceAdditionAcceptance(window);
   const batchImportChecks = await batchImportAcceptance(window);
   const sourceScanChecks = await sourceScanAcceptance(window, directory);
+  const historyChecks = await playbackHistoryAcceptance(window, directory, marker);
   // Leave a non-default collection/order active before locking. Reopening must
   // start with the default view, without storing private browse preferences.
   await evaluate(window, `(() => { const el = document.getElementById('gallery-collection'); el.value = 'recent';
@@ -1534,7 +1811,7 @@ async function workspaceOpening(directory, password, newPassword, marker) {
   await checkpoint('workspace-opened', { opened: true, surface, clipboard, metadataPasteDenied: true, restrictedApplicationMenu: true, pageSize: 48, pagination: true,
     search: true, notes: true, encryptedImageDecoded: true, encryptedClipPlayed: true,
     encryptedMetadataSaved: true, tagNormalized: true, dirtyCloseGuard: true, discardReloaded: true,
-    ...sourceFolderChecks, ...originalChecks, ...importChecks, ...sourceAdditionChecks, ...batchImportChecks, ...collectionChecks, ...ratingChecks, ...sourceScanChecks, sourceFolderGrantReusedByRegeneration: true,
+    ...sourceFolderChecks, ...originalChecks, ...importChecks, ...sourceAdditionChecks, ...batchImportChecks, ...collectionChecks, ...ratingChecks, ...sourceScanChecks, ...historyChecks, sourceFolderGrantReusedByRegeneration: true,
     sourcePickerCancelledThenGranted: true, encryptedPreviewsRegenerated: true, refreshedPreviewWidth: 256,
     sourceUnchanged: true, noRegenerationAutoplay: true, encryptedProtectionSaved: true,
     filmstripOnlyOnRequest: true, encryptedFilmstripDecoded: true, filmstripMinimumWindowFits: true,
@@ -1607,7 +1884,7 @@ async function workspaceOpening(directory, password, newPassword, marker) {
     const automatic = currentWindow();
     assertPrivateMenu();
     await waitForRenderer(automatic, "document.querySelectorAll('#gallery-grid .video-card').length === 48");
-    assert.deepEqual(await evaluate(automatic, 'window.privateGallery.protection()'), { status: 'ready', autoLockMinutes: 1 });
+    assert.deepEqual(await evaluate(automatic, 'window.privateGallery.protection()'), { status: 'ready', autoLockMinutes: 1, recordPlaybackHistory: false });
     clockOffset += 45_000;
     let nativeInputs = 0;
     automatic.webContents.on('before-input-event', () => { nativeInputs++; });
@@ -1619,7 +1896,7 @@ async function workspaceOpening(directory, password, newPassword, marker) {
     assert.equal(nativeInputs, 2);
     automatic.hide();
     clockOffset += 40_000;
-    assert.deepEqual(await evaluate(automatic, 'window.privateGallery.protection()'), { status: 'ready', autoLockMinutes: 1 });
+    assert.deepEqual(await evaluate(automatic, 'window.privateGallery.protection()'), { status: 'ready', autoLockMinutes: 1, recordPlaybackHistory: false });
     await evaluate(automatic, `(() => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', bubbles: true }));
       document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return true;
@@ -1774,6 +2051,7 @@ async function workspaceOpening(directory, password, newPassword, marker) {
   await workspace.cancel();
   assert.deepEqual(workspace.status, { state: 'idle', cleanupFailed: false });
   assertRestoredMenu();
+  await playbackResetAcceptance(directory, newPassword);
   setStage('gallery-system-lock');
   assert.equal(await completeWorkspacePrompt(workspace.open({ directory, isAuthorized: () => true }), newPassword), 'opened');
   const systemLocked = currentWindow();
@@ -1919,6 +2197,312 @@ async function syntheticTouchIdControls(directory, password) {
   }
 }
 
+async function sourceCheckAcceptance(password, marker) {
+  setStage('source-check-setup');
+  const directory = path.join(fixture, 'source-check-hub');
+  const source = path.join(fixture, 'source-check-originals');
+  const outside = path.join(fixture, 'source-check-outside.mp4');
+  fs.mkdirSync(source); fs.mkdirSync(path.join(source, 'nested')); fs.mkdirSync(path.join(source, 'Ignored'));
+  fs.writeFileSync(path.join(source, 'same.mp4'), '0123456789');
+  fs.writeFileSync(path.join(source, 'different.mp4'), 'different');
+  fs.writeFileSync(path.join(source, 'unknown.mp4'), '0123456789');
+  fs.writeFileSync(path.join(source, 'nested', 'match.mp4'), '0123456789');
+  fs.writeFileSync(path.join(source, 'Ignored', 'skip.mp4'), '0123456789');
+  fs.writeFileSync(outside, 'Outside synthetic source');
+  fs.symlinkSync(outside, path.join(source, 'linked.mp4'));
+  fs.mkdirSync(path.join(source, 'directory.mp4'));
+  const entries = [['same.mp4', '/', 10], ['different.mp4', '/', 10], ['missing.mp4', '/', 10],
+    ['unknown.mp4', '/', 0], ['linked.mp4', '/', 10], ['skip.mp4', '/Ignored', 10],
+    ['match.mp4', '/nested', 10], ['directory.mp4', '/', 10]];
+  const catalogue = { addTags: [], removeTags: [], hubName: marker, version: 3, numOfFolders: 1,
+    images: entries.map(([fileName, partialPath, fileSize], index) => ({ ...NewImageElement(),
+      hash: 'source-check-' + index, fileName, partialPath, fileSize, inputSource: 0,
+      cleanName: 'Synthetic checked file ' + index, notes: marker, screens: 3, width: 256, height: 144 })),
+    inputDirs: { 0: { path: source, watch: false, ignoredSubdirectories: ['Ignored'] } },
+    screenshotSettings: { clipHeight: 144, clipSnippetLength: 1, clipSnippets: 0, fixed: true, height: 144, n: 3 } };
+  catalogue.images[0].locations = [
+    { inputSource: 0, fileName: 'same.mp4', partialPath: '/' },
+    { inputSource: 0, fileName: 'match.mp4', partialPath: '/nested' },
+  ];
+  // Reuse an encrypted synthetic preview solely for fixture setup. The check
+  // itself may not open original media or create any catalogue/preview record.
+  const reference = await PrivateHubStore.open(path.join(fixture, 'private-hub'), password);
+  let thumbnail;
+  try { thumbnail = await readPrivateHubPreview(reference, 'thumbnail', 'native-video'); }
+  finally { await reference.lock(); }
+  const store = await PrivateHubStore.create(directory, password);
+  try {
+    await writePrivateHubCatalogue(store, catalogue);
+    for (const image of catalogue.images) { await writePrivateHubPreview(store, 'thumbnail', image.hash, thumbnail); }
+    const activation = Buffer.from(JSON.stringify({ format: 'theatrum-private-hub-activation', version: 1, hubId: store.hubId }));
+    try { await store.writeNewRecord('session:activation', activation); } finally { activation.fill(0); }
+  } finally { thumbnail.fill(0); await store.lock(); }
+  const fingerprint = folder => Object.fromEntries(fs.readdirSync(folder).sort().map(name => {
+    const file = path.join(folder, name); const stat = fs.lstatSync(file);
+    return [name, stat.isSymbolicLink() ? { link: fs.readlinkSync(file) } : stat.isDirectory()
+      ? fingerprint(file) : createHash('sha256').update(fs.readFileSync(file)).digest('hex')];
+  }));
+  const originals = fingerprint(source); const encrypted = fingerprint(directory);
+  const expected = { status: 'checked', total: 9, sameSize: 3, differentSize: 1, missing: 1, unverified: 3, ignored: 1 };
+  const oldPicker = dialog.showOpenDialog;
+  const oldStat = fs.promises.lstat;
+  let mode = 'cancel'; let selections = 0; let releasePicker;
+  let holdMetadata = false; let releaseMetadata;
+  dialog.showOpenDialog = async (owner, options) => {
+    assert.equal(owner, currentWindow()); assert.equal(options.defaultPath, source);
+    assert.ok(options.properties.includes('dontAddToRecent')); selections++;
+    if (mode === 'hold') { await new Promise(resolve => { releasePicker = resolve; }); }
+    return { canceled: mode === 'cancel', filePaths: mode === 'cancel' ? [] : [source] };
+  };
+  fs.promises.lstat = async function(target, ...args) {
+    if (holdMetadata && String(target) === path.join(source, 'same.mp4')) {
+      holdMetadata = false; await new Promise(resolve => { releaseMetadata = resolve; });
+    }
+    return oldStat.call(this, target, ...args);
+  };
+  const checker = require('./private-source-check.ts');
+  const oldCheck = checker.checkPrivateSource;
+  const reports = [];
+  checker.checkPrivateSource = async options => {
+    const result = await oldCheck(options); reports.push(result); return result;
+  };
+  let window;
+  const action = "document.querySelector('#source-folders-list [data-action=check-source]')";
+  const ready = () => waitForRenderer(window, `${action} && !${action}.disabled && !document.getElementById('refresh-source-folders').disabled`);
+  const open = async () => {
+    assert.equal(await completeWorkspacePrompt(workspace.open({ directory, isAuthorized: () => true }), password), 'opened');
+    window = currentWindow();
+    await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 8");
+  };
+  try {
+    await open();
+    await evaluate(window, "document.querySelector('#gallery-grid .video-card').click(); true");
+    await waitForRenderer(window, "!document.getElementById('details-notes').readOnly");
+    const draft = marker + ' unsaved source check';
+    await evaluate(window, `(() => { const el = document.getElementById('details-notes'); el.value = ${JSON.stringify(draft)};
+      el.dispatchEvent(new Event('input', {bubbles:true})); document.getElementById('source-folders-toggle').click(); })()`);
+    await ready();
+    setStage('source-check-cancel-picker');
+    await evaluate(window, `${action}.click(); true`); await ready();
+    assert.equal(selections, 1); assert.equal(reports.length, 0);
+    assert.match(await evaluate(window, "document.getElementById('source-folders-status').textContent"), /cancel/i);
+    assert.deepEqual(fingerprint(directory), encrypted);
+    setStage('source-check-counts');
+    mode = 'grant';
+    await evaluate(window, `${action}.click(); true`); await ready();
+    assert.equal(reports.length, 1);
+    const displayed = await evaluate(window, "document.getElementById('source-folders-status').textContent");
+    for (const value of ['9 saved file locations', 'Same recorded size: 3', 'Different size: 1', 'Missing: 1', 'Not verified: 3', 'Ignored: 1', 'does not prove']) { assert.ok(displayed.includes(value), value); }
+    const { revision, ...report } = reports[0]; assert.deepEqual(report, expected);
+    assert.equal(typeof revision, 'string');
+    assert.equal(await evaluate(window, "document.getElementById('details-notes').value"), draft);
+    assert.equal(await evaluate(window, "document.getElementById('save-details').disabled"), false);
+    const sources = await evaluate(window, 'window.privateGallery.sources()');
+    assert.equal(sources.items[0].connected, true);
+    assert.deepEqual(await evaluate(window, `window.privateGallery.checkSource(${JSON.stringify(sources.items[0].id)})`), expected);
+    assert.equal(selections, 2, 'A connected root is reused without another picker.');
+    window.setSize(600, 400); window.show(); await delay(100);
+    await evaluate(window, `${action}.scrollIntoView({block:'center'}); true`);
+    await evaluate(window, "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    assert.equal(await evaluate(window, `(() => { const el = ${action}; const r = el.getBoundingClientRect();
+      const p = document.getElementById('source-folders-panel').getBoundingClientRect();
+      return r.left >= p.left && r.right <= p.right && r.top >= p.top && r.bottom <= p.bottom
+        && el.contains(document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2)); })()`), true);
+    fs.writeFileSync(path.join(repository, 'tmp/private-source-check-stage/compact-check.png'), (await window.webContents.capturePage()).toPNG());
+    await evaluate(window, "document.getElementById('source-folders-status').scrollIntoView({block:'end'}); true");
+    await evaluate(window, "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    fs.writeFileSync(path.join(repository, 'tmp/private-source-check-stage/compact-report.png'), (await window.webContents.capturePage()).toPNG());
+    window.setSize(1200, 800);
+    setStage('source-check-cancel-metadata');
+    holdMetadata = true;
+    await evaluate(window, `${action}.click(); true`);
+    for (let attempt = 0; attempt < 500 && !releaseMetadata; attempt++) { await delay(10); }
+    assert.equal(typeof releaseMetadata, 'function');
+    await evaluate(window, "document.getElementById('cancel-source-connection').click(); true");
+    assert.equal(await evaluate(window, "document.getElementById('refresh-source-folders').disabled"), true);
+    releaseMetadata(); releaseMetadata = undefined; await ready();
+    assert.match(await evaluate(window, "document.getElementById('source-folders-status').textContent"), /cancel/i);
+    assert.equal(await evaluate(window, "document.getElementById('details-notes').value"), draft);
+    setStage('source-check-disconnected');
+    const moved = path.join(fixture, 'source-check-disconnected');
+    fs.renameSync(source, moved);
+    try {
+      assert.deepEqual(await evaluate(window, `window.privateGallery.checkSource(${JSON.stringify(sources.items[0].id)})`), { status: 'source-unavailable' });
+    } finally { fs.renameSync(moved, source); }
+    await evaluate(window, `${action}.click(); true`); await ready();
+    assert.equal(selections, 4, 'A replaced or disconnected root requires a fresh selection.');
+    setStage('source-check-lock-picker');
+    await evaluate(window, "document.querySelector('#source-folders-list [data-action=disconnect-source]').click(); true"); await ready();
+    mode = 'hold'; await evaluate(window, `${action}.click(); true`);
+    for (let attempt = 0; attempt < 500 && !releasePicker; attempt++) { await delay(10); }
+    assert.equal(typeof releasePicker, 'function');
+    const settled = workspace.settled; let finished = false; void settled.then(() => { finished = true; });
+    void evaluate(window, "document.getElementById('lock-hub').click(); true").catch(() => undefined);
+    await delay(30); assert.equal(finished, false);
+    releasePicker(); releasePicker = undefined; await settled;
+    assert.equal(window.isDestroyed(), true); assertRestoredMenu();
+    assert.deepEqual(fingerprint(directory), encrypted); assert.deepEqual(fingerprint(source), originals);
+    setStage('source-check-reopen');
+    await open();
+    const reopened = await evaluate(window, 'window.privateGallery.sources()');
+    assert.equal(reopened.items[0].connected, false);
+    await evaluate(window, "document.querySelector('#gallery-grid .video-card').click(); true");
+    await waitForRenderer(window, `document.getElementById('details-notes').value === ${JSON.stringify(marker)}`);
+    await workspace.cancel(); assertRestoredMenu();
+    await checkpoint('source-files-checked', { sourceCheckCounts: true, sourceCheckPathsMainOnly: true,
+      sourceCheckGrantReused: true, sourceCheckPickerCancellation: true, sourceCheckMetadataCancellation: true,
+      sourceCheckDisconnectedRefused: true, sourceCheckReconnect: true, sourceCheckDraftPreserved: true,
+      sourceCheckNoCatalogueWrite: true, sourceCheckOriginalUnchanged: true, sourceCheckCompactFits: true,
+      sourceCheckLockDrainedPicker: true, sourceCheckLateGrantRefused: true, sourceCheckSessionOnly: true });
+  } catch (error) {
+    fs.writeFileSync(path.join(repository, 'tmp/private-source-check-stage/native-failure.txt'), String(error?.stack || error));
+    throw error;
+  } finally {
+    releaseMetadata?.(); releasePicker?.(); dialog.showOpenDialog = oldPicker;
+    fs.promises.lstat = oldStat; checker.checkPrivateSource = oldCheck;
+  }
+}
+
+async function videoRefreshAcceptance(password, marker) {
+  setStage('video-refresh-setup');
+  const directory = path.join(fixture, 'refresh-hub');
+  const sourceRoot = path.join(fixture, 'refresh-originals');
+  fs.mkdirSync(sourceRoot);
+  const file = path.join(sourceRoot, 'refresh.mp4');
+  fs.copyFileSync(path.join(fixture, 'synthetic-source', 'synthetic-0.mp4'), file);
+  const originalDigest = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const original = { ...NewImageElement(), hash: 'before-refresh', cleanName: 'Synthetic refresh video',
+    fileName: 'refresh.mp4', partialPath: '/', inputSource: 0, fileSize: 1, duration: 1200,
+    width: 1920, height: 1080, fps: 30, screens: 20, defaultScreen: 19,
+    notes: marker, tags: ['Keep this tag'], stars: 5.5, timesPlayed: 7, lastPlayed: 1700000000000,
+    dateAdded: 1600000000000, year: '2020', playlist: 123, extraSynthetic: { retained: marker } };
+  const alias = { ...original, hash: 'refresh-alias', cleanName: 'Synthetic alternate locations',
+    locations: [{ inputSource: 0, partialPath: '/', fileName: 'refresh.mp4' },
+      { inputSource: 0, partialPath: '/', fileName: 'other.mp4' }] };
+  const catalogue = { addTags: [], removeTags: [], hubName: marker, version: 3, numOfFolders: 1,
+    images: [original, alias], inputDirs: { 0: { path: sourceRoot, watch: false } },
+    screenshotSettings: { clipHeight: 144, clipSnippetLength: 1, clipSnippets: 0, fixed: true, height: 144, n: 3 },
+    extraSynthetic: { retained: marker } };
+  const reference = await PrivateHubStore.open(path.join(fixture, 'private-hub'), password);
+  let thumbnail;
+  try { thumbnail = await readPrivateHubPreview(reference, 'thumbnail', 'native-video'); }
+  finally { await reference.lock(); }
+  const store = await PrivateHubStore.create(directory, password);
+  try {
+    const bytes = Buffer.from(JSON.stringify(catalogue));
+    try { await store.writeRecord('catalogue', bytes); } finally { bytes.fill(0); }
+    for (const image of catalogue.images) { await writePrivateHubPreview(store, 'thumbnail', image.hash, thumbnail); }
+    const activation = Buffer.from(JSON.stringify({ format: 'theatrum-private-hub-activation', version: 1, hubId: store.hubId }));
+    try { await store.writeNewRecord('session:activation', activation); } finally { activation.fill(0); }
+  } finally { thumbnail.fill(0); await store.lock(); }
+  const encryptedFingerprint = () => Object.fromEntries(fs.readdirSync(directory).sort().map(name =>
+    [name, createHash('sha256').update(fs.readFileSync(path.join(directory, name))).digest('hex')]));
+  const before = encryptedFingerprint();
+  const oldPicker = dialog.showOpenDialog;
+  const oldRefresh = PrivateHubSession.prototype.refreshVideo;
+  let pickerCancelled = true; let picks = 0; let holdAfterPublication = false; let releasePublication;
+  const results = [];
+  dialog.showOpenDialog = async (owner, options) => {
+    assert.equal(owner, currentWindow()); assert.equal(options.defaultPath, sourceRoot);
+    assert.ok(options.properties.includes('dontAddToRecent')); picks++;
+    return { canceled: pickerCancelled, filePaths: pickerCancelled ? [] : [sourceRoot] };
+  };
+  PrivateHubSession.prototype.refreshVideo = async function(...args) {
+    const result = await oldRefresh.apply(this, args); results.push(result);
+    if (holdAfterPublication && result.status === 'refreshed') {
+      holdAfterPublication = false; await new Promise(resolve => { releasePublication = resolve; });
+    }
+    return result;
+  };
+  let window;
+  const ready = () => waitForRenderer(window, "!document.getElementById('refresh-video').disabled && document.getElementById('cancel-regeneration').hidden");
+  const open = async () => {
+    assert.equal(await completeWorkspacePrompt(workspace.open({ directory, isAuthorized: () => true }), password), 'opened');
+    window = currentWindow();
+    await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 2");
+  };
+  const select = async title => {
+    await evaluate(window, `Array.from(document.querySelectorAll('#gallery-grid .video-card')).find(el => el.textContent.includes(${JSON.stringify(title)})).click(); true`);
+    await waitForRenderer(window, `document.getElementById('details-title').textContent === ${JSON.stringify(title)} && !document.getElementById('details-notes').readOnly`);
+  };
+  try {
+    await open(); await select(alias.cleanName);
+    assert.equal(await evaluate(window, "document.getElementById('refresh-video').disabled"), true);
+    await select(original.cleanName); await ready();
+    setStage('video-refresh-draft');
+    await evaluate(window, `(() => { const el=document.getElementById('details-notes'); el.value=${JSON.stringify(marker + ' unsaved refresh')}; el.dispatchEvent(new Event('input',{bubbles:true})); document.getElementById('refresh-video').click(); })()`);
+    assert.equal(results.length, 0); assert.equal(picks, 0);
+    assert.equal(await evaluate(window, 'document.getElementById("details-notes").value'), marker + ' unsaved refresh');
+    await evaluate(window, "document.getElementById('discard-details').click(); true"); await ready();
+    setStage('video-refresh-cancel-picker');
+    await evaluate(window, "document.getElementById('refresh-video').click(); true"); await ready();
+    assert.equal(picks, 1); assert.equal(results.length, 0); assert.deepEqual(encryptedFingerprint(), before);
+    pickerCancelled = false;
+    setStage('video-refresh-publish');
+    await evaluate(window, "document.getElementById('refresh-video').click(); true"); await ready();
+    assert.equal(await evaluate(window, "document.getElementById('generation-status').textContent"), 'Video refreshed.');
+    assert.equal(results.length, 1); assert.equal(results[0].status, 'refreshed');
+    const saved = results[0].image;
+    assert.notEqual(saved.hash, original.hash); assert.match(saved.hash, /^[a-f0-9]{32}$/);
+    assert.equal(saved.duration, 4); assert.equal(saved.width, 32); assert.equal(saved.height, 18);
+    assert.equal(saved.fps, 10); assert.equal(saved.screens, 3); assert.equal(saved.fileSize, fs.statSync(file).size);
+    assert.equal(saved.defaultScreen, undefined);
+    const changed = new Set(['hash','fileSize','birthtime','mtime','duration','width','height','fps','bitrate','screens','defaultScreen']);
+    for (const [key, value] of Object.entries(original)) { if (!changed.has(key)) { assert.deepEqual(saved[key], value, key); } }
+    assert.equal(await evaluate(window, 'document.getElementById("details-notes").value'), marker);
+    assert.ok((await evaluate(window, 'document.getElementById("details-facts").textContent')).includes('32'));
+    await evaluate(window, "document.getElementById('toggle-filmstrip').click(); true");
+    await waitForRenderer(window, "document.getElementById('detail-filmstrip').naturalWidth === 768 && !document.getElementById('detail-filmstrip').hidden");
+    await waitForRenderer(window, "document.querySelector('#gallery-grid .video-card img')?.naturalWidth === 256");
+    const firstStrip = await evaluate(window, 'document.getElementById("detail-filmstrip").currentSrc');
+    assert.ok(firstStrip.includes(saved.hash));
+    window.setSize(600,400); window.show(); await delay(100);
+    await evaluate(window, "document.getElementById('refresh-video').scrollIntoView({block:'center'}); true");
+    await evaluate(window, "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    assert.equal(await evaluate(window, `(() => { const el=document.getElementById('refresh-video'); const r=el.getBoundingClientRect();
+      return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight && el.contains(document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2)); })()`), true);
+    fs.writeFileSync(path.join(repository,'tmp/private-refresh-stage/compact-refresh.png'),(await window.webContents.capturePage()).toPNG());
+    window.setSize(1200,800);
+    setStage('video-refresh-cancel-published');
+    holdAfterPublication = true;
+    await evaluate(window, "document.getElementById('refresh-video').click(); true");
+    for (let attempt=0; attempt<1000 && !releasePublication; attempt++) { await delay(10); }
+    assert.equal(typeof releasePublication,'function');
+    await evaluate(window, "document.getElementById('cancel-regeneration').click(); true");
+    assert.equal(await evaluate(window, "document.getElementById('refresh-video').disabled"),true);
+    releasePublication(); releasePublication=undefined; await ready();
+    assert.equal(results.length,2); assert.equal(results[1].status,'refreshed');
+    assert.notEqual(results[1].image.hash,saved.hash); assert.equal(picks,2,'The connected source grant is reused.');
+    await evaluate(window, "document.getElementById('toggle-filmstrip').click(); true");
+    await waitForRenderer(window, "document.getElementById('detail-filmstrip').naturalWidth === 768 && !document.getElementById('detail-filmstrip').hidden");
+    assert.ok((await evaluate(window, 'document.getElementById("detail-filmstrip").currentSrc')).includes(results[1].image.hash));
+    assert.equal(createHash('sha256').update(fs.readFileSync(file)).digest('hex'),originalDigest);
+    await workspace.cancel(); assertRestoredMenu();
+    const stored = await PrivateHubStore.open(directory,password);
+    try {
+      const bytes=await stored.readRecord('catalogue');
+      try {
+        const actual=JSON.parse(bytes.toString('utf8'));
+        assert.deepEqual(actual.images[0],results[1].image); assert.deepEqual(actual.images[1],alias);
+        assert.deepEqual(actual.extraSynthetic,catalogue.extraSynthetic);
+        const set=await readPrivatePreviewSet(stored,actual.images[0].hash); assert.equal(set.screenCount,3);
+      } finally { bytes.fill(0); }
+    } finally { await stored.lock(); }
+    setStage('video-refresh-reopen');
+    await open(); await select(original.cleanName); await ready();
+    assert.equal(await evaluate(window, 'document.getElementById("details-notes").value'),marker);
+    await evaluate(window,"document.getElementById('toggle-filmstrip').click(); true");
+    await waitForRenderer(window,"document.getElementById('detail-filmstrip').naturalWidth === 768 && !document.getElementById('detail-filmstrip').hidden");
+    assert.ok((await evaluate(window, 'document.getElementById("detail-filmstrip").currentSrc')).includes(results[1].image.hash));
+    await workspace.cancel(); assertRestoredMenu();
+    await checkpoint('video-refreshed',{refreshPickerCancelled:true,refreshDraftGuard:true,refreshAliasedRefused:true,
+      refreshMetadataSaved:true,refreshGeometrySaved:true,refreshPreviewsDecoded:true,refreshUserMetadataPreserved:true,
+      refreshOriginalUnchanged:true,refreshGrantReused:true,refreshCancelAfterPublication:true,refreshCompactFits:true,refreshReopened:true});
+  } catch(error) {
+    fs.writeFileSync(path.join(repository,'tmp/private-refresh-stage/native-failure.txt'),String(error?.stack || error)); throw error;
+  } finally { releasePublication?.(); dialog.showOpenDialog=oldPicker; PrivateHubSession.prototype.refreshVideo=oldRefresh; }
+}
+
 async function makeHub(password, marker) {
   const directory = path.join(fixture, 'private-hub');
   if (phase === 'initial') {
@@ -2054,6 +2638,10 @@ async function run() {
     assert.equal(opened.catalogue.images[51].cleanName, 'Synthetic new folder video');
     assert.equal(opened.catalogue.images[50].cleanName, 'Synthetic imported video');
     assert.equal(opened.catalogue.images[50].fps, 10);
+    assert.equal(opened.catalogue.images[50].timesPlayed, 0);
+    assert.equal(opened.catalogue.images[50].lastPlayed, 0);
+    assert.ok(opened.catalogue.images.every(image => !image.timesPlayed && !image.lastPlayed));
+    assert.equal(opened.catalogue.images[50].notes, marker + ' — playback draft');
     assert.deepEqual(opened.catalogue.images.slice(52, 55).map(image => [image.cleanName, image.inputSource]),
       [['Synthetic batch first', 1], ['Synthetic batch second', 1], ['Synthetic batch retained', 1]]);
     assert.deepEqual(opened.catalogue.images.slice(55).map(image => image.cleanName).sort(), ['Synthetic scanned nested', 'Synthetic scanned root']);
@@ -2071,15 +2659,28 @@ async function run() {
     const importedBytes = Buffer.from(await imported.arrayBuffer());
     try { validatePrivateJpeg(importedBytes, 256, 144); } finally { importedBytes.fill(0); }
     assert.equal(opened.catalogue.inputDirs[0].path, path.join(fixture, 'relocated-source'));
-    assert.deepEqual(await hub.readProtection(opened.generation), { autoLockMinutes: 1 });
+    assert.deepEqual(await hub.readProtection(opened.generation), { autoLockMinutes: 1, recordPlaybackHistory: false });
     const generated = await hub.createPreviewResponse(opened.generation, 'filmstrip', 'native-video',
       new Request('theatrum://app/media/filmstrips/native-video.jpg'));
     const filmstrip = Buffer.from(await generated.arrayBuffer());
     try { validatePrivateJpeg(filmstrip, 768, 144); } finally { filmstrip.fill(0); }
     assert.equal(defaultRequests, 0);
+    const refreshedStore = await PrivateHubStore.open(path.join(fixture, 'refresh-hub'), newPassword);
+    try {
+      const catalogueBytes = await refreshedStore.readRecord('catalogue');
+      try {
+        const refreshed = JSON.parse(catalogueBytes.toString('utf8')).images[0];
+        assert.notEqual(refreshed.hash, 'before-refresh');
+        assert.equal(refreshed.duration, 4); assert.equal(refreshed.screens, 3);
+        assert.equal(refreshed.width, 32); assert.equal(refreshed.height, 18);
+        assert.equal(refreshed.notes, marker); assert.equal(refreshed.timesPlayed, 7);
+        const strip = await readPrivateHubPreview(refreshedStore, 'filmstrip', refreshed.hash);
+        try { validatePrivateJpeg(strip, 768, 144); } finally { strip.fill(0); }
+      } finally { catalogueBytes.fill(0); }
+    } finally { await refreshedStore.lock(); }
     await checkpoint('restarted', { fresh, persistent: isolated.isPersistent(), cacheBytes: await isolated.getCacheSize(),
       savedMetadataPersisted: true, generatedSetPersisted: true, protectionPersisted: true, changedPasswordPersisted: true,
-      unrelatedMetadataPreserved: true, ratingPersisted: true, sourceScanImportsPersisted: true, sourceRelocationPersisted: true, importedVideoPersisted: true, addedSourcePersisted: true, batchImportsPersisted: true, cancelledBatchKnownCompletionPersisted: true, defaultRequests });
+      videoRefreshPersisted: true, unrelatedMetadataPreserved: true, playbackHistoryResetPersisted: true, playbackHistoryDisabledPersisted: true, ratingPersisted: true, sourceScanImportsPersisted: true, sourceRelocationPersisted: true, importedVideoPersisted: true, addedSourcePersisted: true, batchImportsPersisted: true, cancelledBatchKnownCompletionPersisted: true, defaultRequests });
     await capsule.close();
     await hub.close();
     assert.equal(capsule.status.cleanupFailed, false);
@@ -2265,6 +2866,8 @@ async function run() {
   assert.equal(capsule.status.cleanupFailed, false);
   assertRestoredMenu();
   await workspaceOpening(opened.directory, password, newPassword, marker);
+  await sourceCheckAcceptance(newPassword, marker);
+  await videoRefreshAcceptance(newPassword, marker);
   await syntheticTouchIdControls(opened.directory, newPassword);
   await send({ type: 'complete' });
   app.quit();

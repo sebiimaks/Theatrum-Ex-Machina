@@ -14,6 +14,7 @@ import { privateVideoRevision } from './private-hub-metadata';
 import { createPrivatePreviewSet } from './private-hub-preview-set';
 import { PrivateSourcePlayback } from './private-source-playback';
 import * as sourceScan from './private-source-scan';
+import * as sourceCheck from './private-source-check';
 import { capturePrivatePreviewSource, isPrivatePreviewSourceCleanupFailure } from './private-preview-source';
 
 type Handler = (event: any, ...args: unknown[]) => Promise<any>;
@@ -57,7 +58,7 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
   let hubLocks = 0;
   let locking: PrivateHubSession['lock'] = async () => { current = false; controller.abort(); };
   const edits: unknown[] = [];
-  let protectionValue = { autoLockMinutes: 5 as 0 | 1 | 5 | 15 | 30 };
+  let protectionValue: { autoLockMinutes: 0 | 1 | 5 | 15 | 30; recordPlaybackHistory?: boolean } = { autoLockMinutes: 5 };
   let readingProtection = async () => ({ ...protectionValue });
   let writingProtection: PrivateHubSession['updateProtection'] = async (_generation, value, current) => {
     assert.equal(current(), true); protectionValue = { ...value }; return { ...protectionValue };
@@ -80,6 +81,13 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
   let relocating: PrivateHubSession['relocateSource'] = async (_generation, review, current) => {
     assert.equal(current(), true); assert.equal(review.isCurrent(), true); return { status: 'relocated' };
   };
+  let refreshing: PrivateHubSession['refreshVideo'] = async (_generation, source, _location, update, options) => {
+    assert.equal(options?.isCurrent(), true); assert.equal(source.isCurrent(), true);
+    const selected = images[update.index];
+    if (!selected || privateVideoRevision(selected) !== update.revision) { return { status: 'conflict' }; }
+    images[update.index] = { ...selected, hash: source.hash, fileSize: source.byteLength, duration: 30, width: 640, height: 360, screens: 2 };
+    return { status: 'refreshed', image: images[update.index] };
+  };
   let importing: PrivateHubSession['importVideo'] = async () => ({ status: 'imported', index: 2 });
   let adding: PrivateHubSession['addSource'] = async (_generation, review, current) => {
     assert.equal(current(), true); assert.equal(review.isCurrent(), true); return { status: 'added' };
@@ -97,6 +105,27 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
       ...(Object.hasOwn(request, 'rating') ? { stars: (request.rating! + 0.5) as ImageElement['stars'] } : {}) };
     return { status: 'saved', image: images[request.index] };
   };
+  const historyWrites: unknown[] = [];
+  let recording: PrivateHubSession['recordVideoPlayback'] = async (generation, request, current) => {
+    assert.equal(generation, 7); assert.equal(current(), true);
+    if (protectionValue.recordPlaybackHistory !== true) { return { status: 'disabled' }; }
+    const selected = images[request.index];
+    if (!selected || privateVideoRevision(selected) !== request.revision) { return { status: 'conflict' }; }
+    images[request.index] = { ...selected, lastPlayed: request.playedAt, timesPlayed: (selected.timesPlayed ?? 0) + 1 };
+    return { status: 'recorded', image: images[request.index] };
+  };
+  const historyResets: unknown[] = [];
+  const historyConfirmations: unknown[] = [];
+  let confirmingHistory: NonNullable<Parameters<typeof register>[0]['confirmPlaybackHistoryReset']> = async () => true;
+  let resettingHistory: PrivateHubSession['resetPlaybackHistory'] = async (generation, metric, current, confirm) => {
+    assert.equal(generation, 7); assert.equal(current(), true);
+    const selected = images.filter(row => Object.hasOwn(row, metric) && row[metric] !== 0);
+    if (!selected.length) { return { status: 'unchanged' }; }
+    if (!await confirm(selected.length)) { return { status: 'cancelled' }; }
+    if (!current()) { throw new Error('Revoked'); }
+    for (const row of selected) { row[metric] = 0; }
+    return { status: 'reset', count: selected.length };
+  };
   const hub = {
     isCurrent: (generation: number) => generation === 7 && current && !controller.signal.aborted,
     revocationSignal: () => controller.signal,
@@ -105,6 +134,13 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
     updateVideoMetadata: (...args: Parameters<PrivateHubSession['updateVideoMetadata']>) => {
       edits.push(args[1]); return writing(...args);
     },
+    resetPlaybackHistory: (...args: Parameters<PrivateHubSession['resetPlaybackHistory']>) => {
+      historyResets.push(args[1]); return resettingHistory(...args);
+    },
+    recordVideoPlayback: (...args: Parameters<PrivateHubSession['recordVideoPlayback']>) => {
+      historyWrites.push(args[1]); return recording(...args);
+    },
+    refreshVideo: (...args: Parameters<PrivateHubSession['refreshVideo']>) => refreshing(...args),
     generatePreviews: (...args: Parameters<PrivateHubSession['generatePreviews']>) => generating(...args),
     addSource: (...args: Parameters<PrivateHubSession['addSource']>) => adding(...args),
     importVideo: (...args: Parameters<PrivateHubSession['importVideo']>) => importing(...args),
@@ -124,6 +160,9 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
     chooseNewSourceDirectory: () => choosingNewSource(),
     confirmSourceLocation: (root: string, videoCount: number) => confirmingLocation(root, videoCount),
     confirmSourceScan: (count: number, more: boolean) => confirmingScan(count, more),
+    confirmPlaybackHistoryReset: (metric: 'lastPlayed' | 'timesPlayed', count: number) => {
+      historyConfirmations.push({ metric, count }); return confirmingHistory(metric, count);
+    },
     onProtectionChanged: (value: unknown) => applyingProtection(value),
     chooseUnprotectedCopyDestination: copyDestination ? () => choosingCopyDestination!() : undefined };
   const dispose = register(options);
@@ -142,14 +181,22 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
   const save = handlers.get(channels.save)!;
   const regenerate = handlers.get(channels.regenerate)!;
   const event = { sender: contents, senderFrame: contents.mainFrame };
-  return { contents, controller, options, event, list, detail, save, regenerate, dispose, edits,
+  return { contents, controller, options, event, list, detail, save, regenerate, dispose, edits, historyWrites,
+    refreshVideo: handlers.get(channels.refreshVideo)!,
+    refreshing: (next: typeof refreshing) => { refreshing = next; },
     playOriginal: handlers.get(channels.playOriginal)!,
+    ackOriginalPlayback: handlers.get(channels.ackOriginalPlayback)!,
+    resetPlaybackHistory: handlers.get(channels.resetPlaybackHistory)!, historyResets, historyConfirmations,
+    resettingHistory: (next: typeof resettingHistory) => { resettingHistory = next; },
+    confirmHistory: (next: typeof confirmingHistory) => { confirmingHistory = next; },
+    recording: (next: typeof recording) => { recording = next; },
     stopOriginal: (...args: unknown[]) => ipcMain.emit(channels.stopOriginal, event, ...args),
     addSource: handlers.get(channels.addSource)!,
     adding: (next: typeof adding) => { adding = next; },
     chooseNewSource: (next: typeof choosingNewSource) => { choosingNewSource = next; },
     sources: handlers.get(channels.sources)!, connectSource: handlers.get(channels.connectSource)!,
     disconnectSource: handlers.get(channels.disconnectSource)!,
+    checkSource: handlers.get(channels.checkSource)!,
     relocateSource: handlers.get(channels.relocateSource)!,
     importVideo: handlers.get(channels.importVideo)!,
     scanSource: handlers.get(channels.scanSource)!,
@@ -200,12 +247,12 @@ test('pages only display metadata with opaque selection IDs and excludes every s
   assert.equal((await f.page()).items[0].id, item.id);
 });
 
-async function sourceFixture(t: TestContext, playback?: PrivateSourcePlayback) {
+async function sourceFixture(t: TestContext, playback?: PrivateSourcePlayback, extraImages: ImageElement[] = []) {
   const temporary = path.resolve(__dirname, '../tmp');
   await fs.mkdir(temporary, { recursive: true });
   const root = await fs.mkdtemp(path.join(temporary, 'gallery-source-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const images = [{ ...image(0), fileName: 'synthetic.mp4', partialPath: '', locations: undefined, screens: 3 }];
+  const images: ImageElement[] = [{ ...image(0), fileName: 'synthetic.mp4', partialPath: '', locations: undefined, screens: 3 }, ...extraImages];
   await fs.writeFile(path.join(root, images[0].fileName), 'Synthetic source descriptor contents');
   let picks = 0;
   let choosing = async (_root: string): Promise<string | undefined> => root;
@@ -218,6 +265,7 @@ async function sourceFixture(t: TestContext, playback?: PrivateSourcePlayback) {
     choose: (next: typeof choosing) => { choosing = next; },
     catalogue: (next: FinalObject) => { catalogue = next; },
     run: (revision = item.revision) => f.regenerate(f.event, { id, revision }),
+    refresh: (revision = item.revision) => f.refreshVideo(f.event, { id, revision }),
   };
 }
 
@@ -1646,6 +1694,219 @@ test('original playback grants only the saved source and returns an opaque URL w
   assert.equal((await f.play()).status, 'ready'); assert.equal(f.picks(), 1, 'session source grant can be reused');
 });
 
+async function deliveredPlayback(f: Awaited<ReturnType<typeof playbackFixture>>) {
+  const ready = await f.play();
+  assert.equal(ready.status, 'ready');
+  assert.equal(await (await f.response(ready.url)).text(), 'Synthetic source descriptor contents');
+  return ready.url as string;
+}
+
+async function enableHistory(f: Awaited<ReturnType<typeof playbackFixture>>) {
+  assert.equal((await f.setProtection(f.event, { autoLockMinutes: 5, recordPlaybackHistory: true })).status, 'saved');
+}
+
+test('private playback history stays disabled until enabled and does not change existing metrics', async t => {
+  const f = await playbackFixture(t);
+  const before = JSON.stringify(f.images);
+  const url = await deliveredPlayback(f);
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: 'disabled' });
+  assert.equal(f.historyWrites.length, 1); assert.equal(f.edits.length, 0);
+  assert.equal(JSON.stringify(f.images), before);
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: 'ignored' });
+  assert.equal(f.historyWrites.length, 1); assert.equal(f.appliedProtection.length, 0);
+});
+
+test('ready tokens and HEAD or GET traffic alone never record playback', async t => {
+  const f = await playbackFixture(t); await enableHistory(f);
+  const ready = await f.play();
+  assert.equal(ready.status, 'ready'); assert.equal(f.historyWrites.length, 0);
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, ready.url), { status: 'ignored' });
+  const head = await f.playback.createResponse(new Request(ready.url, { method: 'HEAD' }));
+  assert.equal(head.status, 200); assert.equal(await head.text(), '');
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, ready.url), { status: 'ignored' });
+  assert.equal(await (await f.response(ready.url)).text(), 'Synthetic source descriptor contents');
+  assert.equal(f.historyWrites.length, 0);
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, ready.url), { status: 'recorded' });
+  assert.equal(f.historyWrites.length, 1);
+});
+
+test('acknowledgement rejects renderer metadata, non-original URLs and wrong frames without catalogue access', async t => {
+  const f = await playbackFixture(t); await enableHistory(f);
+  const url = await deliveredPlayback(f); const reads = f.reads();
+  for (const args of [[], [null], [{}], [[url]], [url, 123], [url, { timesPlayed: 100 }],
+    [{ url, playedAt: 123 }], ['file:///private.mp4'], [f.item.clipUrl], [url + '?time=1']]) {
+    assert.deepEqual(await f.ackOriginalPlayback(f.event, ...args), { status: 'invalid' });
+  }
+  for (const event of [{ ...f.event, sender: {} }, { ...f.event, senderFrame: null },
+    { ...f.event, senderFrame: { ...f.contents.mainFrame } },
+    { ...f.event, senderFrame: { ...f.contents.mainFrame, parent: f.contents.mainFrame } }]) {
+    assert.deepEqual(await f.ackOriginalPlayback(event, url), { status: 'unavailable' });
+  }
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, 'theatrum://app/original/' + 'a'.repeat(64)), { status: 'ignored' });
+  assert.equal(f.reads(), reads); assert.equal(f.historyWrites.length, 0); assert.equal(f.picks(), 1);
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: 'recorded' });
+});
+
+test('playback records the main clock exactly once per active original token and never renews idle protection', async t => {
+  const f = await playbackFixture(t); await enableHistory(f);
+  const instant = 1_790_000_123_456;
+  t.mock.method(Date, 'now', () => instant);
+  const beforeCount = f.images[0].timesPlayed ?? 0;
+  const url = await deliveredPlayback(f);
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: 'recorded' });
+  assert.equal(f.images[0].lastPlayed, instant); assert.equal(f.images[0].timesPlayed, beforeCount + 1);
+  assert.deepEqual(f.historyWrites[0], { index: 0, revision: privateVideoRevision({ ...f.images[0],
+    lastPlayed: 0, timesPlayed: beforeCount }), playedAt: instant });
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: 'ignored' });
+  assert.equal((await f.response(url)).status, 200, 'acknowledgement does not retire the video');
+  const next = await deliveredPlayback(f);
+  assert.notEqual(next, url);
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: 'ignored' });
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, next), { status: 'recorded' });
+  assert.equal(f.images[0].timesPlayed, beforeCount + 2); assert.equal(f.historyWrites.length, 2);
+  assert.equal(f.appliedProtection.length, 1, 'only the explicit settings save affects idle protection');
+  assert.equal(f.locks(), 0); assert.equal(f.hubLocks(), 0);
+});
+
+test('history advances the cached full-row CAS without invalidating a notes/rating draft or recent sorting', async t => {
+  const f = await playbackFixture(t); await enableHistory(f);
+  const originalRevision = f.item.revision;
+  const oldCount = f.images[0].timesPlayed ?? 0;
+  const url = await deliveredPlayback(f);
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: 'recorded' });
+  const historyRevision = privateVideoRevision(f.images[0]);
+  const recent = await f.list(f.event, { query: '', offset: 0, collection: 'recent', sort: 'last-played', direction: 'desc' });
+  assert.equal(recent.status, 'ready'); assert.equal(recent.total, 1); assert.equal(recent.items[0].id, f.id);
+  const detail = await f.detail(f.event, f.id);
+  assert.equal(detail.item.revision, originalRevision);
+  const saved = await f.save(f.event, { id: f.id, revision: originalRevision, notes: 'Uninterrupted draft', tags: ['History'], rating: 3 });
+  assert.equal(saved.status, 'saved');
+  assert.deepEqual(f.edits[0], { index: 0, revision: historyRevision, notes: 'Uninterrupted draft', tags: ['History'], rating: 3 });
+  assert.equal(f.images[0].timesPlayed, oldCount + 1); assert.ok(f.images[0].lastPlayed! > 0);
+});
+
+test('turning history off preserves previously recorded metrics and stops later increments', async t => {
+  const f = await playbackFixture(t); await enableHistory(f);
+  const first = await deliveredPlayback(f);
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, first), { status: 'recorded' });
+  const before = JSON.stringify(f.images);
+  assert.equal((await f.setProtection(f.event, { autoLockMinutes: 5, recordPlaybackHistory: false })).status, 'saved');
+  const next = await deliveredPlayback(f);
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, next), { status: 'disabled' });
+  assert.equal(JSON.stringify(f.images), before);
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, first), { status: 'ignored' });
+  assert.equal(f.historyWrites.length, 2);
+});
+
+for (const outcome of ['disabled', 'conflict', 'invalid', 'busy', 'throw'] as const) {
+  test(`a ${outcome} history outcome consumes its acknowledgement without retry`, async t => {
+    const f = await playbackFixture(t); await enableHistory(f);
+    const url = await deliveredPlayback(f); const before = JSON.stringify(f.images);
+    f.recording(async () => { if (outcome === 'throw') { throw new Error('Sensitive storage detail'); }
+      return { status: outcome }; });
+    assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: outcome === 'throw' ? 'unavailable' : outcome });
+    assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: 'ignored' });
+    assert.equal(f.historyWrites.length, 1); assert.equal(JSON.stringify(f.images), before);
+  });
+}
+
+test('an external row edit conflicts with playback history and is not hidden by cache advancement', async t => {
+  const f = await playbackFixture(t); await enableHistory(f);
+  const url = await deliveredPlayback(f);
+  f.images[0].notes = 'Concurrent external change';
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: 'conflict' });
+  assert.equal(f.images[0].notes, 'Concurrent external change');
+  assert.deepEqual(await f.save(f.event, { id: f.id, revision: f.item.revision, notes: 'Stale draft', tags: [] }), { status: 'conflict' });
+});
+
+for (const ending of ['stop', 'source-replacement', 'file-replacement', 'frame-replacement'] as const) {
+  test(`a delivered original cannot be acknowledged after ${ending}`, async t => {
+    const f = await playbackFixture(t); await enableHistory(f);
+    const url = await deliveredPlayback(f);
+    if (ending === 'stop') { f.stopOriginal(); }
+    else if (ending === 'frame-replacement') { f.contents.mainFrame = { ...f.contents.mainFrame }; }
+    else if (ending === 'source-replacement') {
+      const previous = f.root + '-original'; await fs.rename(f.root, previous);
+      t.after(() => fs.rm(previous, { recursive: true, force: true }));
+      await fs.mkdir(f.root); await fs.writeFile(path.join(f.root, 'synthetic.mp4'), 'Replacement');
+    } else {
+      await fs.rename(path.join(f.root, 'synthetic.mp4'), path.join(f.root, 'previous.mp4'));
+      await fs.writeFile(path.join(f.root, 'synthetic.mp4'), 'Replacement');
+    }
+    assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: ending === 'frame-replacement' ? 'unavailable' : 'ignored' });
+    assert.equal(f.historyWrites.length, 0);
+  });
+}
+
+test('Stop preserves an already admitted playback fact and a subsequent draft saves after drainage', async t => {
+  const f = await playbackFixture(t); await enableHistory(f);
+  const url = await deliveredPlayback(f);
+  let finish!: () => void; let began!: () => void;
+  const ready = new Promise<void>(resolve => { began = resolve; });
+  f.recording(async (_generation, request, current) => {
+    began(); await new Promise<void>(resolve => { finish = resolve; });
+    assert.equal(current(), true, 'ordinary Stop does not invalidate admitted history');
+    f.images[0] = { ...f.images[0], timesPlayed: 1, lastPlayed: request.playedAt };
+    return { status: 'recorded', image: f.images[0] };
+  });
+  const work = f.ackOriginalPlayback(f.event, url); await ready;
+  f.stopOriginal();
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: 'ignored' });
+  assert.deepEqual(await f.save(f.event, { id: f.id, revision: f.item.revision, notes: 'Still a draft', tags: [] }), { status: 'busy' });
+  assert.equal((await f.response(url)).status, 404);
+  finish(); assert.deepEqual(await work, { status: 'recorded' });
+  assert.equal((await f.save(f.event, { id: f.id, revision: f.item.revision, notes: 'Still a draft', tags: [] })).status, 'saved');
+  assert.equal(f.images[0].timesPlayed, 1);
+});
+
+test('Stop in the same turn cannot cancel a playback fact admitted before session dispatch', async t => {
+  const f = await playbackFixture(t); await enableHistory(f);
+  const url = await deliveredPlayback(f);
+  const work = f.ackOriginalPlayback(f.event, url); f.stopOriginal();
+  assert.deepEqual(await work, { status: 'recorded' }); assert.equal(f.historyWrites.length, 1);
+});
+
+for (const ending of ['lock', 'revocation', 'navigation', 'frame-replacement', 'dispose'] as const) {
+  test(`${ending} revokes and drains an admitted history write`, async t => {
+    const f = await playbackFixture(t); await enableHistory(f);
+    const url = await deliveredPlayback(f);
+    let finish!: () => void; let began!: () => void;
+    let authority!: () => boolean;
+    const ready = new Promise<void>(resolve => { began = resolve; });
+    f.recording(async (_generation, _request, current) => {
+      authority = current;
+      began(); await new Promise<void>(resolve => { finish = resolve; });
+      assert.equal(current(), false); throw new Error('Revoked');
+    });
+    const work = f.ackOriginalPlayback(f.event, url); await ready;
+    if (ending === 'lock') { f.lock(); }
+    if (ending === 'revocation') { f.controller.abort(); }
+    if (ending === 'navigation') { f.contents.emit('did-start-navigation', { isMainFrame: true, url: ENTRY, isSameDocument: false }); }
+    if (ending === 'frame-replacement') { f.contents.mainFrame = { ...f.contents.mainFrame }; }
+    if (ending !== 'dispose') { assert.equal(authority(), false, 'each boundary independently revokes publication'); }
+    let disposed = false;
+    const disposal = f.dispose().then(() => { disposed = true; });
+    await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(disposed, false);
+    finish(); assert.deepEqual(await work, { status: 'unavailable' }); await disposal;
+    assert.equal(disposed, true); assert.equal(f.historyWrites.length, 1);
+  });
+}
+
+test('history drainage is registered before a session callback synchronously disposes the bridge', async t => {
+  const f = await playbackFixture(t); await enableHistory(f);
+  const url = await deliveredPlayback(f);
+  let disposal!: Promise<void>; let disposed = false; let finish!: () => void;
+  f.recording(async (_generation, _request, current) => {
+    disposal = f.dispose().then(() => { disposed = true; });
+    await new Promise<void>(resolve => { finish = resolve; });
+    assert.equal(current(), false); return { status: 'disabled' };
+  });
+  const work = f.ackOriginalPlayback(f.event, url);
+  await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(disposed, false);
+  finish(); assert.deepEqual(await work, { status: 'unavailable' }); await disposal;
+  assert.equal(disposed, true);
+});
+
 test('duplicate preview hashes and absent strip geometry do not disable original playback', async t => {
   const f = await playbackFixture(t);
   f.images[0].screens = 0;
@@ -2716,4 +2977,695 @@ test('unconfirmed source scan directory cleanup quarantines the private session'
   assert.equal(f.confirmations(), 0); assert.equal(f.writes(), 0); assert.ok(f.locks() > 0);
   assert.deepEqual(await f.importProgress(f.event), { status: 'unavailable' });
   await assert.rejects(f.dispose(), /Private gallery cleanup unavailable/);
+});
+
+// Playback-history maintenance has independent lifetime drainage because the
+// count-only native confirmation can outlive its originating gallery window.
+test('history reset accepts only one supported metric from the trusted main frame', async t => {
+  const f = fixture(t); let touched = 0;
+  const hostile = { get metric() { touched++; throw new Error('Private diagnostic'); } };
+  for (const args of [[], [null], ['all'], ['Last played'], ['lastPlayed', true], [hostile], [new String('lastPlayed')]]) {
+    assert.deepEqual(await f.resetPlaybackHistory(f.event, ...args), { status: 'invalid' });
+  }
+  for (const event of [{ ...f.event, sender: new Contents() }, { ...f.event, senderFrame: { ...f.contents.mainFrame } },
+    { ...f.event, senderFrame: null }]) {
+    assert.deepEqual(await f.resetPlaybackHistory(event, 'lastPlayed'), { status: 'unavailable' });
+  }
+  assert.equal(touched, 0); assert.equal(f.reads(), 0); assert.equal(f.historyResets.length, 0);
+  assert.equal(f.historyConfirmations.length, 0);
+  f.options.confirmPlaybackHistoryReset = undefined!;
+  assert.deepEqual(await f.resetPlaybackHistory(f.event, 'lastPlayed'), { status: 'unavailable' });
+  assert.equal(f.historyResets.length, 0);
+});
+
+for (const metric of ['lastPlayed', 'timesPlayed'] as const) {
+  test(`history reset changes only ${metric} and retires cached selection/source IDs`, async t => {
+    const images = [image(0), image(1)];
+    images[0].lastPlayed = 100; images[0].timesPlayed = 3;
+    images[1].lastPlayed = 200; images[1].timesPlayed = 4;
+    const f = fixture(t, images);
+    const page = await f.page(); const oldId = page.items[0].id;
+    const detail = await f.detail(f.event, oldId);
+    const sources = await f.sources(f.event); const sourceId = sources.items[0].id;
+    const before = images.map(row => ({ ...row }));
+    assert.deepEqual(await f.resetPlaybackHistory(f.event, metric), { status: 'reset', count: 2 });
+    assert.deepEqual(f.historyResets, [metric]);
+    assert.deepEqual(f.historyConfirmations, [{ metric, count: 2 }]);
+    assert.deepEqual(images, before.map(row => ({ ...row, [metric]: 0 })));
+    assert.equal((await f.detail(f.event, oldId)).status, 'unavailable');
+    assert.equal((await f.save(f.event, { id: oldId, revision: detail.item.revision, notes: 'Stale', tags: [] })).status, 'unavailable');
+    assert.equal((await f.disconnectSource(f.event, sourceId)).status, 'unavailable');
+    const next = await f.page(); assert.notEqual(next.items[0].id, oldId);
+    assert.notEqual((await f.sources(f.event)).items[0].id, sourceId);
+    const recent = await f.list(f.event, { query: '', offset: 0, collection: 'recent', sort: 'last-played' });
+    assert.equal(recent.total, metric === 'lastPlayed' ? 0 : 2);
+    assert.equal(f.edits.length, 0); assert.equal(f.historyWrites.length, 0); assert.equal(f.appliedProtection.length, 0);
+  });
+}
+
+test('history reset no-op skips confirmation, while cancellation preserves metrics and both retire cached IDs', async t => {
+  const images = [image(0)]; images[0].lastPlayed = 100; images[0].timesPlayed = 0;
+  const f = fixture(t, images); const before = JSON.stringify(images);
+  const old = (await f.page()).items[0].id;
+  assert.deepEqual(await f.resetPlaybackHistory(f.event, 'timesPlayed'), { status: 'unchanged' });
+  assert.equal(f.historyConfirmations.length, 0);
+  assert.equal((await f.detail(f.event, old)).status, 'unavailable');
+  const next = (await f.page()).items[0].id; f.confirmHistory(async () => false);
+  assert.deepEqual(await f.resetPlaybackHistory(f.event, 'lastPlayed'), { status: 'cancelled' });
+  assert.equal(JSON.stringify(images), before); assert.equal(f.historyConfirmations.length, 1);
+  assert.equal((await f.detail(f.event, next)).status, 'unavailable');
+});
+
+for (const result of [{ status: 'reset', count: 1 }, { status: 'reset', count: 100_000 },
+  { status: 'unchanged' }, { status: 'cancelled' }, { status: 'busy' }, { status: 'invalid' }] as const) {
+  test(`history reset returns only its bounded ${JSON.stringify(result)} outcome`, async t => {
+    const f = fixture(t); f.resettingHistory(async () => result);
+    assert.deepEqual(await f.resetPlaybackHistory(f.event, 'lastPlayed'), result);
+  });
+}
+
+for (const value of [undefined, null, {}, { status: 'reset', count: 0 }, { status: 'reset', count: -1 },
+  { status: 'reset', count: 100_001 }, { status: 'reset', count: 1.5 }, { status: 'reset', count: NaN },
+  { status: 'reset', count: 1, secret: 'Hidden diagnostic' }, { status: 'unchanged', count: 0 },
+  { status: 'cancelled', secret: 'Hidden diagnostic' }, { status: 'failed' }, Object.create({ status: 'unchanged' }),
+  { get status() { throw new Error('Secret getter'); } }, { status: 'reset', get count() { throw new Error('Secret count'); } }]) {
+  test(`history reset rejects malformed session outcome ${typeof value} without returning private fields`, async t => {
+    const f = fixture(t); f.resettingHistory(async () => value as any);
+    assert.deepEqual(await f.resetPlaybackHistory(f.event, 'timesPlayed'), { status: 'unavailable' });
+  });
+}
+
+test('history reset refuses malformed native confirmation counts without opening the prompt', async t => {
+  const f = fixture(t);
+  f.resettingHistory(async (_generation, _metric, _current, confirm) => {
+    for (const count of [0, -1, 1.5, NaN, Infinity, 100_001]) { assert.equal(await confirm(count), false); }
+    return { status: 'unchanged' };
+  });
+  assert.deepEqual(await f.resetPlaybackHistory(f.event, 'lastPlayed'), { status: 'unchanged' });
+  assert.equal(f.historyConfirmations.length, 0);
+});
+
+test('history reset stops the original before confirmation and serializes gallery mutations', async t => {
+  const f = await playbackFixture(t);
+  const url = await deliveredPlayback(f); f.images[0].lastPlayed = 123; let finish!: () => void; let began!: () => void;
+  const ready = new Promise<void>(resolve => { began = resolve; });
+  f.confirmHistory(async () => {
+    assert.equal((await f.response(url)).status, 404);
+    began(); await new Promise<void>(resolve => { finish = resolve; }); return true;
+  });
+  const work = f.resetPlaybackHistory(f.event, 'lastPlayed'); await ready;
+  assert.deepEqual(await f.resetPlaybackHistory(f.event, 'timesPlayed'), { status: 'busy' });
+  assert.deepEqual(await f.page(), { status: 'busy' });
+  assert.deepEqual(await f.setProtection(f.event, { autoLockMinutes: 5 }), { status: 'busy' });
+  assert.deepEqual(await f.save(f.event, { id: f.id, revision: f.item.revision, notes: 'No', tags: [] }), { status: 'busy' });
+  assert.deepEqual(await f.ackOriginalPlayback(f.event, url), { status: 'ignored' });
+  f.stopOriginal(); finish(); assert.deepEqual(await work, { status: 'reset', count: 1 });
+  assert.equal(f.images[0].lastPlayed, 0);
+  const source = (await f.sources(f.event)).items[0]; assert.equal(source.connected, true, 'reset does not revoke source access');
+});
+
+for (const ending of ['lock', 'revocation', 'navigation', 'frame-replacement', 'dispose'] as const) {
+  test(`history reset drains a native confirmation after ${ending} and refuses late approval`, async t => {
+    const images = [image(0)]; images[0].lastPlayed = 123;
+    const f = fixture(t, images); let finish!: () => void; let began!: () => void;
+    const ready = new Promise<void>(resolve => { began = resolve; });
+    f.confirmHistory(async () => { began(); await new Promise<void>(resolve => { finish = resolve; }); return true; });
+    const work = f.resetPlaybackHistory(f.event, 'lastPlayed'); await ready;
+    if (ending === 'lock') { f.lock(); }
+    if (ending === 'revocation') { f.controller.abort(); }
+    if (ending === 'navigation') { f.contents.emit('did-start-navigation', { isMainFrame: true, url: ENTRY, isSameDocument: false }); }
+    if (ending === 'frame-replacement') { f.contents.mainFrame = { ...f.contents.mainFrame }; }
+    let drained = false; const disposal = f.dispose().then(() => { drained = true; });
+    await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(drained, false);
+    finish(); assert.deepEqual(await work, { status: 'unavailable' }); await disposal;
+    assert.equal(images[0].lastPlayed, 123); assert.equal(drained, true);
+  });
+}
+
+for (const callback of ['session', 'confirmation'] as const) {
+  test(`history reset registers drainage before synchronous ${callback} reentry`, async t => {
+    const f = fixture(t); let disposal!: Promise<void>; let drained = false; let finish!: () => void;
+    const reenter = async () => {
+      disposal = f.dispose().then(() => { drained = true; });
+      await new Promise<void>(resolve => { finish = resolve; });
+      return true;
+    };
+    f.confirmHistory(reenter);
+    f.resettingHistory(async (_generation, _metric, current, confirm) => {
+      if (callback === 'session') { await reenter(); }
+      else { assert.equal(await confirm(1), false); }
+      assert.equal(current(), false); return { status: 'unchanged' };
+    });
+    const work = f.resetPlaybackHistory(f.event, 'timesPlayed');
+    await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(drained, false);
+    finish(); assert.deepEqual(await work, { status: 'unavailable' }); await disposal; assert.equal(drained, true);
+  });
+}
+
+test('history reset pending a session failure sanitizes diagnostics and permits the next request', async t => {
+  const f = fixture(t);
+  f.resettingHistory(async () => { throw new Error('Secret source and catalogue diagnostic'); });
+  assert.deepEqual(await f.resetPlaybackHistory(f.event, 'lastPlayed'), { status: 'unavailable' });
+  assert.equal((await f.page()).status, 'ready');
+  f.confirmHistory(async () => { throw new Error('Secret prompt failure'); });
+  f.resettingHistory(async (_generation, _metric, _current, confirm) => { await confirm(1); return { status: 'unchanged' }; });
+  assert.deepEqual(await f.resetPlaybackHistory(f.event, 'lastPlayed'), { status: 'unavailable' });
+  assert.equal((await f.page()).status, 'ready');
+});
+
+test('history reset drains playback retirement before the session can read or confirm', async t => {
+  const f = await playbackFixture(t); const active = await f.play();
+  const stop = f.playback.stop.bind(f.playback); let finish!: () => void; let calls = 0;
+  const mock = t.mock.method(f.playback, 'stop', () => {
+    const drain = stop();
+    if (++calls !== 1) { return drain; }
+    return drain.then(() => new Promise<void>(resolve => { finish = resolve; }));
+  });
+  const work = f.resetPlaybackHistory(f.event, 'timesPlayed');
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(f.historyResets.length, 0); assert.equal(f.historyConfirmations.length, 0);
+  assert.equal((await f.response(active.url)).status, 404);
+  let drained = false; const disposal = f.dispose().then(() => { drained = true; });
+  await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(drained, false);
+  finish(); assert.deepEqual(await work, { status: 'unavailable' }); await disposal;
+  assert.equal(f.historyResets.length, 0); assert.equal(drained, true); mock.mock.restore();
+});
+
+async function sourceCheckFixture(t: TestContext) {
+  const f = await sourceFixture(t);
+  f.images[0].fileSize = (await fs.stat(path.join(f.root, f.images[0].fileName))).size;
+  const selected = (await f.detail(f.event, f.id)).item;
+  const sourceId = (await f.sources(f.event)).items[0].id;
+  return { ...f, selected, sourceId, runCheck: () => f.checkSource(f.event, sourceId),
+    savedCatalogue: () => ({ images: f.images, inputDirs: { 0: { path: f.root } } } as unknown as FinalObject) };
+}
+const checkedSourceCounts = (extra: Record<string, number> = {}) => ({ status: 'checked', total: 1,
+  sameSize: 1, differentSize: 0, missing: 0, unverified: 0, ignored: 0, ...extra });
+
+test('saved file check returns count-only size comparisons after native authority without reading media contents', async t => {
+  const f = await sourceCheckFixture(t);
+  const row = (index: number, fileName: string, fileSize: number, partialPath = '') => ({ ...image(index),
+    locations: undefined, fileName, partialPath, fileSize });
+  f.images.push(row(1, 'different.mp4', 100), row(2, 'missing.mp4', 10), row(3, 'unknown.mp4', 0),
+    row(4, 'linked.mp4', 10), row(5, 'ignored.mp4', 10, '/ignored'));
+  await fs.writeFile(path.join(f.root, 'different.mp4'), 'different');
+  await fs.writeFile(path.join(f.root, 'unknown.mp4'), 'unknown');
+  await fs.symlink(path.join(f.root, 'synthetic.mp4'), path.join(f.root, 'linked.mp4'));
+  const catalogue = f.savedCatalogue(); catalogue.inputDirs[0].ignoredSubdirectories = ['ignored']; f.catalogue(catalogue);
+  const before = JSON.stringify(catalogue);
+  const nativeFs: typeof import('node:fs') = require('node:fs');
+  const open = t.mock.method(fs, 'open', () => { throw new Error('No media descriptors expected'); });
+  const read = t.mock.method(fs, 'readFile', () => { throw new Error('No media contents expected'); });
+  const syncRead = t.mock.method(nativeFs, 'readFileSync', () => { throw new Error('No media contents expected'); });
+  const result = await f.runCheck();
+  assert.deepEqual(result, checkedSourceCounts({ total: 6, differentSize: 1, missing: 1, unverified: 2, ignored: 1 }));
+  assert.deepEqual(Object.keys(result).sort(), ['differentSize', 'ignored', 'missing', 'sameSize', 'status', 'total', 'unverified']);
+  assert.doesNotMatch(JSON.stringify(result), /revision|path|synthetic|different.mp4|ignored.mp4/);
+  assert.equal(f.picks(), 1); assert.equal(open.mock.callCount(), 0); assert.equal(read.mock.callCount(), 0);
+  assert.equal(syncRead.mock.callCount(), 0); assert.equal(JSON.stringify(catalogue), before);
+  assert.equal(f.edits.length, 0); assert.equal(f.historyWrites.length, 0); assert.equal(f.historyResets.length, 0);
+});
+
+test('saved file check rejects forged sources, paths, argument shapes, senders and frames before reading or picking', async t => {
+  const f = await sourceCheckFixture(t); const reads = f.reads();
+  for (const args of [[], [undefined], [null], [f.root], [{ id: f.sourceId }], ['f'.repeat(32)], [f.id], [f.sourceId, 'extra']]) {
+    assert.deepEqual(await f.checkSource(f.event, ...args), { status: 'unavailable' });
+  }
+  for (const event of [{ ...f.event, sender: new Contents() },
+    { ...f.event, senderFrame: { ...f.contents.mainFrame } }, { ...f.event, senderFrame: null }]) {
+    assert.deepEqual(await f.checkSource(event, f.sourceId), { status: 'unavailable' });
+  }
+  assert.equal(f.reads(), reads); assert.equal(f.picks(), 0);
+});
+
+test('saved file check probes neither root nor files until the native grant picker returns', async t => {
+  const f = await sourceCheckFixture(t);
+  let picked = false;
+  f.choose(async () => { picked = true; return f.root; });
+  const nativeFs: typeof import('node:fs') = require('node:fs');
+  const lstatSync = nativeFs.lstatSync;
+  const lstat = fs.lstat;
+  let probes = 0;
+  t.mock.method(nativeFs, 'lstatSync', (...args: Parameters<typeof lstatSync>) => {
+    assert.equal(picked, true); probes++; return lstatSync(...args);
+  });
+  t.mock.method(fs, 'lstat', (...args: Parameters<typeof lstat>) => {
+    assert.equal(picked, true); probes++; return lstat(...args);
+  });
+  assert.deepEqual(await f.runCheck(), checkedSourceCounts());
+  assert.ok(probes > 0); assert.equal(f.picks(), 1);
+});
+
+test('saved file check retains cached row IDs, preview URLs and editing revisions and reuses a valid grant', async t => {
+  const f = await sourceCheckFixture(t);
+  const detail = await f.detail(f.event, f.id); const before = await f.page();
+  assert.deepEqual(await f.runCheck(), checkedSourceCounts());
+  assert.deepEqual(await f.page(), before);
+  assert.deepEqual(await f.runCheck(), checkedSourceCounts()); assert.equal(f.picks(), 1);
+  assert.equal((await f.sources(f.event)).items[0].connected, true);
+  assert.equal((await f.save(f.event, { id: f.id, revision: detail.item.revision,
+    notes: 'Retained notes draft', tags: detail.item.tags, rating: detail.item.rating })).status, 'saved');
+});
+
+for (const ending of ['cancel', 'lock', 'navigate', 'abort', 'dispose'] as const) {
+  test(`saved file check ${ending} drains a late picker and does not retain authority or a partial report`, async t => {
+    const f = await sourceCheckFixture(t);
+    let finish!: (value: string) => void; let begin!: () => void;
+    const started = new Promise<void>(resolve => { begin = resolve; });
+    f.choose(() => { begin(); return new Promise(resolve => { finish = resolve; }); });
+    const helper = t.mock.method(sourceCheck, 'checkPrivateSource', async () => { throw new Error('Check was never admitted'); });
+    const checking = f.runCheck(); await started;
+    if (ending === 'cancel') { f.cancelSource(); }
+    if (ending === 'lock') { f.lock(); }
+    if (ending === 'navigate') { f.contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true, url: ENTRY + '#other' }); }
+    if (ending === 'abort') { f.controller.abort(); }
+    let drained = false;
+    const disposal = ending === 'cancel' ? undefined : f.dispose().then(() => { drained = true; });
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(drained, false);
+    finish(f.root);
+    assert.deepEqual(await checking, { status: ending === 'cancel' ? 'cancelled' : 'unavailable' });
+    await disposal; assert.equal(helper.mock.callCount(), 0);
+    if (ending === 'cancel') { assert.equal((await f.sources(f.event)).items[0].connected, false); }
+  });
+}
+
+test('saved file check owns the shared operation gate and ignores forged cancellation', async t => {
+  const f = await sourceCheckFixture(t);
+  let finish!: (value: string) => void; let begin!: () => void;
+  const started = new Promise<void>(resolve => { begin = resolve; });
+  f.choose(() => { begin(); return new Promise(resolve => { finish = resolve; }); });
+  const checking = f.runCheck(); await started; const reads = f.reads();
+  assert.deepEqual(await f.runCheck(), { status: 'busy' });
+  assert.deepEqual(await f.connectSource(f.event, f.sourceId), { status: 'busy' });
+  assert.deepEqual(await f.disconnectSource(f.event, f.sourceId), { status: 'busy' });
+  assert.deepEqual(await f.page(), { status: 'busy' });
+  assert.deepEqual(await f.protection(f.event), { status: 'busy' });
+  assert.equal(f.reads(), reads);
+  ipcMain.emit(channels.cancelSourceConnection, { ...f.event, senderFrame: { ...f.contents.mainFrame } });
+  f.cancelSource('extra'); finish(f.root);
+  assert.deepEqual(await checking, checkedSourceCounts());
+});
+
+test('saved file check is busy before metadata reads while another private operation is pending', async t => {
+  const f = await sourceCheckFixture(t); let finish!: () => void;
+  f.readProtection(() => new Promise(resolve => { finish = () => resolve({ autoLockMinutes: 5 }); }));
+  const protection = f.protection(f.event); const reads = f.reads();
+  assert.deepEqual(await f.runCheck(), { status: 'busy' }); assert.equal(f.reads(), reads); assert.equal(f.picks(), 0);
+  finish(); await protection;
+});
+
+test('saved file check retires original playback before a native picker or file review', async t => {
+  const f = await playbackFixture(t); const sourceId = (await f.sources(f.event)).items[0].id;
+  const active = await f.play(); assert.equal(active.status, 'ready');
+  assert.equal((await f.checkSource(f.event, sourceId)).status, 'checked');
+  assert.equal((await f.response(active.url)).status, 404);
+});
+
+test('saved source replacement conflicts before the check picker and after its late selection', async t => {
+  const f = await sourceCheckFixture(t); const catalogue = f.savedCatalogue();
+  const changed = { ...catalogue, inputDirs: { 0: { path: f.root + '-new' } } } as unknown as FinalObject;
+  f.catalogue(changed); assert.deepEqual(await f.runCheck(), { status: 'conflict' }); assert.equal(f.picks(), 0);
+  f.catalogue(catalogue); f.choose(async () => { f.catalogue(changed); return f.root; });
+  assert.deepEqual(await f.runCheck(), { status: 'conflict' });
+  f.catalogue(catalogue); assert.equal((await f.sources(f.event)).items[0].connected, false);
+});
+
+for (const change of ['root', 'ignored', 'reference', 'size'] as const) {
+  test(`saved file check rejects a concurrent ${change} change and retires its grant`, async t => {
+    const f = await sourceCheckFixture(t); const catalogue = f.savedCatalogue(); f.catalogue(catalogue);
+    const check = sourceCheck.checkPrivateSource;
+    t.mock.method(sourceCheck, 'checkPrivateSource', async (...args: Parameters<typeof check>) => {
+      const result = await check(...args);
+      if (change === 'root') { catalogue.inputDirs[0].path += '-new'; }
+      if (change === 'ignored') { catalogue.inputDirs[0].ignoredSubdirectories = ['ignored']; }
+      if (change === 'reference') { catalogue.images[0].fileName = 'replacement.mp4'; }
+      if (change === 'size') { catalogue.images[0].fileSize++; }
+      return result;
+    });
+    assert.deepEqual(await f.runCheck(), { status: 'conflict' });
+    catalogue.inputDirs[0].path = f.root;
+    assert.equal((await f.sources(f.event)).items[0].connected, false);
+  });
+}
+
+test('saved file check permits unrelated notes and history changes without reporting a source conflict', async t => {
+  const f = await sourceCheckFixture(t); const check = sourceCheck.checkPrivateSource;
+  t.mock.method(sourceCheck, 'checkPrivateSource', async (...args: Parameters<typeof check>) => {
+    const result = await check(...args); f.images[0].notes = 'External notes'; f.images[0].lastPlayed = 100; return result;
+  });
+  assert.deepEqual(await f.runCheck(), checkedSourceCounts()); assert.equal(f.images[0].notes, 'External notes');
+});
+
+for (const ending of ['cancel', 'dispose'] as const) {
+  test(`saved file check registers drainage before ${ending} reentry from the helper`, async t => {
+    const f = await sourceCheckFixture(t); let finish!: () => void; let begin!: () => void;
+    const started = new Promise<void>(resolve => { begin = resolve; });
+    let drained = false; let disposal: Promise<void> | undefined;
+    t.mock.method(sourceCheck, 'checkPrivateSource', async (options: Parameters<typeof sourceCheck.checkPrivateSource>[0]) => {
+      if (ending === 'cancel') { f.cancelSource(); } else { disposal = f.dispose().then(() => { drained = true; }); }
+      assert.equal(options.isCurrent(), false); begin();
+      await new Promise<void>(resolve => { finish = resolve; });
+      return { ...checkedSourceCounts(), revision: 'f'.repeat(64) } as any;
+    });
+    const checking = f.runCheck(); await started;
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(drained, false);
+    finish(); assert.deepEqual(await checking, { status: ending === 'cancel' ? 'cancelled' : 'unavailable' });
+    await disposal;
+    if (ending === 'cancel') { assert.equal((await f.sources(f.event)).items[0].connected, false); }
+  });
+}
+
+test('saved file check loses a disconnected root as unavailable rather than counting every file missing', async t => {
+  const f = await sourceCheckFixture(t);
+  t.mock.method(sourceCheck, 'checkPrivateSource', async options => {
+    await fs.rm(f.root, { recursive: true, force: true }); assert.equal(options.isCurrent(), false);
+    return { status: 'cancelled' };
+  });
+  assert.deepEqual(await f.runCheck(), { status: 'source-unavailable' });
+});
+
+for (const status of ['cancelled', 'invalid', 'limit', 'source-unavailable'] as const) {
+  test(`saved file check returns ${status} without counts or diagnostic fields`, async t => {
+    const f = await sourceCheckFixture(t);
+    t.mock.method(sourceCheck, 'checkPrivateSource', async () => ({ status, path: '/private/source', total: 1 } as any));
+    assert.deepEqual(await f.runCheck(), { status });
+    assert.equal((await f.sources(f.event)).items[0].connected, false);
+  });
+}
+
+for (const fault of ['sum', 'negative', 'fraction', 'oversize', 'nan', 'extra', 'revision', 'hidden', 'accessor', 'unknown-status'] as const) {
+  test(`saved file check rejects a malformed ${fault} count report without private data`, async t => {
+    const f = await sourceCheckFixture(t); let getterCalls = 0;
+    t.mock.method(sourceCheck, 'checkPrivateSource', async () => {
+      const result: any = { ...checkedSourceCounts(), revision: sourceCheck.privateSourceCheckRevision(f.savedCatalogue(), 0) };
+      if (fault === 'sum') { result.total = 2; }
+      if (fault === 'negative') { result.missing = -1; }
+      if (fault === 'fraction') { result.sameSize = 0.5; }
+      if (fault === 'oversize') { result.total = result.sameSize = 10_001; }
+      if (fault === 'nan') { result.total = NaN; }
+      if (fault === 'extra') { result.path = '/private/path'; }
+      if (fault === 'revision') { result.revision = '/private/revision'; }
+      if (fault === 'hidden') { Object.defineProperty(result, 'total', { value: 1, enumerable: false }); }
+      if (fault === 'accessor') { Object.defineProperty(result, 'total', { get: () => { getterCalls++; return 1; }, enumerable: true }); }
+      if (fault === 'unknown-status') { result.status = '/private/diagnostic'; }
+      return result;
+    });
+    assert.deepEqual(await f.runCheck(), { status: 'invalid' }); assert.equal(getterCalls, 0);
+  });
+}
+
+test('saved file check hides helper exceptions and drops its provisional grant', async t => {
+  const f = await sourceCheckFixture(t);
+  t.mock.method(sourceCheck, 'checkPrivateSource', async () => { throw new Error('/private/source/file.mp4'); });
+  assert.deepEqual(await f.runCheck(), { status: 'source-unavailable' });
+  assert.equal((await f.sources(f.event)).items[0].connected, false);
+});
+
+for (const callback of ['catalogue', 'picker'] as const) {
+  test(`saved file check drains disposal reentered inside its first ${callback} callback`, async t => {
+    const f = await sourceCheckFixture(t); let finish!: () => void; let begin!: () => void;
+    const started = new Promise<void>(resolve => { begin = resolve; });
+    let drained = false; let disposal: Promise<void> | undefined;
+    const reenter = async () => {
+      disposal = f.dispose().then(() => { drained = true; }); begin();
+      await new Promise<void>(resolve => { finish = resolve; });
+    };
+    if (callback === 'catalogue') { f.read(async () => { await reenter(); return f.savedCatalogue(); }); }
+    else { f.choose(async () => { await reenter(); return f.root; }); }
+    const checking = f.runCheck(); await started;
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(drained, false);
+    finish(); assert.deepEqual(await checking, { status: 'unavailable' }); await disposal;
+    assert.equal(drained, true);
+  });
+}
+
+test('saved file check cancellation during post-picker metadata recheck removes the late grant', async t => {
+  const f = await sourceCheckFixture(t);
+  f.choose(async () => { f.read(async () => { f.cancelSource(); return f.savedCatalogue(); }); return f.root; });
+  assert.deepEqual(await f.runCheck(), { status: 'cancelled' });
+  f.read(async () => f.savedCatalogue()); f.choose(async () => f.root);
+  assert.equal((await f.sources(f.event)).items[0].connected, false);
+  assert.deepEqual(await f.runCheck(), checkedSourceCounts()); assert.equal(f.picks(), 2);
+});
+
+
+test('video refresh uses a new main-owned namespace, projects stored metadata and preserves the public row id', async t => {
+  const f = await sourceFixture(t);
+  assert.equal(f.item.refreshable, true);
+  f.images[0].screens = 0;
+  const selected = (await f.detail(f.event, f.id)).item;
+  assert.equal(selected.regenerable, false, 'refresh does not require old preview geometry');
+  assert.equal(selected.refreshable, true);
+  let captured: Parameters<PrivateHubSession['refreshVideo']>[1] | undefined;
+  f.refreshing(async (generation, source, location, update, options) => {
+    assert.equal(generation, 7); assert.equal(update.index, 0);
+    assert.equal(update.revision, privateVideoRevision(f.images[0]));
+    assert.equal(options.isCurrent(), true); assert.equal(options.signal?.aborted, false);
+    assert.match(source.hash, /^[a-f0-9]{32}$/); assert.notEqual(source.hash, 'hash-0');
+    assert.equal(source.hash, location.hash); assert.equal(location.root, f.root);
+    captured = source;
+    f.images[0] = { ...f.images[0], hash: source.hash, width: 320, height: 180, duration: 7, screens: 4, fileSize: 99 };
+    return { status: 'refreshed', image: { ...f.images[0], duration: 999 } };
+  });
+  const result = await f.refresh(selected.revision);
+  assert.equal(result.status, 'refreshed'); assert.equal(result.item.id, f.id);
+  assert.equal(result.item.duration, 7, 'actual stored image wins over session return');
+  assert.equal(result.item.width, 320); assert.equal(result.item.height, 180);
+  assert.equal(result.item.notes, selected.notes); assert.deepEqual(result.item.tags, selected.tags);
+  assert.equal(result.item.rating, selected.rating);
+  assert.notEqual(result.item.revision, selected.revision);
+  assert.match(result.item.thumbnailUrl, new RegExp('/' + captured!.hash + '\\.jpg'));
+  assert.equal(captured!.isCurrent(), false);
+  assert.equal((await f.page()).items[0].id, f.id);
+  assert.equal((await f.detail(f.event, f.id)).item.duration, 7);
+  assert.doesNotMatch(JSON.stringify(result), /gallery-source-|synthetic\.mp4|partialPath|fileName|inputDirs/);
+  assert.deepEqual(await f.refresh(), { status: 'conflict' });
+  assert.equal((await f.refresh(result.item.revision)).status, 'refreshed');
+  assert.equal(f.picks(), 1, 'successful refresh keeps only the private window grant');
+});
+
+for (const kind of ['alias', 'duplicate', 'tombstone', 'folder-hash', 'ignored', 'invalid-root', 'invalid-location']) {
+  test(`refresh eligibility refuses ${kind} without acquiring original access`, async t => {
+    const f = await sourceFixture(t);
+    if (kind === 'alias') { f.images[0].locations = [{ inputSource: 0, partialPath: '/', fileName: 'synthetic.mp4' },
+      { inputSource: 0, partialPath: '/', fileName: 'alias.mp4' }]; }
+    if (['duplicate', 'tombstone', 'folder-hash'].includes(kind)) {
+      f.images.push({ ...f.images[0], fileName: 'other.mp4', deleted: kind === 'tombstone',
+        ...(kind === 'folder-hash' ? { cleanName: '*FOLDER*' } : {}) });
+    }
+    if (kind === 'ignored') { f.images[0].partialPath = '/ignored'; }
+    if (kind === 'invalid-location') { f.images[0].fileName = '../bad.mp4'; }
+    f.catalogue({ images: f.images, inputDirs: { 0: { path: kind === 'invalid-root' ? '/' : f.root,
+      ...(kind === 'ignored' ? { ignoredSubdirectories: ['ignored'] } : {}) } } } as unknown as FinalObject);
+    // Changed locations retire the existing selection under the ordinary detail guard.
+    const result = await f.refresh();
+    assert.ok(['invalid', 'conflict'].includes(result.status));
+    assert.equal(f.picks(), 0);
+  });
+}
+
+test('refresh projection disables ambiguous hashes including tombstones while preserving editing', async t => {
+  const f = await sourceFixture(t);
+  f.images.push({ ...f.images[0], deleted: true });
+  const selected = (await f.detail(f.event, f.id)).item;
+  assert.equal(selected.refreshable, false); assert.equal(selected.editable, true);
+  assert.deepEqual(await f.refresh(selected.revision), { status: 'unavailable' });
+  assert.equal(f.picks(), 0);
+});
+
+test('refresh accepts only an exact opaque data request and trusted main frame', async t => {
+  const f = await sourceFixture(t);
+  let getter = false;
+  const accessor = { id: f.id, get revision() { getter = true; return f.item.revision; } };
+  const symbol = { id: f.id, revision: f.item.revision, [Symbol('path')]: f.root };
+  const hidden = Object.defineProperty({ id: f.id, revision: f.item.revision }, 'path', { value: f.root });
+  for (const value of [undefined, null, [], {}, accessor, symbol, hidden,
+    { id: f.id, revision: f.item.revision, path: f.root }, { id: f.id, revision: 'bad' }]) {
+    assert.deepEqual(await f.refreshVideo(f.event, value), { status: 'invalid' });
+  }
+  assert.equal(getter, false);
+  assert.deepEqual(await f.refreshVideo(f.event, { id: f.id, revision: f.item.revision }, true), { status: 'invalid' });
+  assert.deepEqual(await f.refreshVideo(f.event, { id: 'f'.repeat(32), revision: f.item.revision }), { status: 'unavailable' });
+  assert.deepEqual(await f.refreshVideo({ ...f.event, sender: new Contents() }, { id: f.id, revision: f.item.revision }), { status: 'unavailable' });
+  assert.deepEqual(await f.refreshVideo({ ...f.event, senderFrame: new Contents().mainFrame }, { id: f.id, revision: f.item.revision }), { status: 'unavailable' });
+  assert.equal(f.picks(), 0);
+});
+
+for (const when of ['before-picker', 'in-picker']) {
+  for (const change of (when === 'before-picker' ? ['notes', 'row-moved', 'alias', 'ignored', 'duplicate-hash']
+    : ['notes', 'row-moved', 'root', 'alias', 'ignored', 'duplicate-hash'])) {
+    test(`refresh refuses ${change} changed ${when} and refreshes or retires cached authority`, async t => {
+      const f = await sourceFixture(t);
+      const mutate = () => {
+        if (change === 'notes') { f.images[0].notes = 'newer edit'; }
+        if (change === 'row-moved') { f.images.unshift({ ...image(42), locations: undefined }); }
+        if (change === 'alias') { f.images[0].locations = [{ inputSource: 0, fileName: 'different.mp4', partialPath: '/' }]; }
+        if (change === 'duplicate-hash') { f.images.push({ ...f.images[0], deleted: true }); }
+        f.catalogue({ images: f.images, inputDirs: { 0: { path: change === 'root' ? path.dirname(f.root) : f.root,
+          ...(change === 'ignored' ? { ignoredSubdirectories: ['/blocked'] } : {}) } } } as unknown as FinalObject);
+        if (change === 'ignored') { f.images[0].partialPath = '/blocked'; }
+      };
+      if (when === 'before-picker') { mutate(); }
+      else { f.choose(async () => { mutate(); return f.root; }); }
+      f.refreshing(async () => { assert.fail('changed source must not generate'); });
+      const result = await f.refresh();
+      assert.ok(['conflict', 'invalid', 'wrong-folder'].includes(result.status));
+      assert.equal(f.picks(), when === 'before-picker' ? 0 : 1);
+      if (change === 'row-moved' || change === 'alias' || change === 'ignored') {
+        assert.deepEqual(await f.detail(f.event, f.id), { status: 'unavailable' });
+      }
+      if (change === 'notes') { assert.equal((await f.detail(f.event, f.id)).item.notes, 'newer edit'); }
+    });
+  }
+}
+
+test('cancelled and wrong-folder refresh returns bounded status and preserves stored details', async t => {
+  const f = await sourceFixture(t);
+  f.choose(async () => undefined);
+  assert.deepEqual(await f.refresh(), { status: 'cancelled' });
+  let current = (await f.detail(f.event, f.id)).item;
+  assert.equal(current.notes, f.item.notes);
+  f.choose(async () => path.dirname(f.root));
+  assert.deepEqual(await f.refresh(current.revision), { status: 'wrong-folder' });
+  current = (await f.detail(f.event, f.id)).item;
+  f.choose(async () => f.root); await fs.unlink(path.join(f.root, 'synthetic.mp4'));
+  assert.deepEqual(await f.refresh(current.revision), { status: 'source-unavailable' });
+});
+
+for (const ending of ['cancel', 'lock', 'dispose', 'abort', 'navigate', 'replace-frame']) {
+  test(`refresh picker and every pending gate drain safely after ${ending}`, async t => {
+    const f = await sourceFixture(t);
+    let finish!: () => void; let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    f.choose(() => { started(); return new Promise(resolve => { finish = () => resolve(f.root); }); });
+    f.refreshing(async () => { assert.fail('revoked picker must not refresh'); });
+    const work = f.refresh(); await ready;
+    assert.deepEqual(await f.page(), { status: 'busy' });
+    assert.deepEqual(await f.run(), { status: 'busy' });
+    assert.deepEqual(await f.refresh(), { status: 'busy' });
+    assert.deepEqual(await f.save(f.event, { id: f.id, revision: f.item.revision, notes: '', tags: [] }), { status: 'busy' });
+    let drain: Promise<void> | undefined;
+    if (ending === 'cancel') { f.cancel(); }
+    if (ending === 'lock') { f.lock(); drain = f.dispose(); }
+    if (ending === 'dispose') { drain = f.dispose(); }
+    if (ending === 'abort') { f.controller.abort(); }
+    if (ending === 'navigate') { f.contents.emit('did-start-navigation', { isMainFrame: true, url: ENTRY }); }
+    if (ending === 'replace-frame') { f.contents.mainFrame = new Contents().mainFrame; }
+    let drained = false; void drain?.then(() => { drained = true; });
+    await Promise.resolve(); assert.equal(drained, false);
+    finish(); assert.deepEqual(await work, { status: ending === 'cancel' ? 'cancelled' : 'unavailable' });
+    await drain;
+  });
+}
+
+for (const ending of ['cancel', 'throw', 'cancel-throw']) {
+  test(`refresh reconciles actual saved metadata after uncertain publication: ${ending}`, async t => {
+    const f = await sourceFixture(t);
+    let started!: () => void; let finish!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const release = new Promise<void>(resolve => { finish = resolve; });
+    let hash = '';
+    f.refreshing(async (_generation, source) => {
+      hash = source.hash;
+      f.images[0] = { ...f.images[0], hash, duration: 9, width: 600, height: 400, screens: 8 };
+      started(); await release;
+      if (ending.includes('throw')) { throw new Error('private path diagnostics'); }
+      return { status: 'refreshed', image: f.images[0] };
+    });
+    const work = f.refresh(); await ready;
+    if (ending.includes('cancel')) { f.cancel(); }
+    assert.deepEqual(await f.detail(f.event, f.id), { status: 'busy' });
+    finish(); assert.deepEqual(await work, { status: ending.includes('cancel') ? 'cancelled' : 'unavailable' });
+    const selected = (await f.detail(f.event, f.id)).item;
+    assert.equal(selected.duration, 9); assert.equal(selected.width, 600); assert.equal(selected.id, f.id);
+    assert.ok(selected.thumbnailUrl.includes(hash)); assert.notEqual(selected.revision, f.item.revision);
+    assert.equal((await f.page()).items[0].duration, 9);
+    assert.equal((await f.refresh(selected.revision)).status, ending.includes('throw') ? 'unavailable' : 'refreshed');
+    assert.equal(f.picks(), 2, 'failed/cancelled operation retires its grant');
+  });
+}
+
+test('cancelled published refresh retires a row moved to another index before completion', async t => {
+  const f = await sourceFixture(t);
+  f.refreshing(async (_generation, source) => {
+    f.images[0] = { ...f.images[0], hash: source.hash, duration: 7 };
+    f.images.unshift({ ...image(42), locations: undefined });
+    f.cancel(); return { status: 'refreshed', image: f.images[1] };
+  });
+  assert.deepEqual(await f.refresh(), { status: 'conflict' });
+  assert.deepEqual(await f.detail(f.event, f.id), { status: 'unavailable' });
+  assert.deepEqual(await f.save(f.event, { id: f.id, revision: f.item.revision, notes: 'wrong row', tags: [] }), { status: 'unavailable' });
+  assert.notEqual((await f.page()).items[1].id, f.id);
+});
+
+for (const callback of ['reader', 'picker', 'session']) {
+  test(`refresh registers drainage before reentrant disposal in ${callback}`, async t => {
+    const f = await sourceFixture(t);
+    let entered!: () => void; let finish!: () => void; let drain: Promise<void> | undefined;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const hold = new Promise<void>(resolve => { finish = resolve; });
+    const reenter = () => { drain = f.dispose(); entered(); return hold; };
+    if (callback === 'reader') { f.read(async () => { await reenter(); return { images: f.images,
+      inputDirs: { 0: { path: f.root } } } as unknown as FinalObject; }); }
+    if (callback === 'picker') { f.choose(async () => { await reenter(); return f.root; }); }
+    if (callback === 'session') { f.refreshing(async () => { await reenter(); return { status: 'conflict' }; }); }
+    const work = f.refresh(); await ready;
+    let drained = false; void drain!.then(() => { drained = true; });
+    await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(drained, false);
+    finish(); assert.deepEqual(await work, { status: 'unavailable' }); await drain;
+  });
+}
+
+test('refresh quarantines source-finalizer failure and never acknowledges the new row', async t => {
+  const f = await sourceFixture(t);
+  let restore: (() => Promise<void>) | undefined;
+  f.expectQuarantinedDisposal();
+  f.refreshing(async (_generation, source) => {
+    restore = failSourceDescriptorClose(t, path.join(f.root, 'synthetic.mp4')); await source.open();
+    f.images[0] = { ...f.images[0], hash: source.hash };
+    return { status: 'refreshed', image: f.images[0] };
+  });
+  try {
+    assert.deepEqual(await f.refresh(), { status: 'unavailable' });
+    assert.ok(f.locks() >= 1); assert.deepEqual(await f.page(), { status: 'unavailable' });
+    await assert.rejects(f.dispose(), /Private gallery cleanup unavailable/);
+  } finally { await restore?.(); }
+});
+
+
+test('refresh reread failure retires the stale cached identity after uncertain publication', async t => {
+  const f = await sourceFixture(t);
+  f.refreshing(async (_generation, source) => {
+    f.images[0] = { ...f.images[0], hash: source.hash };
+    f.read(async () => { throw new Error('Private stored catalogue details'); });
+    return { status: 'refreshed', image: f.images[0] };
+  });
+  assert.deepEqual(await f.refresh(), { status: 'unavailable' });
+  assert.deepEqual(await f.detail(f.event, f.id), { status: 'unavailable' });
+  assert.deepEqual(await f.save(f.event, { id: f.id, revision: f.item.revision, notes: '', tags: [] }), { status: 'unavailable' });
+});
+
+test('refresh changed row metadata updates sorting using the stored measurements', async t => {
+  const f = await sourceFixture(t, undefined, [{ ...image(1), fileName: 'other.mp4', partialPath: '',
+    locations: undefined, fileSize: 80, duration: 20 }]);
+  const query = { query: '', offset: 0, sort: 'duration', direction: 'asc' };
+  assert.notEqual((await f.list(f.event, query)).items[0].id, f.id);
+  f.refreshing(async (_generation, source) => {
+    f.images[0] = { ...f.images[0], hash: source.hash, fileSize: 100, duration: 10 };
+    return { status: 'refreshed', image: f.images[0] };
+  });
+  assert.equal((await f.refresh()).status, 'refreshed');
+  const result = await f.list(f.event, query);
+  assert.equal(result.items[0].id, f.id); assert.equal(result.items[0].duration, 10);
+  const bySize = await f.list(f.event, { ...query, sort: 'file-size', direction: 'desc' });
+  assert.equal(bySize.items[0].id, f.id);
+});
+
+test('refresh closes original playback before requesting file access', async t => {
+  let stops = 0;
+  const playback = { stop: async () => { stops++; }, dispose: async () => undefined } as unknown as PrivateSourcePlayback;
+  const f = await sourceFixture(t, playback);
+  const before = stops;
+  f.choose(async () => { assert.ok(stops > before); return f.root; });
+  assert.equal((await f.refresh()).status, 'refreshed');
 });

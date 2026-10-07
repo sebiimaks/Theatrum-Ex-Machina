@@ -13,6 +13,8 @@ const validId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.exec(valu
 const string = (value, limit) => typeof value === 'string' && value.length <= limit;
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const autoLockMinutes = value => [0, 1, 5, 15, 30].includes(value);
+const originalUrl = value => typeof value === 'string'
+  && /^theatrum:\/\/app\/original\/[a-f0-9]{64}$/.exec(value)?.[0] === value;
 // Keep the standalone sandbox validator aligned with the shared UTF-8 contract.
 const password = value => {
   if (typeof value !== 'string' || value.length === 0 || value.length > 1024) { return false; }
@@ -76,10 +78,10 @@ function item(value, details) {
     if (!string(value.notes, 65_536) || !url(value.clipUrl, 'clips', 'mp4') || !url(value.posterUrl, 'clips', 'jpg')
       || !url(value.filmstripUrl, 'filmstrips', 'jpg')
       || typeof value.truncated !== 'boolean' || typeof value.editable !== 'boolean' || typeof value.regenerable !== 'boolean'
-      || typeof value.playable !== 'boolean'
+      || typeof value.refreshable !== 'boolean' || typeof value.playable !== 'boolean'
       || !validId(value.revision)) { return; }
     Object.assign(result, { notes: value.notes, clipUrl: value.clipUrl, posterUrl: value.posterUrl, filmstripUrl: value.filmstripUrl, truncated: value.truncated,
-      editable: value.editable, regenerable: value.regenerable, playable: value.playable, revision: value.revision });
+      editable: value.editable, regenerable: value.regenerable, refreshable: value.refreshable, playable: value.playable, revision: value.revision });
   }
   return result;
 }
@@ -106,10 +108,34 @@ function response(value, mode) {
     return ['copied', 'incorrect-password', 'cancelled', 'failed', 'invalid', 'busy', 'unavailable'].includes(value.status)
       ? { status: value.status } : unavailable();
   }
+  if (mode === 'checkSource') {
+    if (Array.isArray(value)) { return unavailable(); }
+    const status = Object.getOwnPropertyDescriptor(value, 'status');
+    if (!status || !Object.hasOwn(status, 'value') || !status.enumerable) { return unavailable(); }
+    if (['cancelled', 'conflict', 'invalid', 'limit', 'wrong-folder', 'source-unavailable', 'busy', 'unavailable'].includes(status.value)) {
+      return { status: status.value };
+    }
+    if (status.value !== 'checked') { return unavailable(); }
+    const counts = {};
+    for (const key of ['total', 'sameSize', 'differentSize', 'missing', 'unverified', 'ignored']) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable
+        || !Number.isSafeInteger(descriptor.value) || descriptor.value < 0 || descriptor.value > 10_000) { return unavailable(); }
+      counts[key] = descriptor.value;
+    }
+    return counts.sameSize + counts.differentSize + counts.missing + counts.unverified + counts.ignored === counts.total
+      ? { status: 'checked', ...counts } : unavailable();
+  }
   if (mode === 'addSource') {
     const status = value.status;
     return !Array.isArray(value) && ['added', 'cancelled', 'conflict', 'invalid', 'duplicate', 'limit', 'source-unavailable', 'busy', 'unavailable'].includes(status)
       ? { status } : unavailable();
+  }
+  if (mode === 'resetPlaybackHistory') {
+    if (Array.isArray(value)) { return unavailable(); }
+    if (['unchanged', 'cancelled', 'busy', 'invalid', 'unavailable'].includes(value.status)) { return { status: value.status }; }
+    return value.status === 'reset' && Number.isSafeInteger(value.count) && value.count >= 1 && value.count <= 100_000
+      ? { status: 'reset', count: value.count } : unavailable();
   }
   if (mode === 'importVideo' || mode === 'scanSource' || mode === 'importProgress') {
     if (Array.isArray(value)) { return unavailable(); }
@@ -150,12 +176,19 @@ function response(value, mode) {
   if (mode === 'protection' || mode === 'setProtection') {
     const status = mode === 'protection' ? 'ready' : 'saved';
     return value.status === status && autoLockMinutes(value.autoLockMinutes)
-      ? { status, autoLockMinutes: value.autoLockMinutes } : unavailable();
+      && (value.recordPlaybackHistory === undefined || typeof value.recordPlaybackHistory === 'boolean')
+      ? { status, autoLockMinutes: value.autoLockMinutes, recordPlaybackHistory: value.recordPlaybackHistory === true } : unavailable();
   }
-  if (mode === 'regenerate') {
-    if (['cancelled', 'conflict', 'source-unavailable', 'wrong-folder'].includes(value.status)) { return { status: value.status }; }
-    const generated = value.status === 'generated' ? item(value.item, true) : undefined;
-    return generated ? { status: 'generated', item: generated } : unavailable();
+  if (mode === 'ackOriginalPlayback') {
+    return ['recorded', 'disabled', 'ignored', 'conflict', 'invalid'].includes(value.status)
+      ? { status: value.status } : unavailable();
+  }
+  if (mode === 'regenerate' || mode === 'refreshVideo') {
+    if (['cancelled', 'conflict', 'source-unavailable', 'wrong-folder'].includes(value.status)
+      || (mode === 'refreshVideo' && value.status === 'invalid')) { return { status: value.status }; }
+    const status = mode === 'refreshVideo' ? 'refreshed' : 'generated';
+    const generated = value.status === status ? item(value.item, true) : undefined;
+    return generated ? { status, item: generated } : unavailable();
   }
   if (mode === 'save') {
     if (value.status === 'conflict' || value.status === 'invalid') { return { status: value.status }; }
@@ -244,6 +277,8 @@ contextBridge.exposeInMainWorld('privateGallery', Object.freeze({
     } catch { return unavailable(); }
     finally { importProgressPending = false; }
   },
+  checkSource: async (...args) => args.length === 1 && validId(args[0])
+    ? invoke('private-gallery-check-source', args[0], 'checkSource') : unavailable(),
   scanSource: async (...args) => args.length === 1 && validId(args[0])
     ? invoke('private-gallery-scan-source', args[0], 'scanSource') : unavailable(),
   importVideo: async (...args) => args.length === 1 && validId(args[0])
@@ -254,7 +289,7 @@ contextBridge.exposeInMainWorld('privateGallery', Object.freeze({
     try { ipcRenderer.send('private-gallery-cancel-import'); } catch { /* Ownership may already have ended. */ }
   },
   cancelSourceConnection: (...args) => {
-    if (locked || !['connectSource', 'relocateSource', 'addSource'].includes(pending) || cancellationSent || args.length !== 0) { return; }
+    if (locked || !['connectSource', 'relocateSource', 'addSource', 'checkSource'].includes(pending) || cancellationSent || args.length !== 0) { return; }
     cancellationSent = true;
     try { ipcRenderer.send('private-gallery-cancel-source-connection'); } catch { /* Ownership may already have ended. */ }
   },
@@ -264,10 +299,13 @@ contextBridge.exposeInMainWorld('privateGallery', Object.freeze({
     try {
       const value = args[0];
       if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value)
-        || Object.keys(value).join(',') !== 'autoLockMinutes' || Object.getOwnPropertySymbols(value).length) { return unavailable(); }
+        || Reflect.ownKeys(value).some(key => !['autoLockMinutes', 'recordPlaybackHistory'].includes(key))) { return unavailable(); }
       const property = Object.getOwnPropertyDescriptor(value, 'autoLockMinutes');
-      if (!property || !Object.hasOwn(property, 'value') || !autoLockMinutes(property.value)) { return unavailable(); }
-      return await invoke('private-gallery-set-protection', { autoLockMinutes: property.value }, 'setProtection');
+      const history = Object.getOwnPropertyDescriptor(value, 'recordPlaybackHistory');
+      if (!property || !property.enumerable || !Object.hasOwn(property, 'value') || !autoLockMinutes(property.value)
+        || (history && (!history.enumerable || !Object.hasOwn(history, 'value') || typeof history.value !== 'boolean'))) { return unavailable(); }
+      return await invoke('private-gallery-set-protection', { autoLockMinutes: property.value,
+        ...(history ? { recordPlaybackHistory: history.value } : {}) }, 'setProtection');
     } catch { return unavailable(); }
   },
   list: async (...args) => {
@@ -338,6 +376,10 @@ contextBridge.exposeInMainWorld('privateGallery', Object.freeze({
     originalEpoch++;
     try { ipcRenderer.send('private-gallery-stop-original'); } catch { /* The owner may already be gone. */ }
   },
+  ackOriginalPlayback: async (...args) => args.length === 1 && originalUrl(args[0])
+    ? invoke('private-gallery-ack-original-playback', args[0], 'ackOriginalPlayback') : unavailable(),
+  resetPlaybackHistory: async (...args) => args.length === 1 && ['lastPlayed', 'timesPlayed'].includes(args[0])
+    ? invoke('private-gallery-reset-playback-history', args[0], 'resetPlaybackHistory') : unavailable(),
   regenerate: async (...args) => {
     try {
       const value = args[0];
@@ -348,8 +390,21 @@ contextBridge.exposeInMainWorld('privateGallery', Object.freeze({
       return await invoke('private-gallery-regenerate', { id: value.id, revision: value.revision }, 'regenerate');
     } catch { return unavailable(); }
   },
+  refreshVideo: async (...args) => {
+    try {
+      const value = args[0];
+      if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value)) { return unavailable(); }
+      const keys = Reflect.ownKeys(value);
+      if (keys.length !== 2 || !keys.includes('id') || !keys.includes('revision')) { return unavailable(); }
+      const id = Object.getOwnPropertyDescriptor(value, 'id');
+      const revision = Object.getOwnPropertyDescriptor(value, 'revision');
+      if (!id?.enumerable || !revision?.enumerable || !Object.hasOwn(id, 'value') || !Object.hasOwn(revision, 'value')
+        || !validId(id.value) || !validId(revision.value)) { return unavailable(); }
+      return await invoke('private-gallery-refresh-video', { id: id.value, revision: revision.value }, 'refreshVideo');
+    } catch { return unavailable(); }
+  },
   cancelRegeneration: (...args) => {
-    if (locked || pending !== 'regenerate' || cancellationSent || args.length !== 0) { return; }
+    if (locked || !['regenerate', 'refreshVideo'].includes(pending) || cancellationSent || args.length !== 0) { return; }
     cancellationSent = true;
     try { ipcRenderer.send('private-gallery-cancel-regeneration'); } catch { /* Ownership may already have ended. */ }
   },

@@ -33,6 +33,7 @@ class ElementStub {
   onerror: (() => void) | null = null;
   onloadeddata: (() => void) | null = null;
   onended: (() => void) | null = null;
+  onplaying: ((event: { isTrusted: boolean }) => void) | null = null;
   loop = false;
   starts: string[] = [];
   pauses = 0;
@@ -108,7 +109,7 @@ function detail(entry = item(), overrides: Record<string, unknown> = {}): any {
   return { status: 'ready', item: { ...entry, notes: 'Private notes',
     posterUrl: 'theatrum://app/media/clips/0.jpg', clipUrl: 'theatrum://app/media/clips/0.mp4',
     filmstripUrl: 'theatrum://app/media/filmstrips/0.jpg',
-    editable: true, regenerable: true, playable: true, revision: 'a'.repeat(32), ...overrides } };
+    editable: true, regenerable: true, refreshable: true, playable: true, revision: 'a'.repeat(32), ...overrides } };
 }
 
 function sourceFolder(index = 1, overrides: Record<string, unknown> = {}): any {
@@ -121,10 +122,16 @@ function harness(options: {
   list?: (request: PrivateGalleryQuery) => Promise<any>;
   detail?: (id: string) => Promise<any>;
   save?: (request: PrivateGalleryEdit) => Promise<any>;
+  refreshVideo?: (request: { id: string; revision: string }) => Promise<any>;
+  refreshAvailable?: boolean;
   regenerate?: (request: { id: string; revision: string }) => Promise<any>;
   cancelRegeneration?: () => void;
   playOriginal?: (request: { id: string; revision: string }) => Promise<any>;
   stopOriginal?: () => void;
+  ackOriginalPlayback?: (url: string) => Promise<any>;
+  historyAvailable?: boolean;
+  resetPlaybackHistory?: (metric: string) => Promise<any>;
+  historyResetAvailable?: boolean;
   exitFullscreen?: () => Promise<void>;
   originalAvailable?: boolean;
   sources?: () => Promise<any>;
@@ -134,6 +141,8 @@ function harness(options: {
   disconnectSource?: (id: string) => Promise<any>;
   relocateSource?: (id: string) => Promise<any>;
   relocationAvailable?: boolean;
+  checkSource?: (id: string) => Promise<any>;
+  checkAvailable?: boolean;
   scanSource?: (id: string) => Promise<any>;
   scanAvailable?: boolean;
   importVideo?: (id: string) => Promise<any>;
@@ -143,7 +152,7 @@ function harness(options: {
   cancelSourceConnection?: () => void;
   sourcesAvailable?: boolean;
   protection?: () => Promise<any>;
-  setProtection?: (request: { autoLockMinutes: number }) => Promise<any>;
+  setProtection?: (request: { autoLockMinutes: number; recordPlaybackHistory: boolean }) => Promise<any>;
   touchIdStatus?: () => Promise<any>;
   enableTouchId?: (request: { password: string }) => Promise<any>;
   disableTouchId?: () => Promise<any>;
@@ -184,8 +193,9 @@ function harness(options: {
   const requests: PrivateGalleryQuery[] = [];
   const selections: string[] = [];
   const saves: PrivateGalleryEdit[] = [];
+  const refreshes: { id: string; revision: string }[] = [];
   const generations: { id: string; revision: string }[] = [];
-  const protectionSaves: { autoLockMinutes: number }[] = [];
+  const protectionSaves: { autoLockMinutes: number; recordPlaybackHistory: boolean }[] = [];
   const passwordChanges: { currentPassword: string; newPassword: string }[] = [];
   const unprotectedCopies: { password: string; acknowledge: true }[] = [];
   const touchIdEnrollments: { password: string }[] = [];
@@ -201,11 +211,14 @@ function harness(options: {
   const sourceDisconnections: string[] = [];
   const sourceRelocations: string[] = [];
   const videoImports: string[] = [];
+  const sourceChecks: string[] = [];
   const sourceScans: string[] = [];
   let importCancellations = 0;
   let importProgressReads = 0;
   let cancellations = 0;
   let originalStops = 0;
+  const playbackAcknowledgements: string[] = [];
+  const playbackResets: string[] = [];
   const originalPlays: { id: string; revision: string }[] = [];
   let lockCalls = 0;
   const observers: Observer[] = [];
@@ -233,6 +246,10 @@ function harness(options: {
           notes: request.notes, tags: request.tags, revision: 'b'.repeat(32),
           ...(Object.hasOwn(request, 'rating') ? { rating: request.rating, favourite: request.rating === 5 } : {}) } };
     },
+    refreshVideo: options.refreshAvailable === false ? undefined : async (request: { id: string; revision: string }) => {
+      refreshes.push({ ...request });
+      return options.refreshVideo ? options.refreshVideo(request) : { status: 'refreshed', item: detail().item };
+    },
     regenerate: async (request: { id: string; revision: string }) => {
       generations.push({ ...request });
       return options.regenerate ? options.regenerate(request) : { status: 'generated', item: detail().item };
@@ -241,6 +258,14 @@ function harness(options: {
     playOriginal: options.originalAvailable === false ? undefined : async (request: { id: string; revision: string }) => {
       originalPlays.push({ ...request });
       return options.playOriginal ? options.playOriginal(request) : { status: 'ready', url: 'theatrum://app/original/' + 'b'.repeat(64) };
+    },
+    ackOriginalPlayback: options.historyAvailable === false ? undefined : async (url: string) => {
+      playbackAcknowledgements.push(url);
+      return options.ackOriginalPlayback ? options.ackOriginalPlayback(url) : { status: 'disabled' };
+    },
+    resetPlaybackHistory: options.historyResetAvailable === false ? undefined : async (metric: string) => {
+      playbackResets.push(metric);
+      return options.resetPlaybackHistory ? options.resetPlaybackHistory(metric) : { status: 'reset', count: 1 };
     },
     stopOriginal: options.originalAvailable === false ? undefined : () => { originalStops++; options.stopOriginal?.(); },
     sources: options.sourcesAvailable === false ? undefined : async () => {
@@ -268,6 +293,9 @@ function harness(options: {
       sourceConnected = false;
       return { status: 'relocated' };
     },
+    checkSource: options.checkAvailable === false ? undefined : async (id: string) => {
+      sourceChecks.push(id); return options.checkSource ? options.checkSource(id) : sourceCheckResult();
+    },
     scanSource: options.scanAvailable === false ? undefined : async (id: string) => {
       sourceScans.push(id); return options.scanSource ? options.scanSource(id) : { status: 'nothing-new' };
     },
@@ -282,11 +310,11 @@ function harness(options: {
     cancelSourceConnection: options.sourcesAvailable === false ? undefined : () => { sourceCancellations++; options.cancelSourceConnection?.(); },
     protection: async () => {
       protectionReads++;
-      return options.protection ? options.protection() : { status: 'ready', autoLockMinutes: 5 };
+      return options.protection ? options.protection() : { status: 'ready', autoLockMinutes: 5, recordPlaybackHistory: false };
     },
-    setProtection: async (request: { autoLockMinutes: number }) => {
+    setProtection: async (request: { autoLockMinutes: number; recordPlaybackHistory: boolean }) => {
       protectionSaves.push({ ...request });
-      return options.setProtection ? options.setProtection(request) : { status: 'saved', autoLockMinutes: request.autoLockMinutes };
+      return options.setProtection ? options.setProtection(request) : { status: 'saved', autoLockMinutes: request.autoLockMinutes, recordPlaybackHistory: request.recordPlaybackHistory };
     },
     lock: () => { lockCalls++; options.lock?.(); },
   };
@@ -321,10 +349,10 @@ function harness(options: {
   }, { filename: path.join(galleryRoot, 'gallery.js') });
   const byId = (id: string) => elements.get(id)!;
   return {
-    byId, created, document, window, requests, selections, saves, generations, observers, protectionSaves, passwordChanges, unprotectedCopies,
+    byId, created, document, window, requests, selections, saves, generations, refreshes, observers, protectionSaves, passwordChanges, unprotectedCopies,
     touchIdEnrollments, get touchIdDisables() { return touchIdDisables; }, get touchIdReads() { return touchIdReads; },
     get protectionReads() { return protectionReads; },
-    sourceConnections, sourceDisconnections, sourceRelocations, videoImports, sourceScans,
+    sourceConnections, sourceDisconnections, sourceRelocations, videoImports, sourceChecks, sourceScans,
     get importCancellations() { return importCancellations; },
     get importProgressReads() { return importProgressReads; },
     get sourceReads() { return sourceReads; },
@@ -332,7 +360,7 @@ function harness(options: {
     get sourceCancellations() { return sourceCancellations; },
     get copyCancellations() { return copyCancellations; },
     get cancellations() { return cancellations; },
-    originalPlays, get originalStops() { return originalStops; },
+    originalPlays, playbackAcknowledgements, playbackResets, get originalStops() { return originalStops; },
     get cards() { return byId('gallery-grid').children; },
     get images() { return created.filter(element => element.tagName === 'img'); },
     get activeImages() { return created.filter(element => element.tagName === 'img' && element.onload); },
@@ -1424,10 +1452,10 @@ test('every allowed protection duration, including Off, saves only on an explici
     assert.equal(h.protectionSaves.length, 0);
     assert.equal(h.byId('save-protection').disabled, false);
     h.byId('save-protection').fire('click'); await settle();
-    assert.deepEqual(h.protectionSaves, [{ autoLockMinutes: minutes }]);
+    assert.deepEqual(h.protectionSaves, [{ autoLockMinutes: minutes, recordPlaybackHistory: false }]);
     assert.equal(h.byId('auto-lock-minutes').value, String(minutes));
     assert.equal(h.byId('save-protection').disabled, true);
-    assert.equal(h.byId('protection-status').textContent, 'Protection setting saved.');
+    assert.equal(h.byId('protection-status').textContent, 'Protection settings saved.');
   }
 });
 
@@ -1459,7 +1487,7 @@ test('failed protection saves retain the selection and reject mismatched native 
     { status: 'saved', autoLockMinutes: '15' }, new Error('/private/protection')]) {
     let retry = false;
     const h = harness({ setProtection: async request => {
-      if (retry) { return { status: 'saved', autoLockMinutes: request.autoLockMinutes }; }
+      if (retry) { return { status: 'saved', autoLockMinutes: request.autoLockMinutes, recordPlaybackHistory: request.recordPlaybackHistory }; }
       if (response instanceof Error) { throw response; }
       return response;
     } });
@@ -1863,7 +1891,7 @@ test('unsaved auto-lock choices must be saved or restored before changing the pa
   assert.equal(h.byId('change-password-submit').disabled, true);
   h.byId('change-password-form').fire('submit');
   assert.equal(h.passwordChanges.length, 0);
-  assert.match(h.byId('password-status').textContent, /Save your auto-lock setting/);
+  assert.match(h.byId('password-status').textContent, /Save your protection settings/);
   h.byId('save-protection').fire('click'); await settle();
   assert.equal(h.byId('change-password-submit').disabled, false);
   fillPasswords(h); h.byId('change-password-form').fire('submit'); await settle();
@@ -3616,14 +3644,14 @@ test('busy retries and manual retries retain the selected collection, sort and d
   h.byId('retry-gallery').fire('click'); await settle(); assert.deepEqual(h.requests.at(-1), request);
 });
 
-test('empty collections describe favourites and saved playback history without promising playback tracking', async () => {
+test('empty collections describe favourites and saved playback history with a direction to enable encrypted playback tracking', async () => {
   const h = harness({ list: async () => ready([]) }); await settle();
   selectCollection(h, 'favourites'); await settle();
   assert.equal(h.byId('empty-title').textContent, 'No favourites yet');
   assert.match(h.byId('empty-message').textContent, /marked as favourites.*All videos/);
   selectCollection(h, 'recent'); await settle();
   assert.equal(h.byId('empty-title').textContent, 'No recently played videos');
-  assert.match(h.byId('empty-message').textContent, /saved catalogue history.*Playback in this test build does not update it/);
+  assert.match(h.byId('empty-message').textContent, /saved catalogue history.*Turn on Record playback history in Protection/);
   h.byId('gallery-search').value = 'None'; h.byId('gallery-search').fire('input'); await h.runTimer();
   assert.equal(h.byId('empty-title').textContent, 'No matching videos');
   assert.match(h.byId('empty-message').textContent, /another collection/);
@@ -3662,7 +3690,7 @@ test('unsaved notes, tags, composition and protection settings disable browse an
     h.byId('gallery-sort-direction').disabled = false; h.byId('gallery-sort-direction').fire('click');
     assert.equal(h.byId('gallery-sort-direction').getAttribute('data-direction'), 'asc'); assert.equal(h.requests.length, 1);
     assert.equal(h.byId('details-notes').value, notes); assert.equal(h.byId('tag-draft').value, tag);
-    if (draft === 'protection') assert.match(h.byId('protection-status').textContent, /Save your auto-lock setting/);
+    if (draft === 'protection') assert.match(h.byId('protection-status').textContent, /Save your protection settings/);
   }
 });
 
@@ -3974,4 +4002,863 @@ test('scan rejection and cancellation exceptions stay generic and leave Lock ava
   assert.doesNotMatch(h.byId('source-folders-status').textContent, /PRIVATE-SCAN/);
   assert.equal(h.byId('lock-hub').disabled, false); h.byId('lock-hub').fire('click');
   pending.resolve(batchResult()); await settle(); assert.equal(h.timers, 0);
+});
+
+test('playback history protection stays unknown until read and saves explicit On and Off choices', async () => {
+  const pending = deferred();
+  const h = harness({ protection: async () => pending.promise }); await settle();
+  h.byId('protection-button').fire('click');
+  const choice = h.byId('record-playback-history');
+  assert.equal(choice.value, ''); assert.equal(choice.disabled, true);
+  pending.resolve({ status: 'ready', autoLockMinutes: 5, recordPlaybackHistory: false }); await settle();
+  assert.equal(choice.value, 'off'); assert.equal(choice.disabled, false);
+  choice.value = 'on'; choice.fire('change');
+  assert.equal(h.protectionSaves.length, 0);
+  h.byId('save-protection').fire('click'); await settle();
+  assert.deepEqual(h.protectionSaves, [{ autoLockMinutes: 5, recordPlaybackHistory: true }]);
+  assert.equal(h.byId('save-protection').disabled, true);
+  choice.value = 'off'; choice.fire('change'); h.byId('save-protection').fire('click'); await settle();
+  assert.deepEqual(h.protectionSaves.at(-1), { autoLockMinutes: 5, recordPlaybackHistory: false });
+  assert.match(html, /Turning this off keeps existing history/);
+  assert.match(html, /Previews do not count/);
+});
+
+test('saving auto-lock retains the enabled history setting', async () => {
+  const h = harness({ protection: async () => ({ status: 'ready', autoLockMinutes: 5, recordPlaybackHistory: true }) });
+  await settle(); h.byId('protection-button').fire('click'); await settle();
+  assert.equal(h.byId('record-playback-history').value, 'on');
+  h.byId('auto-lock-minutes').value = '15'; h.byId('auto-lock-minutes').fire('change');
+  h.byId('save-protection').fire('click'); await settle();
+  assert.deepEqual(h.protectionSaves, [{ autoLockMinutes: 15, recordPlaybackHistory: true }]);
+});
+
+test('malformed history protection reads and save confirmations never guess or erase the choice', async () => {
+  for (const value of [null, 'true', 1, {}, []]) {
+    const h = harness({ protection: async () => ({ status: 'ready', autoLockMinutes: 5, recordPlaybackHistory: value }) });
+    await settle(); h.byId('protection-button').fire('click'); await settle();
+    assert.equal(h.byId('record-playback-history').value, '');
+    assert.equal(h.byId('record-playback-history').disabled, true);
+    assert.equal(h.byId('save-protection').disabled, true);
+  }
+  for (const value of [undefined, false, 'true']) {
+    const h = harness({ setProtection: async () => ({ status: 'saved', autoLockMinutes: 5, recordPlaybackHistory: value }) });
+    await settle(); h.byId('protection-button').fire('click'); await settle();
+    h.byId('record-playback-history').value = 'on'; h.byId('record-playback-history').fire('change');
+    h.byId('save-protection').fire('click'); await settle();
+    assert.equal(h.byId('record-playback-history').value, 'on');
+    assert.equal(h.byId('save-protection').disabled, false);
+    assert.match(h.byId('protection-status').textContent, /could not be saved/);
+  }
+});
+
+test('unsaved history choice guards browsing and credential actions like auto-lock', async () => {
+  const h = harness({ touchIdStatus: async () => ({ outcome: 'available', state: 'disabled' }) });
+  await selectFirst(h); h.byId('protection-button').fire('click'); await settle();
+  h.byId('record-playback-history').value = 'on'; h.byId('record-playback-history').fire('change');
+  for (const id of ['gallery-collection', 'gallery-sort', 'gallery-sort-direction', 'details-rating-input']) {
+    assert.equal(h.byId(id).disabled, true, id);
+  }
+  h.byId('change-password-toggle').fire('click');
+  assert.match(h.byId('password-status').textContent, /protection settings/);
+  h.byId('unprotected-copy-toggle').fire('click');
+  assert.match(h.byId('unprotected-copy-status').textContent, /protection settings/);
+  h.byId('touch-id-toggle').fire('click');
+  assert.equal(h.byId('touch-id-form').hidden, true);
+  assert.equal(h.touchIdEnrollments.length, 0);
+  h.byId('record-playback-history').value = 'off'; h.byId('record-playback-history').fire('change');
+  assert.equal(h.byId('gallery-sort').disabled, false);
+});
+
+test('invalid history choices cannot dispatch protection saves', async () => {
+  const h = harness(); await settle(); h.byId('protection-button').fire('click'); await settle();
+  for (const value of ['', 'true', 'false', '0', 'ON', 'constructor']) {
+    h.byId('record-playback-history').value = value; h.byId('record-playback-history').fire('change');
+    assert.equal(h.byId('save-protection').disabled, true);
+    h.byId('save-protection').fire('click');
+  }
+  assert.equal(h.protectionSaves.length, 0);
+});
+
+test('only the first trusted original playing event acknowledges history, including pause, seek and loops', async () => {
+  const h = harness(); await selectFirst(h);
+  h.byId('play-original').fire('click'); await settle();
+  const video = h.byId('preview-video');
+  assert.equal(h.playbackAcknowledgements.length, 0, 'Resolving play() is not a history event');
+  video.onloadeddata!(); assert.equal(h.playbackAcknowledgements.length, 0);
+  video.onplaying!({ isTrusted: false }); assert.equal(h.playbackAcknowledgements.length, 0);
+  video.onplaying!({ isTrusted: true }); await settle();
+  assert.deepEqual(h.playbackAcknowledgements, ['theatrum://app/original/' + 'b'.repeat(64)]);
+  video.pause(); await video.play(); video.onplaying!({ isTrusted: true });
+  video.fire('seeking'); video.fire('seeked'); video.onplaying!({ isTrusted: true });
+  video.loop = true; video.onended!(); video.onplaying!({ isTrusted: true }); await settle();
+  assert.equal(h.playbackAcknowledgements.length, 1);
+  assert.equal(h.originalStops, 0);
+  assert.equal(h.requests.length, 1);
+});
+
+test('previews, failed originals and absent history bridge do not acknowledge playback', async () => {
+  const preview = harness(); await selectFirst(preview);
+  preview.byId('play-preview').fire('click'); await settle();
+  assert.equal(preview.byId('preview-video').onplaying, null);
+  assert.equal(preview.playbackAcknowledgements.length, 0);
+  for (const promiseRejects of [false, true]) {
+    const h = harness(); await selectFirst(h); const video = h.byId('preview-video');
+    if (promiseRejects) video.playResult = Promise.reject(new Error('PRIVATE'));
+    h.byId('play-original').fire('click'); await settle();
+    if (!promiseRejects) video.onerror!();
+    assert.equal(h.playbackAcknowledgements.length, 0);
+    assert.equal(video.onplaying, null);
+  }
+  const absent = harness({ historyAvailable: false }); await selectFirst(absent);
+  absent.byId('play-original').fire('click'); await settle(); absent.byId('preview-video').onplaying!({ isTrusted: true });
+  assert.equal(absent.playbackAcknowledgements.length, 0);
+  assert.equal(absent.byId('preview-video').hidden, false);
+});
+
+test('old playing callbacks cannot acknowledge a retired or replaced original', async () => {
+  const h = harness(); await selectFirst(h);
+  h.byId('play-original').fire('click'); await settle();
+  const video = h.byId('preview-video'); const old = video.onplaying!;
+  h.byId('stop-video').fire('click'); assert.equal(video.onplaying, null);
+  old({ isTrusted: true }); assert.equal(h.playbackAcknowledgements.length, 0);
+  h.byId('play-original').fire('click'); await settle();
+  old({ isTrusted: true }); assert.equal(h.playbackAcknowledgements.length, 0);
+  video.onplaying!({ isTrusted: true }); await settle(); assert.equal(h.playbackAcknowledgements.length, 1);
+});
+
+test('history acknowledgement preserves every draft and excludes competing operations while Stop remains available', async () => {
+  const pending = deferred();
+  const h = harness({ ackOriginalPlayback: async () => pending.promise }); await selectFirst(h);
+  draftNotes(h, 'Unsaved note'); draftTag(h, 'Pending tag'); chooseRating(h, '5');
+  h.byId('play-original').fire('click'); await settle();
+  h.byId('preview-video').onplaying!({ isTrusted: true });
+  for (const id of ['save-details', 'discard-details', 'protection-button', 'source-folders-toggle', 'gallery-sort', 'gallery-search']) {
+    assert.equal(h.byId(id).disabled, true, id);
+  }
+  assert.equal(h.byId('details-notes').readOnly, true);
+  assert.equal(h.byId('stop-video').disabled, false); assert.equal(h.byId('lock-hub').disabled, false);
+  pending.resolve({ status: 'recorded' }); await settle();
+  assert.equal(h.byId('details-notes').value, 'Unsaved note');
+  assert.equal(h.byId('tag-draft').value, 'Pending tag');
+  assert.equal(h.byId('details-rating-input').value, '5');
+  assert.equal(h.byId('details-notes').readOnly, false);
+  assert.equal(h.saves.length, 0); assert.equal(h.requests.length, 1);
+  assert.equal(h.originalStops, 0);
+});
+
+for (const ending of ['stop', 'end']) {
+  for (const settleBeforeStop of [false, true]) {
+    test(`recorded history refreshes after ${ending}, preserving selection and drafts with ${settleBeforeStop ? 'early' : 'late'} completion`, async () => {
+      const pending = deferred();
+      const h = harness({ ackOriginalPlayback: async () => pending.promise,
+        list: async () => ready([item(1), item(0)]) });
+      await selectFirst(h);
+      const selected = h.selections[0];
+      draftNotes(h, 'Still editing'); draftTag(h, 'Pending'); chooseRating(h, '3');
+      h.byId('play-original').fire('click'); await settle();
+      const video = h.byId('preview-video'); video.onplaying!({ isTrusted: true });
+      if (settleBeforeStop) { pending.resolve({ status: 'recorded' }); await settle(); }
+      assert.equal(h.requests.length, 1);
+      if (ending === 'stop') h.byId('stop-video').fire('click'); else video.onended!();
+      assert.equal(h.originalStops, 1); assert.equal(video.src, '');
+      if (!settleBeforeStop) {
+        assert.equal(h.byId('save-details').disabled, true);
+        h.byId('play-original').fire('click'); assert.equal(h.originalPlays.length, 1);
+        pending.resolve({ status: 'recorded' }); await settle();
+      }
+      await settle(); assert.equal(h.requests.length, 2);
+      assert.equal(h.byId('details-panel').hidden, false);
+      assert.equal(h.byId('details-notes').value, 'Still editing');
+      assert.equal(h.byId('tag-draft').value, 'Pending');
+      assert.equal(h.byId('details-rating-input').value, '3');
+      assert.equal(h.cards.filter(card => card.getAttribute('aria-pressed') === 'true').length, 1);
+      h.byId('save-details').fire('click'); await settle();
+      assert.equal(h.saves[0].id, selected); assert.equal(h.saves[0].revision, 'a'.repeat(32));
+      assert.equal(h.saves[0].notes, 'Still editing'); assert.equal(h.saves[0].rating, 3);
+      assert.deepEqual(h.saves[0].tags, ['Nature', 'Pending']);
+    });
+  }
+}
+
+for (const status of ['disabled', 'ignored', 'conflict', 'invalid', 'busy', 'unavailable', '__proto__']) {
+  test(`history ${status} response uses fixed text and never replaces drafts or stops playback`, async () => {
+    const h = harness({ ackOriginalPlayback: async () => ({ status, message: 'PRIVATE-PATH' }) });
+    await selectFirst(h); draftNotes(h, 'Keep this note');
+    h.byId('play-original').fire('click'); await settle(); h.byId('preview-video').onplaying!({ isTrusted: true }); await settle();
+    assert.equal(h.byId('details-notes').value, 'Keep this note'); assert.equal(h.originalStops, 0);
+    assert.doesNotMatch(h.byId('playback-status').textContent, /PRIVATE-PATH/);
+    if (!['disabled', 'ignored'].includes(status)) assert.match(h.byId('playback-status').textContent, /history could not be saved/);
+    h.byId('stop-video').fire('click'); await settle(); assert.equal(h.requests.length, 1);
+  });
+}
+
+for (const ending of ['lock', 'pagehide']) {
+  test(`${ending} clears history setting, pending acknowledgement and rejects late successful refresh`, async () => {
+    const pending = deferred();
+    const h = harness({ ackOriginalPlayback: async () => pending.promise }); await selectFirst(h);
+    h.byId('protection-button').fire('click'); await settle(); h.byId('close-protection').fire('click');
+    draftNotes(h, 'Private draft'); h.byId('play-original').fire('click'); await settle();
+    const video = h.byId('preview-video'); const playing = video.onplaying!; playing({ isTrusted: true });
+    if (ending === 'lock') h.byId('lock-hub').fire('click'); else h.window.fire('pagehide');
+    pending.resolve({ status: 'recorded' }); await settle(); playing({ isTrusted: true });
+    assert.equal(h.playbackAcknowledgements.length, 1);
+    assert.equal(h.byId('record-playback-history').value, '');
+    assert.equal(h.byId('details-notes').value, ''); assert.equal(h.cards.length, 0);
+    assert.equal(h.requests.length, 1); assert.equal(video.onplaying, null);
+  });
+}
+
+test('a history failure remains visible when the original play promise resolves afterward', async () => {
+  const playResult = deferred<void>();
+  const h = harness({ ackOriginalPlayback: async () => ({ status: 'unavailable' }) }); await selectFirst(h);
+  const video = h.byId('preview-video'); video.playResult = playResult.promise;
+  h.byId('play-original').fire('click'); await settle();
+  video.onplaying!({ isTrusted: true }); await settle();
+  assert.match(h.byId('playback-status').textContent, /history could not be saved/);
+  playResult.resolve(); await settle(); video.onloadeddata!();
+  assert.match(h.byId('playback-status').textContent, /history could not be saved/);
+  assert.equal(h.originalStops, 0);
+});
+
+test('history maintenance controls await loaded protection, explain scope and keep recording unchanged', async () => {
+  const loading = deferred();
+  const h = harness({ protection: async () => loading.promise }); await settle();
+  for (const id of ['reset-last-played', 'reset-times-played']) { assert.equal(h.byId(id).disabled, true); }
+  h.byId('protection-button').fire('click');
+  for (const id of ['reset-last-played', 'reset-times-played']) { assert.equal(h.byId(id).disabled, true); }
+  loading.resolve({ status: 'ready', autoLockMinutes: 5, recordPlaybackHistory: false }); await settle();
+  for (const id of ['reset-last-played', 'reset-times-played']) { assert.equal(h.byId(id).disabled, false); }
+  assert.match(html, /Reset one metric across this hub’s current catalogue/);
+  assert.match(html, /Encrypted recovery backups and separate copies may retain earlier playback history/);
+  assert.match(html, /id="playback-reset-status" role="status" aria-live="polite"/);
+  assert.equal(h.byId('record-playback-history').value, 'off'); assert.equal(h.protectionSaves.length, 0);
+  const unavailable = harness({ historyResetAvailable: false }); await settle();
+  unavailable.byId('protection-button').fire('click'); await settle();
+  assert.equal(unavailable.byId('reset-last-played').disabled, true);
+  assert.equal(unavailable.byId('reset-times-played').disabled, true);
+});
+
+for (const [id, metric, label] of [['reset-last-played', 'lastPlayed', 'Last played'], ['reset-times-played', 'timesPlayed', 'Times played']]) {
+  test(`${label} reset sends only its metric, clears retired selection and refreshes the existing catalogue view`, async () => {
+    let reset = false;
+    const h = harness({ protection: async () => ({ status: 'ready', autoLockMinutes: 15, recordPlaybackHistory: true }),
+      list: async request => ready([item(reset ? 1 : 0)], 1, request.offset),
+      resetPlaybackHistory: async () => { reset = true; return { status: 'reset', count: 2 }; } });
+    await selectFirst(h);
+    h.byId('gallery-sort').value = 'last-played'; h.byId('gallery-sort').fire('change'); await settle();
+    h.cards[0].fire('click'); await settle();
+    h.byId('gallery-search').value = 'Nature'; h.byId('gallery-search').fire('input');
+    h.byId('protection-button').fire('click'); await settle();
+    h.byId(id).fire('click'); await settle();
+    assert.deepEqual(h.playbackResets, [metric]);
+    assert.deepEqual(h.requests.at(-1), { query: 'Nature', offset: 0, collection: 'all', sort: 'last-played', direction: 'desc' });
+    assert.equal(h.byId('gallery-search').value, 'Nature');
+    assert.equal(h.byId('details-panel').hidden, true); assert.equal(h.byId('details-notes').value, '');
+    assert.ok(h.cards.every(card => card.getAttribute('aria-pressed') === 'false'));
+    assert.equal(h.byId('protection-panel').hidden, false);
+    assert.equal(h.byId('record-playback-history').value, 'on');
+    assert.equal(h.byId('auto-lock-minutes').value, '15'); assert.equal(h.protectionSaves.length, 0);
+    assert.equal(h.byId('playback-reset-status').textContent, `${label} reset for 2 catalogue entries. Playback recording is unchanged.`);
+    h.byId('save-details').fire('click'); assert.equal(h.saves.length, 0, 'Old issued editor IDs cannot be saved');
+    h.cards[0].fire('click'); await settle(); assert.equal(h.selections.at(-1), 'opaque-1');
+  });
+}
+
+test('Last played reset empties Recently played while keeping collection, sorting and Protection visible', async () => {
+  let reset = false;
+  const h = harness({ list: async request => ready(reset && request.collection === 'recent' ? [] : [item()],
+    reset && request.collection === 'recent' ? 0 : 1, request.offset),
+  resetPlaybackHistory: async () => { reset = true; return { status: 'reset', count: 1 }; } });
+  await settle(); h.byId('gallery-collection').value = 'recent'; h.byId('gallery-collection').fire('change'); await settle();
+  h.byId('protection-button').fire('click'); await settle(); h.byId('reset-last-played').fire('click'); await settle();
+  assert.equal(h.cards.length, 0); assert.equal(h.byId('empty-title').textContent, 'No recently played videos');
+  assert.equal(h.byId('gallery-collection').value, 'recent'); assert.equal(h.byId('gallery-sort').value, 'last-played');
+  assert.equal(h.byId('protection-panel').hidden, false);
+  assert.match(h.byId('playback-reset-status').textContent, /reset for 1 catalogue entry/);
+});
+
+for (const status of ['cancelled', 'unchanged', 'busy', 'invalid', 'unavailable', '__proto__']) {
+  test(`history reset ${status} clears retired IDs and refreshes without rendering arbitrary native fields`, async () => {
+    const h = harness({ resetPlaybackHistory: async () => ({ status, message: '/PRIVATE/reset', count: 17 }) });
+    await selectFirst(h); h.byId('protection-button').fire('click'); await settle();
+    const requests = h.requests.length;
+    h.byId('reset-times-played').fire('click'); await settle();
+    assert.equal(h.requests.length, requests + 1); assert.equal(h.byId('details-panel').hidden, true);
+    assert.equal(h.byId('protection-panel').hidden, false); assert.equal(h.protectionSaves.length, 0);
+    assert.equal(h.byId('reset-last-played').disabled, false);
+    const text = h.byId('playback-reset-status').textContent;
+    assert.doesNotMatch(text, /PRIVATE|17/);
+    if (status === 'cancelled') assert.equal(text, 'Reset cancelled. Playback history is unchanged.');
+    else if (status === 'unchanged') assert.match(text, /No Times played values needed resetting/);
+    else if (status === 'busy') assert.match(text, /hub is busy/);
+    else assert.match(text, /reset could not be confirmed/);
+  });
+}
+
+test('a rejected or malformed reset reply refreshes safely without claiming success', async () => {
+  for (const response of [new Error('/PRIVATE/reset'), { status: 'reset', count: 0 }, { status: 'reset', count: 100_001 },
+    { status: 'reset', count: '1' }, { status: 'reset', count: 0.5 }]) {
+    const h = harness({ resetPlaybackHistory: async () => { if (response instanceof Error) throw response; return response; } });
+    await selectFirst(h); h.byId('protection-button').fire('click'); await settle();
+    h.byId('reset-last-played').fire('click'); await settle();
+    assert.match(h.byId('playback-reset-status').textContent, /reset could not be confirmed/);
+    assert.doesNotMatch(h.byId('playback-reset-status').textContent, /PRIVATE/);
+    assert.equal(h.byId('details-panel').hidden, true); assert.equal(h.requests.length, 2);
+  }
+});
+
+test('reset review serializes catalogue and protection operations while Lock remains immediately available', async () => {
+  const pending = deferred();
+  const h = harness({ resetPlaybackHistory: async () => pending.promise }); await selectFirst(h);
+  h.byId('play-original').fire('click'); await settle();
+  h.byId('protection-button').fire('click'); await settle();
+  assert.equal(h.originalStops, 1); assert.equal(h.byId('preview-video').src, '');
+  h.byId('reset-last-played').fire('click');
+  assert.equal(h.byId('playback-reset-section').getAttribute('aria-busy'), 'true');
+  assert.match(h.byId('playback-reset-status').textContent, /confirmation window/);
+  for (const id of ['reset-last-played', 'reset-times-played', 'save-protection', 'close-protection', 'protection-button',
+    'source-folders-toggle', 'gallery-search', 'gallery-sort', 'change-password-toggle', 'unprotected-copy-toggle']) {
+    assert.equal(h.byId(id).disabled, true, id); h.byId(id).fire('click');
+  }
+  assert.equal(h.byId('details-notes').readOnly, true); assert.equal(h.byId('lock-hub').disabled, false);
+  assert.deepEqual(h.playbackResets, ['lastPlayed']); assert.equal(h.requests.length, 1);
+  pending.resolve({ status: 'cancelled' }); await settle();
+  assert.equal(h.byId('playback-reset-section').getAttribute('aria-busy'), 'false');
+  assert.equal(h.byId('reset-times-played').disabled, false);
+});
+
+for (const draft of ['notes', 'tags', 'rating']) {
+  test(`${draft} drafts block resets and retain the selected video and text`, async () => {
+    const h = harness(); await selectFirst(h);
+    if (draft === 'notes') draftNotes(h, 'Unsaved notes');
+    else if (draft === 'tags') draftTag(h, 'Unsaved tag');
+    else chooseRating(h, '5');
+    h.byId('protection-button').fire('click'); await settle();
+    h.byId('reset-last-played').fire('click'); await settle();
+    assert.equal(h.playbackResets.length, 0); assert.equal(h.requests.length, 1);
+    assert.equal(h.byId('details-panel').hidden, false);
+    assert.match(h.byId('playback-reset-status').textContent, /Save or discard your video notes, tags and rating/);
+    if (draft === 'notes') assert.equal(h.byId('details-notes').value, 'Unsaved notes');
+    if (draft === 'tags') assert.equal(h.byId('tag-draft').value, 'Unsaved tag');
+    if (draft === 'rating') assert.equal(h.byId('details-rating-input').value, '5');
+  });
+}
+
+test('unsaved protection choices, text composition and credential drafts block reset admission', async () => {
+  for (const control of ['auto-lock-minutes', 'record-playback-history']) {
+    const h = harness(); await selectFirst(h); h.byId('protection-button').fire('click'); await settle();
+    h.byId(control).value = control === 'auto-lock-minutes' ? '15' : 'on'; h.byId(control).fire('change');
+    h.byId('reset-times-played').fire('click');
+    assert.equal(h.playbackResets.length, 0); assert.match(h.byId('playback-reset-status').textContent, /Save your protection settings/);
+  }
+  for (const input of ['details-notes', 'tag-draft', 'gallery-search']) {
+    const h = harness(); await selectFirst(h); h.byId('protection-button').fire('click'); await settle();
+    h.byId(input).fire('compositionstart'); h.byId('reset-last-played').fire('click');
+    assert.equal(h.playbackResets.length, 0);
+  }
+  for (const form of ['password', 'copy', 'touch-id']) {
+    const h = harness({ touchIdStatus: async () => ({ outcome: 'available', state: 'disabled' }) });
+    if (form === 'password') { await openPasswordForm(h); h.byId('current-password').value = 'Secret'; h.byId('current-password').fire('input'); }
+    else if (form === 'copy') { await openCopyForm(h); h.byId('unprotected-copy-acknowledge').checked = true; h.byId('unprotected-copy-acknowledge').fire('change'); }
+    else { await openTouchId(h); h.byId('touch-id-password').value = 'Secret'; h.byId('touch-id-password').fire('input'); }
+    h.byId('reset-times-played').fire('click');
+    assert.equal(h.playbackResets.length, 0); assert.match(h.byId('playback-reset-status').textContent, /Finish or close/);
+    assert.equal(h.passwordChanges.length, 0); assert.equal(h.unprotectedCopies.length, 0); assert.equal(h.touchIdEnrollments.length, 0);
+  }
+});
+
+for (const ending of ['lock', 'pagehide']) {
+  test(`${ending} erases pending reset feedback and rejects a late result without reloading`, async () => {
+    const pending = deferred();
+    const h = harness({ resetPlaybackHistory: async () => pending.promise }); await selectFirst(h);
+    h.byId('protection-button').fire('click'); await settle(); h.byId('reset-last-played').fire('click');
+    if (ending === 'lock') h.byId('lock-hub').fire('click'); else h.window.fire('pagehide');
+    pending.resolve({ status: 'reset', count: 3 }); await settle();
+    assert.equal(h.byId('playback-reset-status').textContent, '');
+    assert.equal(h.byId('playback-reset-section').getAttribute('aria-busy'), 'false');
+    assert.equal(h.cards.length, 0); assert.equal(h.byId('details-notes').value, '');
+    assert.equal(h.byId('protection-panel').hidden, true); assert.equal(h.requests.length, 1);
+    assert.equal(h.byId('reset-last-played').disabled, true); assert.equal(h.byId('reset-times-played').disabled, true);
+  });
+}
+
+
+function sourceCheckResult(changes: Record<string, unknown> = {}): any {
+  return { status: 'checked', total: 15, sameSize: 1, differentSize: 2, missing: 3, unverified: 4, ignored: 5, ...changes };
+}
+function sourceCheckButton(h: ReturnType<typeof harness>): ElementStub {
+  return h.byId('source-folders-list').children[0].querySelector('[data-action="check-source"]')!;
+}
+
+test('saved-file check has an accessible compact action, ephemeral count report and no private paths', async () => {
+  const h = harness({ checkSource: async () => sourceCheckResult({ path: '/PRIVATE-CHECK', filenames: ['PRIVATE-CHECK.mp4'] }) });
+  await settle(); h.byId('source-folders-toggle').fire('click'); await settle();
+  assert.equal(sourceCheckButton(h).textContent, 'Check saved files…');
+  assert.equal(sourceCheckButton(h).getAttribute('aria-label'), 'Check saved files in Source folder 1');
+  assert.equal(sourceCheckButton(h).getAttribute('aria-describedby'), 'source-check-help');
+  sourceCheckButton(h).fire('click'); await settle();
+  assert.deepEqual(h.sourceChecks, [sourceFolder().id]);
+  assert.equal(h.sourceReads, 2);
+  const report = h.byId('source-folders-status').textContent;
+  assert.match(report, /15 saved file locations/);
+  for (const label of ['Same recorded size: 1', 'Different size: 2', 'Missing: 3', 'Not verified: 4', 'Ignored: 5']) {
+    assert.ok(report.includes(label), label);
+  }
+  assert.match(report, /point-in-time.*same size does not prove.*unchanged or playable.*Ignored locations were not checked/s);
+  assert.doesNotMatch(report, /PRIVATE-CHECK/);
+  assert.equal(h.focused, sourceCheckButton(h));
+  h.byId('refresh-source-folders').fire('click'); await settle();
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /Same recorded size/);
+  sourceCheckButton(h).fire('click'); await settle();
+  h.byId('close-source-folders').fire('click');
+  assert.equal(h.byId('source-folders-status').textContent, '');
+  assert.match(html, /id="source-check-help"[^>]*>Check saved files reads file metadata.*10,000 saved locations.*without opening video contents.*Results are not saved/);
+  assert.match(readFileSync(path.join(galleryRoot, 'gallery.css'), 'utf8'), /#source-folders-status[^}]*white-space:\s*pre-line/);
+  const unavailable = harness({ checkAvailable: false });
+  await settle(); unavailable.byId('source-folders-toggle').fire('click'); await settle();
+  assert.equal(sourceCheckButton(unavailable).disabled, true);
+});
+
+test('saved-file check preserves notes, tags, rating and selected revision while refreshing grant status', async () => {
+  let connected = false;
+  const h = harness({ sources: async () => ({ status: 'ready', items: [sourceFolder(1, { connected })] }),
+    checkSource: async () => { connected = true; return sourceCheckResult(); } });
+  await selectFirst(h);
+  draftNotes(h, 'Draft notes'); draftTag(h, 'Draft tag');
+  h.byId('details-rating-input').value = '2'; h.byId('details-rating-input').fire('change');
+  h.byId('source-folders-toggle').fire('click'); await settle();
+  const requests = h.requests.length;
+  sourceCheckButton(h).fire('click'); await settle();
+  assert.equal(h.byId('details-notes').value, 'Draft notes');
+  assert.equal(h.byId('tag-draft').value, 'Draft tag');
+  assert.equal(h.byId('details-rating-input').value, '2');
+  assert.equal(h.byId('save-details').disabled, false);
+  assert.equal(h.requests.length, requests, 'A metadata-only check must not reload the gallery');
+  assert.equal(h.selections.length, 1);
+  assert.equal(h.saves.length, 0);
+  assert.match(h.byId('source-folders-list').textContent, /Connected for this session/);
+  h.byId('save-details').fire('click'); await settle();
+  assert.equal(h.saves.length, 1);
+  assert.equal(h.saves[0].revision, 'a'.repeat(32));
+  assert.equal(h.saves[0].notes, 'Draft notes');
+});
+
+test('pending saved-file check blocks competing actions, preserves drafts and supports one Cancel check', async () => {
+  const pending = deferred();
+  const h = harness({ checkSource: () => pending.promise, list: async () => ready([item(), item(1)], 70) });
+  await selectFirst(h); draftNotes(h, 'Draft');
+  h.byId('source-folders-toggle').fire('click'); await settle();
+  sourceCheckButton(h).fire('click');
+  for (const id of ['source-folders-toggle', 'refresh-source-folders', 'close-source-folders', 'protection-button',
+    'save-details', 'discard-details', 'regenerate-previews', 'play-preview', 'next-page', 'gallery-search']) {
+    assert.equal(h.byId(id).disabled, true, id);
+  }
+  assert.equal(h.byId('lock-hub').disabled, false);
+  assert.equal(h.byId('details-notes').readOnly, true);
+  assert.equal(h.byId('cancel-source-connection').textContent, 'Cancel check');
+  h.cards[1].fire('click'); h.byId('close-details').fire('click'); h.document.fire('keydown', { key: 'Escape' });
+  assert.equal(h.byId('source-folders-panel').hidden, false);
+  assert.equal(h.selections.length, 1);
+  h.byId('cancel-source-connection').fire('click'); h.byId('cancel-source-connection').fire('click');
+  assert.equal(h.sourceCancellations, 1);
+  assert.equal(h.byId('cancel-source-connection').disabled, true);
+  pending.resolve(sourceCheckResult()); await settle();
+  assert.match(h.byId('source-folders-status').textContent, /Check cancelled.*No results/);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /Same recorded size/);
+  assert.equal(h.byId('details-notes').value, 'Draft');
+  assert.equal(h.byId('save-details').disabled, false);
+  assert.equal(sourceCheckButton(h).disabled, false);
+});
+
+for (const status of ['cancelled', 'conflict', 'invalid', 'limit', 'wrong-folder', 'source-unavailable', 'busy', 'unavailable']) {
+  test(`saved-file check ${status} shows no partial counts or private error details`, async () => {
+    const h = harness({ checkSource: async () => sourceCheckResult({ status, path: '/PRIVATE-CHECK', message: 'PRIVATE-CHECK' }) });
+    await settle(); h.byId('source-folders-toggle').fire('click'); await settle();
+    sourceCheckButton(h).fire('click'); await settle();
+    const report = h.byId('source-folders-status').textContent;
+    assert.notEqual(report, ''); assert.doesNotMatch(report, /PRIVATE-CHECK|Same recorded size|15 saved file/);
+    if (status === 'limit') { assert.match(report, /10,000 saved file locations.*No results/); }
+    assert.equal(h.sourceReads, 2);
+    assert.equal(sourceCheckButton(h).disabled, false);
+  });
+}
+
+test('malformed saved-file counts fail closed without displaying a misleading partial report', async () => {
+  for (const response of [null, Object.assign([], sourceCheckResult()), sourceCheckResult({ total: 16 }),
+    sourceCheckResult({ missing: -1 }), sourceCheckResult({ sameSize: '1' }), sourceCheckResult({ total: 10_001 }),
+    sourceCheckResult({ missing: 0.5 }), sourceCheckResult({ ignored: Infinity })]) {
+    const h = harness({ checkSource: async () => response });
+    await settle(); h.byId('source-folders-toggle').fire('click'); await settle();
+    sourceCheckButton(h).fire('click'); await settle();
+    assert.match(h.byId('source-folders-status').textContent, /could not be checked.*No results/);
+    assert.doesNotMatch(h.byId('source-folders-status').textContent, /Same recorded size/);
+  }
+});
+
+test('source-check results and refreshed connections cannot return after lock or pagehide', async () => {
+  for (const phase of ['check', 'refresh']) {
+    const pending = deferred(); let reads = 0;
+    const h = harness({ checkSource: phase === 'check' ? () => pending.promise : async () => sourceCheckResult(),
+      sources: () => phase === 'refresh' && ++reads > 1 ? pending.promise : Promise.resolve({ status: 'ready', items: [sourceFolder()] }) });
+    await selectFirst(h); draftNotes(h, 'Draft');
+    h.byId('source-folders-toggle').fire('click'); await settle();
+    sourceCheckButton(h).fire('click'); await settle();
+    if (phase === 'check') { h.byId('lock-hub').fire('click'); } else { h.window.fire('pagehide'); }
+    pending.resolve(phase === 'check' ? sourceCheckResult() : { status: 'ready', items: [sourceFolder(1, { connected: true })] }); await settle();
+    assert.equal(h.byId('source-folders-panel').hidden, true);
+    assert.equal(h.byId('source-folders-list').children.length, 0);
+    assert.equal(h.byId('source-folders-status').textContent, '');
+    assert.equal(h.byId('details-notes').value, '');
+  }
+});
+
+test('saved-file checking preserves its result after a connection-refresh failure and exposes no exception', async () => {
+  let reads = 0;
+  const h = harness({ sources: async () => {
+    if (++reads > 1) { throw new Error('/PRIVATE-CHECK'); }
+    return { status: 'ready', items: [sourceFolder()] };
+  } });
+  await settle(); h.byId('source-folders-toggle').fire('click'); await settle();
+  sourceCheckButton(h).fire('click'); await settle();
+  assert.match(h.byId('source-folders-status').textContent, /Check complete.*Same recorded size.*Choose Refresh/s);
+  assert.doesNotMatch(h.byId('source-folders-status').textContent, /PRIVATE-CHECK/);
+  assert.equal(h.byId('source-folders-list').children.length, 0);
+  assert.equal(h.focused, h.byId('refresh-source-folders'));
+});
+
+test('saved-file check waits for notes IME, search IME and unsaved Protection settings', async () => {
+  for (const kind of ['notes', 'search', 'protection']) {
+    const h = harness(); await selectFirst(h);
+    if (kind === 'protection') {
+      h.byId('protection-button').fire('click'); await settle();
+      h.byId('auto-lock-minutes').value = '30'; h.byId('auto-lock-minutes').fire('change');
+    }
+    h.byId('source-folders-toggle').fire('click'); await settle();
+    if (kind !== 'protection') { h.byId(kind === 'notes' ? 'details-notes' : 'gallery-search').fire('compositionstart'); }
+    sourceCheckButton(h).fire('click'); await settle();
+    assert.deepEqual(h.sourceChecks, []);
+    if (kind === 'protection') { assert.match(h.byId('source-folders-status').textContent, /Save your protection settings/); }
+  }
+});
+
+
+test('video refresh sends only selection authority and refreshes retired media without autoplay', async () => {
+  const pending = deferred();
+  const h = harness({ refreshVideo: async () => {
+    assert.equal(h.byId('detail-poster').src, '', 'The old decoded image must retire before the asynchronous operation');
+    assert.equal(h.byId('detail-poster').onload, null);
+    assert.equal(h.byId('detail-poster').hidden, true);
+    assert.equal(h.byId('detail-filmstrip').src, '', 'Video refresh retires the old filmstrip before the asynchronous operation');
+    assert.equal(h.byId('detail-filmstrip').hidden, true);
+    return pending.promise;
+  } });
+  await selectFirst(h);
+  const oldThumbnail = h.images.find(image => image.src.includes('/thumbnails/'))!;
+  oldThumbnail.onload!();
+  const poster = h.byId('detail-poster');
+  poster.onload!();
+  h.byId('toggle-filmstrip').fire('click');
+  const strip = h.byId('detail-filmstrip');
+  const staleStripLoad = strip.onload!;
+  h.byId('play-preview').fire('click'); await settle(); await settle();
+  const video = h.byId('preview-video');
+  h.byId('refresh-video').fire('click');
+  assert.deepEqual(h.refreshes, [{ id: 'opaque-0', revision: 'a'.repeat(32) }]);
+  assert.equal(video.src, '');
+  assert.equal(video.hidden, true);
+  assert.equal(poster.src, '');
+  assert.equal(poster.hidden, true);
+  assert.equal(h.byId('play-preview').disabled, true);
+  const freshStripUrl = `theatrum://app/media/filmstrips/0.jpg?v=${'b'.repeat(32)}`;
+  pending.resolve({ status: 'refreshed', item: detail(item(), { revision: 'b'.repeat(32), filmstripUrl: freshStripUrl, duration: 32, width: 640, height: 360 }).item });
+  await settle(); await settle();
+  assert.equal(oldThumbnail.src, '');
+  assert.equal(oldThumbnail.isConnected, false);
+  assert.ok(h.activeImages.some(image => image !== oldThumbnail && image.src === 'theatrum://app/media/thumbnails/0.jpg'));
+  assert.equal(poster.starts.length, 2, 'The same no-store poster URL is requested again');
+  assert.equal(video.src, '', 'A generated clip never starts until another explicit Play action');
+  assert.equal(video.plays, 1);
+  assert.equal(h.byId('generation-status').textContent, 'Video refreshed.');
+  assert.equal(h.byId('refresh-video').disabled, false);
+  assert.equal(h.byId('details-panel').hidden, false);
+  assert.equal(h.byId('details-notes').value, 'Private notes');
+  assert.equal(h.byId('details-facts').textContent, '0:32 · 640 × 360');
+  assert.equal(strip.src, '', 'Video refresh does not automatically reload a filmstrip');
+  h.byId('toggle-filmstrip').fire('click');
+  assert.equal(strip.src, freshStripUrl);
+  const freshStripLoad = strip.onload!;
+  staleStripLoad();
+  assert.equal(strip.hidden, true);
+  assert.equal(strip.onload, freshStripLoad);
+  freshStripLoad();
+  assert.equal(strip.hidden, false);
+});
+
+test('a retired poster cannot finish during video refresh and recoverable failure reloads its original route', async () => {
+  const pending = deferred();
+  const h = harness({ refreshVideo: async () => pending.promise });
+  await selectFirst(h);
+  const poster = h.byId('detail-poster');
+  const staleLoaded = poster.onload!;
+  const staleError = poster.onerror!;
+  h.byId('refresh-video').fire('click');
+  assert.equal(poster.src, '');
+  staleLoaded(); staleError();
+  assert.equal(poster.hidden, true);
+  assert.equal(poster.src, '');
+  assert.equal(h.byId('detail-placeholder').hidden, false);
+  assert.equal(h.timers, 0);
+  pending.resolve({ status: 'source-unavailable' });
+  await settle(); await settle();
+  assert.equal(poster.starts.length, 2);
+  assert.equal(poster.src, 'theatrum://app/media/clips/0.jpg');
+  assert.equal(poster.hidden, true);
+  poster.onload!();
+  assert.equal(poster.hidden, false);
+  assert.equal(h.byId('detail-placeholder').hidden, true);
+  assert.equal(h.byId('preview-video').src, '');
+});
+
+test('native-picker cancellation followed by video refresh retires the same poster before each IPC request', async () => {
+  const first = deferred();
+  const second = deferred();
+  let calls = 0;
+  const h = harness({ refreshVideo: async () => {
+    assert.equal(h.byId('detail-poster').src, '');
+    assert.equal(h.byId('detail-poster').hidden, true);
+    return ++calls === 1 ? first.promise : second.promise;
+  } });
+  await selectFirst(h);
+  const poster = h.byId('detail-poster');
+  poster.onload!();
+  h.byId('refresh-video').fire('click');
+  first.resolve({ status: 'cancelled' }); await settle(); await settle();
+  assert.equal(poster.starts.length, 2);
+  poster.onload!();
+  assert.equal(poster.hidden, false);
+  h.byId('refresh-video').fire('click');
+  assert.equal(poster.src, '');
+  second.resolve({ status: 'refreshed', item: detail(item(), { revision: 'c'.repeat(32) }).item });
+  await settle(); await settle();
+  assert.equal(poster.starts.length, 3);
+  poster.onload!();
+  assert.equal(poster.hidden, false);
+  assert.equal(h.byId('generation-status').textContent, 'Video refreshed.');
+});
+
+test('video refresh freezes notes, tags, navigation and duplicate starts while Lock and Cancel stay available', async () => {
+  const pending = deferred();
+  const h = harness({ list: async () => ready([item(0), item(1)], 50), refreshVideo: async () => pending.promise });
+  await selectFirst(h);
+  h.byId('refresh-video').fire('click');
+  h.byId('refresh-video').fire('click');
+  h.cards[1].fire('click');
+  h.byId('next-page').fire('click');
+  h.byId('gallery-search').value = 'Another search'; h.byId('gallery-search').fire('input');
+  h.byId('close-details').fire('click');
+  h.byId('save-details').fire('click');
+  h.byId('play-preview').fire('click');
+  assert.equal(h.refreshes.length, 1);
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.selections.length, 1);
+  assert.equal(h.saves.length, 0);
+  assert.equal(h.byId('gallery-search').value, '');
+  assert.equal(h.byId('details-notes').readOnly, true);
+  assert.equal(h.byId('tag-draft').disabled, true);
+  assert.equal(h.byId('details-tags').children[0].children[1].disabled, true);
+  assert.equal(h.byId('details-panel').hidden, false);
+  assert.equal(h.byId('cancel-regeneration').hidden, false);
+  assert.equal(h.byId('cancel-regeneration').disabled, false);
+  assert.equal(h.byId('lock-hub').disabled, false);
+  pending.resolve({ status: 'unavailable' }); await settle(); await settle();
+  assert.equal(h.byId('details-notes').readOnly, false);
+});
+
+test('Cancel waits for drainage, then reloads metadata and previews even if publication may have occurred', async () => {
+  const pending = deferred();
+  let latest = false;
+  const h = harness({ refreshVideo: async () => pending.promise,
+    detail: async () => detail(item(), latest ? { revision: 'c'.repeat(32), notes: 'Latest stored notes' } : {}) });
+  await selectFirst(h);
+  const oldThumbnail = h.images.find(image => image.src.includes('/thumbnails/'))!;
+  h.byId('refresh-video').fire('click');
+  h.byId('cancel-regeneration').fire('click');
+  h.byId('cancel-regeneration').fire('click');
+  h.byId('close-details').fire('click');
+  assert.equal(h.cancellations, 1);
+  assert.equal(h.byId('cancel-regeneration').disabled, true);
+  assert.equal(h.byId('details-notes').readOnly, true);
+  assert.equal(h.selections.length, 1, 'No refresh starts until the outstanding operation finishes');
+  latest = true;
+  pending.resolve({ status: 'cancelled' }); await settle(); await settle();
+  assert.equal(h.selections.length, 2);
+  assert.equal(h.byId('details-notes').value, 'Latest stored notes');
+  assert.equal(h.byId('generation-status').textContent, 'Video refresh stopped. Saved details and previews reloaded.');
+  assert.equal(h.byId('details-notes').readOnly, false);
+  assert.equal(h.byId('cancel-regeneration').hidden, true);
+  assert.equal(oldThumbnail.src, '');
+  assert.equal(h.byId('preview-video').src, '');
+});
+
+for (const ending of ['lock', 'pagehide']) {
+  test(`${ending} clears a running video refresh and ignores late success`, async () => {
+    const pending = deferred();
+    const h = harness({ refreshVideo: async () => pending.promise, lock: () => {
+      assert.equal(h.cards.length, 0);
+      assert.equal(h.byId('details-notes').value, '');
+      assert.equal(h.byId('generation-status').textContent, '');
+      assert.equal(h.byId('preview-video').src, '');
+    } });
+    await selectFirst(h);
+    h.byId('refresh-video').fire('click');
+    if (ending === 'lock') { h.byId('lock-hub').fire('click'); }
+    else { h.window.fire('pagehide'); }
+    pending.resolve({ status: 'refreshed', item: detail(item(), { notes: 'Never redraw private notes' }).item });
+    await settle(); await settle();
+    assert.equal(h.byId('details-notes').value, '');
+    assert.equal(h.byId('generation-status').textContent, '');
+    assert.equal(h.byId('details-panel').hidden, true);
+    assert.equal(h.byId('cancel-regeneration').hidden, true);
+    assert.equal(h.cards.length, 0);
+    assert.equal(h.requests.length, 1);
+    assert.equal(h.activeImages.length, 0);
+  });
+}
+
+for (const status of ['busy', 'source-unavailable', 'wrong-folder', 'unavailable']) {
+  test(`${status} video refresh reports a generic recoverable status without source diagnostics`, async () => {
+    const h = harness({ refreshVideo: async () => ({ status, sourcePath: '/secret/original.mp4', error: 'Private decoder stderr' }) });
+    await selectFirst(h);
+    h.byId('refresh-video').fire('click'); await settle(); await settle();
+    assert.equal(h.byId('refresh-video').disabled, false);
+    assert.equal(h.byId('details-notes').readOnly, false);
+    assert.equal(h.byId('details-notes').value, 'Private notes');
+    assert.equal(h.byId('cancel-regeneration').hidden, true);
+    assert.ok(h.byId('generation-status').textContent.length > 0);
+    assert.doesNotMatch(h.byId('generation-status').textContent, /secret|original\.mp4|stderr/);
+  });
+}
+
+test('a video refresh conflict exposes reload even when the video metadata is read-only', async () => {
+  let latest = false;
+  const h = harness({ refreshVideo: async () => ({ status: 'conflict' }),
+    detail: async () => detail(item(), { editable: false, revision: (latest ? 'b' : 'a').repeat(32) }) });
+  await selectFirst(h);
+  h.byId('refresh-video').fire('click'); await settle(); await settle();
+  assert.equal(h.byId('refresh-video').disabled, true);
+  assert.equal(h.byId('retry-details').hidden, false);
+  assert.equal(h.byId('retry-details').textContent, 'Reload details');
+  latest = true;
+  h.byId('retry-details').fire('click'); await settle(); await settle();
+  assert.equal(h.byId('retry-details').hidden, true);
+  assert.equal(h.byId('refresh-video').disabled, false);
+  assert.equal(h.byId('details-notes').readOnly, true);
+  h.byId('refresh-video').fire('click'); await settle(); await settle();
+  assert.equal(h.refreshes[1].revision, 'b'.repeat(32));
+});
+
+test('lock during cancellation refresh still suppresses late detail and media updates', async () => {
+  const pending = deferred();
+  let calls = 0;
+  const h = harness({ refreshVideo: async () => ({ status: 'cancelled' }),
+    detail: async () => ++calls === 1 ? detail() : pending.promise });
+  await selectFirst(h);
+  h.byId('refresh-video').fire('click'); await settle(); await settle();
+  assert.equal(h.selections.length, 2);
+  assert.equal(h.byId('details-notes').readOnly, true);
+  h.byId('lock-hub').fire('click');
+  pending.resolve(detail(item(), { notes: 'Never display stale completion' })); await settle(); await settle();
+  assert.equal(h.byId('details-notes').value, '');
+  assert.equal(h.byId('generation-status').textContent, '');
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.activeImages.length, 0);
+});
+
+
+
+test('video refresh retains notes, tags and rating drafts and respects editor and search composition', async () => {
+  for (const kind of ['notes', 'tag', 'rating', 'composition', 'search-composition']) {
+    const h = harness(); await selectFirst(h);
+    if (kind === 'notes') draftNotes(h);
+    if (kind === 'tag') draftTag(h, 'Pending tag');
+    if (kind === 'rating') { h.byId('details-rating-input').value = '5'; h.byId('details-rating-input').fire('change'); }
+    if (kind === 'composition') h.byId('details-notes').fire('compositionstart');
+    if (kind === 'search-composition') h.byId('gallery-search').fire('compositionstart');
+    assert.equal(h.byId('refresh-video').disabled, true, kind);
+    // An already-queued event is still checked by the handler itself.
+    h.byId('refresh-video').disabled = false; h.byId('refresh-video').fire('click'); await settle(); await settle();
+    assert.equal(h.refreshes.length, 0, kind); assert.equal(h.generations.length, 0, kind);
+    if (kind === 'notes') assert.equal(h.byId('details-notes').value, 'Changed private notes');
+    if (kind === 'tag') assert.equal(h.byId('tag-draft').value, 'Pending tag');
+    if (kind === 'rating') assert.equal(h.byId('details-rating-input').value, '5');
+    assert.equal(h.byId('details-panel').hidden, false);
+  }
+});
+
+test('video refresh eligibility is independent of regeneration and requires an explicit backend grant', async () => {
+  for (const { refreshable, available, regenerable } of [
+    { refreshable: false, available: true, regenerable: true },
+    { refreshable: undefined, available: true, regenerable: true },
+    { refreshable: true, available: false, regenerable: true },
+    { refreshable: true, available: true, regenerable: false },
+  ]) {
+    const h = harness({ refreshAvailable: available, detail: async () => detail(item(), { refreshable, regenerable }) });
+    await selectFirst(h);
+    assert.equal(h.byId('refresh-video').disabled, refreshable !== true || !available);
+    assert.equal(h.byId('regenerate-previews').disabled, !regenerable);
+    h.byId('refresh-video').fire('click'); await settle(); await settle();
+    assert.equal(h.refreshes.length, refreshable === true && available ? 1 : 0);
+    assert.equal(h.generations.length, 0);
+    assert.equal(h.byId('details-notes').readOnly, false);
+  }
+  assert.match(html, /Update technical details and regenerate previews from the saved source\. Notes, tags and playback history stay unchanged\./);
+});
+
+test('unsaved protection and credential forms block video refresh without clearing their contents', async () => {
+  for (const kind of ['protection', 'password', 'copy', 'touch-id']) {
+    const h = harness({ touchIdStatus: async () => ({ outcome: 'available', state: 'disabled' }) });
+    await selectFirst(h); h.byId('protection-button').fire('click'); await settle(); await settle();
+    if (kind === 'protection') { h.byId('auto-lock-minutes').value = '15'; h.byId('auto-lock-minutes').fire('change'); }
+    if (kind === 'password') { h.byId('change-password-toggle').fire('click'); h.byId('current-password').value = 'retain'; h.byId('current-password').fire('input'); }
+    if (kind === 'copy') { h.byId('unprotected-copy-toggle').fire('click'); h.byId('unprotected-copy-password').value = 'retain'; h.byId('unprotected-copy-password').fire('input'); }
+    if (kind === 'touch-id') { h.byId('touch-id-toggle').fire('click'); h.byId('touch-id-password').value = 'retain'; h.byId('touch-id-password').fire('input'); }
+    assert.equal(h.byId('refresh-video').disabled, true, kind);
+    h.byId('refresh-video').disabled = false; h.byId('refresh-video').fire('click'); await settle(); await settle();
+    assert.equal(h.refreshes.length, 0, kind);
+    if (kind === 'protection') assert.equal(h.byId('auto-lock-minutes').value, '15');
+    if (kind === 'password') assert.equal(h.byId('current-password').value, 'retain');
+    if (kind === 'copy') assert.equal(h.byId('unprotected-copy-password').value, 'retain');
+    if (kind === 'touch-id') assert.equal(h.byId('touch-id-password').value, 'retain');
+  }
+});
+
+for (const status of ['cancelled', 'conflict', 'unavailable', 'invalid']) {
+  test(`${status} video refresh clears retired row authority when saved details cannot be reloaded`, async () => {
+    let selections = 0;
+    const h = harness({ refreshVideo: async () => ({ status }),
+      detail: async () => ++selections === 1 ? detail() : { status: 'unavailable' } });
+    await selectFirst(h);
+    const poster = h.byId('detail-poster'); poster.onload!();
+    h.byId('refresh-video').fire('click'); await settle(); await settle();
+    assert.equal(h.byId('details-panel').hidden, true);
+    assert.equal(h.byId('details-notes').value, '');
+    assert.equal(h.byId('details-facts').textContent, '');
+    assert.equal(poster.src, ''); assert.equal(h.byId('detail-filmstrip').src, '');
+    assert.equal(h.requests.length, 2);
+    assert.match(h.byId('gallery-status').textContent, /Select the video again/);
+    assert.equal(h.byId('refresh-video').disabled, true);
+  });
+}
+
+test('an uncertain refresh failure reloads actual published metadata instead of restoring stale geometry', async () => {
+  let selections = 0;
+  const h = harness({ refreshVideo: async () => ({ status: 'unavailable' }),
+    detail: async () => ++selections === 1 ? detail() : detail(item(), { width: 640, height: 360, revision: 'c'.repeat(32) }) });
+  await selectFirst(h); h.byId('refresh-video').fire('click'); await settle(); await settle();
+  assert.equal(h.selections.length, 2);
+  assert.match(h.byId('details-facts').textContent, /640 × 360/);
+  assert.equal(h.byId('details-notes').value, 'Private notes');
+  assert.match(h.byId('generation-status').textContent, /could not be refreshed/);
+  h.byId('refresh-video').fire('click'); await settle(); await settle();
+  assert.equal(h.refreshes[1].revision, 'c'.repeat(32));
 });

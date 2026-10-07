@@ -58,6 +58,7 @@
   const filmstripPrevious = byId('filmstrip-previous');
   const filmstripNext = byId('filmstrip-next');
   const regenerate = byId('regenerate-previews');
+  const refreshVideo = byId('refresh-video');
   const cancelGeneration = byId('cancel-regeneration');
   const generationStatus = byId('generation-status');
   const retryDetails = byId('retry-details');
@@ -66,6 +67,11 @@
   const protectionButton = byId('protection-button');
   const protectionPanel = byId('protection-panel');
   const protectionSelect = byId('auto-lock-minutes');
+  const historySelect = byId('record-playback-history');
+  const resetLastPlayed = byId('reset-last-played');
+  const resetTimesPlayed = byId('reset-times-played');
+  const playbackResetSection = byId('playback-reset-section');
+  const playbackResetStatus = byId('playback-reset-status');
   const protectionSave = byId('save-protection');
   const protectionRetry = byId('retry-protection');
   const protectionClose = byId('close-protection');
@@ -121,8 +127,11 @@
   const api = available ? {
     list: bridge.list.bind(bridge), detail: bridge.detail.bind(bridge), lock: bridge.lock.bind(bridge),
     save: typeof bridge.save === 'function' ? bridge.save.bind(bridge) : undefined,
+    refreshVideo: typeof bridge.refreshVideo === 'function' ? bridge.refreshVideo.bind(bridge) : undefined,
     regenerate: typeof bridge.regenerate === 'function' ? bridge.regenerate.bind(bridge) : undefined,
     playOriginal: typeof bridge.playOriginal === 'function' ? bridge.playOriginal.bind(bridge) : undefined,
+    ackOriginalPlayback: typeof bridge.ackOriginalPlayback === 'function' ? bridge.ackOriginalPlayback.bind(bridge) : undefined,
+    resetPlaybackHistory: typeof bridge.resetPlaybackHistory === 'function' ? bridge.resetPlaybackHistory.bind(bridge) : undefined,
     stopOriginal: typeof bridge.stopOriginal === 'function' ? bridge.stopOriginal.bind(bridge) : undefined,
     cancelRegeneration: typeof bridge.cancelRegeneration === 'function' ? bridge.cancelRegeneration.bind(bridge) : undefined,
     protection: typeof bridge.protection === 'function' ? bridge.protection.bind(bridge) : undefined,
@@ -132,6 +141,7 @@
     connectSource: typeof bridge.connectSource === 'function' ? bridge.connectSource.bind(bridge) : undefined,
     disconnectSource: typeof bridge.disconnectSource === 'function' ? bridge.disconnectSource.bind(bridge) : undefined,
     importProgress: typeof bridge.importProgress === 'function' ? bridge.importProgress.bind(bridge) : undefined,
+    checkSource: typeof bridge.checkSource === 'function' ? bridge.checkSource.bind(bridge) : undefined,
     scanSource: typeof bridge.scanSource === 'function' ? bridge.scanSource.bind(bridge) : undefined,
     importVideo: typeof bridge.importVideo === 'function' ? bridge.importVideo.bind(bridge) : undefined,
     cancelImport: typeof bridge.cancelImport === 'function' ? bridge.cancelImport.bind(bridge) : undefined,
@@ -157,12 +167,17 @@
   let saving = false;
   let reloading = false;
   let regenerating = false;
+  let refreshingVideo = false;
   let cancelling = false;
   let listLoading = false;
   let detailLoading = false;
   let protectionPending = '';
   let protectionEpoch = 0;
   let savedProtection;
+  let savedPlaybackHistory;
+  let historyRefreshId = '';
+  let historyRefreshEpoch = 0;
+  let playbackResetEpoch = 0;
   let sourceEpoch = 0;
   let sourceItems = [];
   let sourceListReady = false;
@@ -187,6 +202,7 @@
   let originalPending = false;
   let originalActive = false;
   let originalCancelling = false;
+  let playbackHistoryNotice = '';
   let searchTimer;
   let listRetryTimer;
   let detailRetryTimer;
@@ -262,12 +278,12 @@
     lockWarning.textContent = saving ? 'Locking clears these drafts. A save already in progress may finish.'
       : 'Locking clears unsaved edits.';
     lockButton.title = dirty() ? 'Lock hub and clear unsaved edits'
-      : regenerating ? 'Lock hub and stop preview regeneration' : 'Lock hub';
+      : regenerating ? (refreshingVideo ? 'Lock hub and stop video refresh' : 'Lock hub and stop preview regeneration') : 'Lock hub';
     regenerate.disabled = locked || pending || editorComposition.size > 0 || selectedDetail?.regenerable !== true
       || conflict || !/^[a-f0-9]{32}$/.test(selectedDetail?.revision) || !api?.regenerate || !api?.cancelRegeneration;
     cancelGeneration.hidden = !regenerating;
     cancelGeneration.disabled = locked || cancelling;
-    cancelGeneration.textContent = cancelling ? 'Cancelling…' : 'Cancel';
+    cancelGeneration.textContent = cancelling ? 'Cancelling…' : refreshingVideo ? 'Cancel refresh' : 'Cancel';
     for (const chip of detailsTags.children) {
       const remove = chip.querySelector('button');
       if (remove) { remove.disabled = !enabled || pending || locked; }
@@ -285,15 +301,44 @@
     return locked || saving || reloading || regenerating || listLoading || detailLoading || editorComposition.size > 0;
   }
 
+  function refreshVideoBlockedMessage() {
+    if (locked || !api?.refreshVideo || !api?.cancelRegeneration || selectedDetail?.refreshable !== true) {
+      return 'Refresh is unavailable for this video.';
+    }
+    if (dirty() || editorComposition.size) { return 'Save or discard your edits before refreshing this video.'; }
+    if (conflict || !/^[a-f0-9]{32}$/.test(selectedDetail?.revision)) { return 'Reload the saved video details before refreshing this video.'; }
+    if (composing) { return 'Finish entering your search before refreshing this video.'; }
+    if (browseProtectionDraft()) { return 'Save your protection settings, or restore their saved values, before refreshing this video.'; }
+    if (passwordComposition.size || passwordInputs.some(input => input.value !== '') || copyComposing || copyPassword.value !== ''
+      || copyAcknowledge.checked || touchIdComposing || touchIdPassword.value !== '') {
+      return 'Finish or close the password, Touch ID or unprotected-copy form before refreshing this video.';
+    }
+    if (protectionBlocked() || protectionPending) { return 'Wait for the current operation to finish, or lock the hub.'; }
+    return '';
+  }
+
+  function updateRefreshVideo() {
+    const reason = refreshVideoBlockedMessage();
+    refreshVideo.disabled = !!reason;
+    refreshVideo.title = reason || 'Update technical details and encrypted previews from the saved source.';
+  }
+
   function updateProtection() {
+    updateRefreshVideo();
     const blocked = protectionBlocked() || !!protectionPending;
     protectionButton.disabled = blocked || !api?.protection || !api?.setProtection;
     protectionSelect.disabled = blocked || savedProtection === undefined;
+    historySelect.disabled = blocked || savedPlaybackHistory === undefined;
     protectionSave.disabled = protectionSelect.disabled || !protectionValues.includes(protectionSelect.value)
-      || protectionSelect.value === String(savedProtection);
-    protectionSave.textContent = protectionPending === 'saving' ? 'Saving…' : 'Save setting';
+      || !['off', 'on'].includes(historySelect.value) || !browseProtectionDraft();
+    protectionSave.textContent = protectionPending === 'saving' ? 'Saving…' : 'Save settings';
     protectionRetry.disabled = blocked;
     protectionClose.disabled = locked || (!!protectionPending && protectionPending !== 'password');
+    const resetBlocked = blocked || protectionPanel.hidden || savedProtection === undefined || savedPlaybackHistory === undefined
+      || !api?.resetPlaybackHistory;
+    resetLastPlayed.disabled = resetBlocked;
+    resetTimesPlayed.disabled = resetBlocked;
+    playbackResetSection.setAttribute('aria-busy', String(protectionPending === 'history-reset' && !locked));
     search.disabled = locked || !!protectionPending;
     ratingInput.disabled = !editable() || locked || saving || reloading || regenerating || !!protectionPending
       || editorComposition.size > 0 || browseProtectionDraft();
@@ -321,13 +366,14 @@
     if (!changePassword) { return 'Password changes are unavailable. Lock this hub and reopen it to try again.'; }
     if (dirty() || editorComposition.size) { return 'Save or discard your video notes, tags and rating before changing the password.'; }
     if (protectionBlocked() || protectionPending) { return 'Wait for the current operation to finish, or lock the hub.'; }
-    if (savedProtection !== undefined && protectionSelect.value !== String(savedProtection)) {
-      return 'Save your auto-lock setting, or restore its saved value, before changing the password.';
+    if (browseProtectionDraft()) {
+      return 'Save your protection settings, or restore their saved values, before changing the password.';
     }
     return '';
   }
 
   function updatePasswordControls() {
+    updateRefreshVideo();
     const blocked = locked || !!passwordBlockedMessage();
     for (const input of passwordInputs) { input.disabled = blocked; }
     passwordSubmit.disabled = blocked || passwordComposition.size > 0 || passwordForm.hidden || protectionPanel.hidden;
@@ -478,13 +524,14 @@
     if (!createUnprotectedCopy || !cancelUnprotectedCopy) { return 'Unprotected copies are unavailable. Lock this hub and reopen it to try again.'; }
     if (dirty() || editorComposition.size) { return 'Save or discard your video notes, tags and rating before creating a copy.'; }
     if (protectionBlocked() || protectionPending) { return 'Wait for the current operation to finish, or lock the hub.'; }
-    if (savedProtection !== undefined && protectionSelect.value !== String(savedProtection)) {
-      return 'Save your auto-lock setting, or restore its saved value, before creating a copy.';
+    if (browseProtectionDraft()) {
+      return 'Save your protection settings, or restore their saved values, before creating a copy.';
     }
     return '';
   }
 
   function updateCopyControls() {
+    updateRefreshVideo();
     const pending = protectionPending === 'copy';
     const blocked = locked || !!copyBlockedMessage();
     copyPassword.disabled = blocked;
@@ -623,13 +670,14 @@
     }
     if (dirty() || editorComposition.size) { return 'Save or discard your video notes, tags and rating before changing Touch ID.'; }
     if (protectionBlocked() || protectionPending) { return 'Wait for the current operation to finish, or lock the hub.'; }
-    if (savedProtection !== undefined && protectionSelect.value !== String(savedProtection)) {
-      return 'Save your auto-lock setting, or restore its saved value, before changing Touch ID.';
+    if (browseProtectionDraft()) {
+      return 'Save your protection settings, or restore their saved values, before changing Touch ID.';
     }
     return '';
   }
 
   function updateTouchIdControls() {
+    updateRefreshVideo();
     const blocked = locked || !!touchIdBlockedMessage();
     touchIdToggle.hidden = touchIdState !== 'disabled';
     touchIdDisable.hidden = !disableTouchId || touchIdState === 'disabled';
@@ -734,11 +782,14 @@
     protectionButton.setAttribute('aria-expanded', 'true');
     savedProtection = undefined;
     protectionSelect.value = '';
+    savedPlaybackHistory = undefined;
+    historySelect.value = '';
+    playbackResetStatus.textContent = '';
     closeTouchIdSection();
     showTouchIdState('unavailable');
     touchIdSummary.textContent = 'Checking Touch ID availability…';
     protectionPending = 'loading';
-    protectionStatus.textContent = 'Loading saved protection setting…';
+    protectionStatus.textContent = 'Loading saved protection settings…';
     protectionRetry.hidden = true;
     updateEditor();
     protectionPanel.focus({ preventScroll: true });
@@ -752,9 +803,12 @@
     showTouchIdState(touchIdResult?.outcome === 'available' && ['enabled', 'disabled'].includes(touchIdResult.state)
       && enableTouchId && disableTouchId ? touchIdResult.state : 'unavailable');
     protectionPending = '';
-    if (result?.status === 'ready' && validProtection(result.autoLockMinutes)) {
+    if (result?.status === 'ready' && validProtection(result.autoLockMinutes)
+      && (result.recordPlaybackHistory === undefined || typeof result.recordPlaybackHistory === 'boolean')) {
       savedProtection = result.autoLockMinutes;
       protectionSelect.value = String(savedProtection);
+      savedPlaybackHistory = result.recordPlaybackHistory === true;
+      historySelect.value = savedPlaybackHistory ? 'on' : 'off';
       protectionStatus.textContent = 'Choose a setting, then save to apply it.';
       updateEditor();
       protectionSelect.focus({ preventScroll: true });
@@ -769,22 +823,27 @@
 
   async function saveProtection() {
     if (protectionBlocked() || protectionPending || savedProtection === undefined || !api?.setProtection
-      || !protectionValues.includes(protectionSelect.value) || protectionSelect.value === String(savedProtection)) { return; }
+      || !protectionValues.includes(protectionSelect.value) || !['off', 'on'].includes(historySelect.value) || !browseProtectionDraft()) { return; }
     const epoch = ++protectionEpoch;
     const autoLockMinutes = Number(protectionSelect.value);
+    const recordPlaybackHistory = historySelect.value === 'on';
     stopVideo();
     protectionPending = 'saving';
     protectionStatus.textContent = 'Saving encrypted protection setting…';
     updateEditor();
     let result;
-    try { result = await api.setProtection({ autoLockMinutes }); }
+    try { result = await api.setProtection({ autoLockMinutes, recordPlaybackHistory }); }
     catch { result = { status: 'unavailable' }; }
     if (locked || epoch !== protectionEpoch) { return; }
     protectionPending = '';
-    if (result?.status === 'saved' && result.autoLockMinutes === autoLockMinutes) {
+    if (result?.status === 'saved' && result.autoLockMinutes === autoLockMinutes
+      && (result.recordPlaybackHistory === undefined || typeof result.recordPlaybackHistory === 'boolean')
+      && (result.recordPlaybackHistory === true) === recordPlaybackHistory) {
       savedProtection = autoLockMinutes;
       protectionSelect.value = String(autoLockMinutes);
-      protectionStatus.textContent = 'Protection setting saved.';
+      savedPlaybackHistory = recordPlaybackHistory;
+      historySelect.value = recordPlaybackHistory ? 'on' : 'off';
+      protectionStatus.textContent = 'Protection settings saved.';
     } else {
       protectionStatus.textContent = result?.status === 'busy' ? 'The hub is busy. Your selection is still here; try saving again.'
         : 'The setting could not be saved. Your selection is still here; try again or lock the hub.';
@@ -805,6 +864,58 @@
     (protectionPending === 'password' ? lockButton : protectionButton).focus({ preventScroll: true });
   }
 
+  function playbackResetBlockedMessage() {
+    if (!api?.resetPlaybackHistory) { return 'Playback history resets are unavailable. Lock this hub and reopen it to try again.'; }
+    if (dirty() || editorComposition.size) { return 'Save or discard your video notes, tags and rating before resetting playback history.'; }
+    if (conflict) { return 'Reload the saved video details before resetting playback history.'; }
+    if (composing) { return 'Finish entering your search before resetting playback history.'; }
+    if (browseProtectionDraft()) { return 'Save your protection settings, or restore their saved values, before resetting playback history.'; }
+    if (passwordComposition.size || passwordInputs.some(input => input.value !== '') || copyComposing || copyPassword.value !== ''
+      || copyAcknowledge.checked || touchIdComposing || touchIdPassword.value !== '') {
+      return 'Finish or close the password, Touch ID or unprotected-copy form before resetting playback history.';
+    }
+    if (protectionBlocked() || protectionPending) { return 'Wait for the current operation to finish, or lock the hub.'; }
+    return '';
+  }
+
+  async function resetPlaybackHistory(metric) {
+    if (locked || protectionPanel.hidden || !['lastPlayed', 'timesPlayed'].includes(metric)
+      || savedProtection === undefined || savedPlaybackHistory === undefined) { return; }
+    const blocked = playbackResetBlockedMessage();
+    if (blocked) { playbackResetStatus.textContent = blocked; return; }
+    const epoch = ++playbackResetEpoch;
+    const label = metric === 'lastPlayed' ? 'Last played' : 'Times played';
+    clearTimeout(searchTimer);
+    query = search.value.slice(0, 200);
+    closePasswordSection(); closeCopySection(); closeTouchIdSection();
+    stopVideo();
+    protectionPending = 'history-reset';
+    playbackResetStatus.textContent = `Review resetting ${label} in the confirmation window. Close that window to cancel, or lock the hub.`;
+    updateEditor();
+    let result;
+    try { result = await api.resetPlaybackHistory(metric); }
+    catch { result = { status: 'unavailable' }; }
+    if (locked || epoch !== playbackResetEpoch) { return; }
+    protectionPending = '';
+    // Main retires issued catalogue IDs even after cancellation or a no-op.
+    // This action admits no drafts: retire the old selection and source IDs,
+    // then reload the existing search, collection and order without closing Protection.
+    closeSources(false);
+    closeDetails();
+    if (result?.status === 'reset' && Number.isSafeInteger(result.count) && result.count >= 1 && result.count <= 100_000) {
+      playbackResetStatus.textContent = `${label} reset for ${result.count.toLocaleString()} catalogue ${result.count === 1 ? 'entry' : 'entries'}. Playback recording is unchanged.`;
+    } else if (result?.status === 'unchanged') {
+      playbackResetStatus.textContent = `No ${label} values needed resetting. Playback recording is unchanged.`;
+    } else if (result?.status === 'cancelled') {
+      playbackResetStatus.textContent = 'Reset cancelled. Playback history is unchanged.';
+    } else {
+      playbackResetStatus.textContent = result?.status === 'busy' ? 'The hub is busy. Review the refreshed catalogue before trying again.'
+        : 'The reset could not be confirmed. Review the refreshed catalogue before trying again, or lock the hub.';
+    }
+    playbackResetStatus.focus({ preventScroll: true });
+    void loadPage(offset, 0, undefined, true);
+  }
+
   function sourceOperationPending() {
     return protectionPending.startsWith('source-');
   }
@@ -820,10 +931,10 @@
     sourceAdd.disabled = blocked || !sourcesAvailable() || !api?.addSource || !sourceListReady
       || sourceItems.length >= 256 || dirty() || !!editorComposition.size || conflict;
     sourcesClose.disabled = locked || sourceOperationPending();
-    sourceCancel.hidden = !['source-connect', 'source-relocate', 'source-add'].includes(protectionPending);
+    sourceCancel.hidden = !['source-connect', 'source-relocate', 'source-add', 'source-check'].includes(protectionPending);
     sourceCancel.disabled = locked || sourceCancelling;
     sourceCancel.textContent = sourceCancelling ? 'Cancelling…' : protectionPending === 'source-relocate' ? 'Cancel change'
-      : protectionPending === 'source-add' ? 'Cancel adding folder' : 'Cancel connection';
+      : protectionPending === 'source-add' ? 'Cancel adding folder' : protectionPending === 'source-check' ? 'Cancel check' : 'Cancel connection';
     importCancel.hidden = protectionPending !== 'source-import';
     importCancel.disabled = locked || sourceCancelling;
     importCancel.textContent = sourceCancelling ? 'Cancelling…' : sourceImportMode === 'scan' ? 'Cancel' : 'Cancel import';
@@ -831,7 +942,8 @@
     sourcesList.setAttribute('aria-busy', String(sourceOperationPending() && !locked));
     for (const row of sourcesList.children) {
       for (const button of row.querySelectorAll('button')) {
-        button.disabled = blocked || (button.getAttribute('data-action') === 'relocate-source' && !api?.relocateSource)
+        button.disabled = blocked || (button.getAttribute('data-action') === 'check-source'
+          && (!api?.checkSource || composing)) || (button.getAttribute('data-action') === 'relocate-source' && !api?.relocateSource)
           || (button.getAttribute('data-action') === 'import-video'
             && (!api?.importVideo || !api?.cancelImport || dirty() || conflict))
           || (button.getAttribute('data-action') === 'scan-source'
@@ -886,8 +998,14 @@
       scanButton.setAttribute('aria-label', `Find new videos in ${item.title}`);
       scanButton.setAttribute('aria-describedby', 'source-scan-help');
       scanButton.addEventListener('click', () => { void importSourceVideo(item, true); });
+      const checkButton = textElement('button', 'button button-secondary source-check-button', 'Check saved files…');
+      checkButton.type = 'button';
+      checkButton.setAttribute('data-action', 'check-source');
+      checkButton.setAttribute('aria-label', `Check saved files in ${item.title}`);
+      checkButton.setAttribute('aria-describedby', 'source-check-help');
+      checkButton.addEventListener('click', () => { void checkSourceFiles(item); });
       const actions = textElement('div', 'source-folder-actions', '');
-      actions.append(importButton, scanButton, relocate);
+      actions.append(importButton, scanButton, checkButton, relocate);
       row.append(description, button, actions);
       sourcesList.append(row);
     }
@@ -983,6 +1101,72 @@
     updateEditor();
     const changedRow = sourceItems.findIndex(current => current.id === item.id);
     (sourcesList.children[changedRow]?.querySelector('button') || sourcesRefresh).focus({ preventScroll: true });
+  }
+
+  function sourceCheckSummary(result) {
+    if (!result || typeof result !== 'object' || Array.isArray(result) || result.status !== 'checked') { return ''; }
+    const { total, sameSize, differentSize, missing, unverified, ignored } = result;
+    if (![total, sameSize, differentSize, missing, unverified, ignored].every(count => Number.isSafeInteger(count) && count >= 0 && count <= 10_000)
+      || sameSize + differentSize + missing + unverified + ignored !== total) { return ''; }
+    return `Check complete. ${total.toLocaleString()} saved file ${total === 1 ? 'location' : 'locations'}.`
+      + `\nSame recorded size: ${sameSize.toLocaleString()} · Different size: ${differentSize.toLocaleString()}`
+      + `\nMissing: ${missing.toLocaleString()} · Not verified: ${unverified.toLocaleString()} · Ignored: ${ignored.toLocaleString()}`
+      + '\nThis is a point-in-time check. The same size does not prove a file is unchanged or playable. Ignored locations were not checked.';
+  }
+
+  async function checkSourceFiles(item) {
+    if (protectionBlocked() || protectionPending || sourcesPanel.hidden || !api?.checkSource
+      || !api?.cancelSourceConnection || !sourceItems.includes(item) || composing) { return; }
+    if (browseProtectionDraft()) {
+      sourcesStatus.textContent = 'Save your protection settings, or restore their saved values, before checking saved files.';
+      return;
+    }
+    if (passwordComposition.size || passwordInputs.some(input => input.value !== '') || copyComposing || copyPassword.value !== ''
+      || copyAcknowledge.checked || touchIdComposing || touchIdPassword.value !== '') {
+      sourcesStatus.textContent = 'Finish or close the password, Touch ID or unprotected-copy form before checking saved files.';
+      return;
+    }
+    const epoch = ++sourceEpoch;
+    protectionPending = 'source-check';
+    sourceCancelling = false;
+    clearTimeout(searchTimer);
+    sourcesStatus.textContent = 'Checking saved file locations… Choose the saved folder if prompted. Original files and catalogue metadata remain unchanged.';
+    stopVideo();
+    play.hidden = !clipUrl;
+    updateEditor();
+    sourceCancel.focus({ preventScroll: true });
+    let result;
+    try { result = await api.checkSource(item.id); }
+    catch { result = { status: 'unavailable' }; }
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    // The check may establish a session grant. Refresh only source connection
+    // labels: catalogue IDs, selected details and all edit drafts stay intact.
+    if (sourceCancelling) { result = { status: 'cancelled' }; }
+    let refreshed;
+    try { refreshed = await api.sources(); }
+    catch { refreshed = { status: 'unavailable' }; }
+    if (locked || epoch !== sourceEpoch || sourcesPanel.hidden) { return; }
+    if (sourceCancelling) { result = { status: 'cancelled' }; }
+    sourceListReady = validSourceList(refreshed);
+    sourceItems = sourceListReady ? refreshed.items.map(sourceItem) : [];
+    const messages = {
+      cancelled: 'Check cancelled. No results were retained. Original files and catalogue metadata are unchanged.',
+      conflict: 'The saved source folders changed. Review the refreshed folders and try again.',
+      invalid: 'The saved file locations could not be checked. No results were retained.',
+      limit: 'The catalogue or saved locations exceed a supported check limit (up to 10,000 saved file locations per source). No results were retained.',
+      'wrong-folder': 'That is not the saved source folder. Choose Check saved files and select its original location.',
+      'source-unavailable': 'The source folder is unavailable. Check that its drive is connected and access is allowed, then try again.',
+      busy: 'The hub is busy. Choose Check saved files to try again.',
+    };
+    sourcesStatus.textContent = sourceCheckSummary(result) || (typeof result?.status === 'string' && Object.hasOwn(messages, result.status)
+      ? messages[result.status] : 'The saved files could not be checked. No results were retained. Try again, or lock the hub.');
+    if (!sourceListReady) { sourcesStatus.textContent += '\nChoose Refresh to check the saved folders again.'; }
+    protectionPending = '';
+    sourceCancelling = false;
+    renderSources();
+    updateEditor();
+    const checkedRow = sourceItems.findIndex(current => current.id === item.id);
+    (sourcesList.children[checkedRow]?.querySelector('[data-action="check-source"]') || sourcesRefresh).focus({ preventScroll: true });
   }
 
   async function addSourceFolder() {
@@ -1214,18 +1398,23 @@
   }
 
   function cancelSourceConnection() {
-    if (locked || !['source-connect', 'source-relocate', 'source-add'].includes(protectionPending) || sourceCancelling || !api?.cancelSourceConnection) { return; }
+    if (locked || !['source-connect', 'source-relocate', 'source-add', 'source-check'].includes(protectionPending) || sourceCancelling || !api?.cancelSourceConnection) { return; }
     sourceCancelling = true;
     const relocating = protectionPending === 'source-relocate';
     const adding = protectionPending === 'source-add';
-    sourcesStatus.textContent = adding
+    const checking = protectionPending === 'source-check';
+    sourcesStatus.textContent = checking
+      ? 'Cancelling the check. Close any open folder picker. No results will be retained.'
+      : adding
       ? 'Cancelling the new source folder. Close any open dialog. A save already in progress may finish.'
       : relocating
       ? 'Cancelling the location change. Close any open dialog. A save already in progress may finish.'
       : 'Cancelling connection. Close the folder picker if it is still open, or lock the hub.';
     updateSourceControls();
     try { api.cancelSourceConnection(); }
-    catch { sourcesStatus.textContent = adding
+    catch { sourcesStatus.textContent = checking
+      ? 'The check could not be cancelled. Close any open folder picker, or lock the hub.'
+      : adding
       ? 'Adding the folder could not be cancelled. Close any open dialog, or lock the hub.'
       : relocating
       ? 'The location change could not be cancelled. Close any open dialog, or lock the hub.'
@@ -1236,8 +1425,10 @@
     if (locked) { return false; }
     if (protectionPending) { return false; }
     if (regenerating) {
-      generationStatus.textContent = cancelling ? 'Stopping regeneration. Please wait, or lock the hub.'
-        : 'Regenerating previews. Cancel or wait before leaving this video.';
+      generationStatus.textContent = refreshingVideo
+        ? (cancelling ? 'Stopping video refresh. Please wait, or lock the hub.' : 'Refreshing video. Cancel or wait before leaving this video.')
+        : (cancelling ? 'Stopping regeneration. Please wait, or lock the hub.'
+          : 'Regenerating previews. Cancel or wait before leaving this video.');
       return false;
     }
     if (saving || reloading) {
@@ -1253,7 +1444,8 @@
   }
 
   function browseProtectionDraft() {
-    return savedProtection !== undefined && protectionSelect.value !== String(savedProtection);
+    return savedProtection !== undefined && (protectionSelect.value !== String(savedProtection)
+      || historySelect.value !== (savedPlaybackHistory ? 'on' : 'off'));
   }
 
   function restoreBrowseControls() {
@@ -1266,6 +1458,7 @@
   }
 
   function updateBrowseControls() {
+    updateRefreshVideo();
     const blocked = locked || !api || saving || reloading || regenerating || !!protectionPending
       || dirty() || editorComposition.size > 0 || composing || browseProtectionDraft();
     collectionControl.disabled = blocked;
@@ -1279,7 +1472,7 @@
     if (!canNavigate() || composing || browseProtectionDraft()) {
       restoreBrowseControls();
       if (!locked && browseProtectionDraft()) {
-        protectionStatus.textContent = 'Save your auto-lock setting, or restore its saved value, before changing the catalogue view.';
+        protectionStatus.textContent = 'Save your protection settings, or restore their saved values, before changing the catalogue view.';
       }
       return;
     }
@@ -1301,7 +1494,7 @@
   function restoreSearch() {
     search.value = query;
     if (protectionPending) {
-      (originalPending ? stopPlaybackButton : sourceOperationPending() ? sourcesPanel : protectionPanel).focus({ preventScroll: true });
+      (originalPending || protectionPending === 'playback-history' ? stopPlaybackButton : sourceOperationPending() ? sourcesPanel : protectionPanel).focus({ preventScroll: true });
       return;
     }
     if (!details.hidden && editable()) {
@@ -1399,8 +1592,12 @@
     void loadPage(offset, 0, undefined, true);
   }
 
-  async function regeneratePreviews() {
-    if (locked || regenerating || protectionPending || selectedDetail?.regenerable !== true || !api?.regenerate || !api?.cancelRegeneration) { return; }
+  async function regeneratePreviews(refresh = false) {
+    if (refresh) {
+      const reason = refreshVideoBlockedMessage();
+      if (reason) { generationStatus.textContent = reason; return; }
+    }
+    if (locked || regenerating || protectionPending || (!refresh && (selectedDetail?.regenerable !== true || !api?.regenerate)) || !api?.cancelRegeneration) { return; }
     if (!canNavigate()) {
       generationStatus.textContent = 'Save or discard your edits before regenerating previews.';
       return;
@@ -1410,60 +1607,82 @@
     const epoch = detailEpoch;
     const current = () => !locked && epoch === detailEpoch && id === selectedId;
     regenerating = true;
+    refreshingVideo = refresh;
     cancelling = false;
     // Retire the existing decoded poster before the IPC await. Removing and
     // restoring an identical URL in one turn can keep Chromium's old image.
     cancelImages('detail');
     stopVideo();
     posterPlaceholder.hidden = false;
-    posterPlaceholder.textContent = 'Regenerating previews…';
+    posterPlaceholder.textContent = refresh ? 'Refreshing video…' : 'Regenerating previews…';
     play.disabled = true;
-    generationStatus.textContent = 'Regenerating previews. The app may ask you to select the source folder.';
+    generationStatus.textContent = refresh
+      ? 'Refreshing technical details and previews. The app may ask you to select the source folder.'
+      : 'Regenerating previews. The app may ask you to select the source folder.';
     updateEditor();
     let result;
-    try { result = await api.regenerate({ id, revision: selectedDetail.revision }); }
+    try { result = await (refresh ? api.refreshVideo : api.regenerate)({ id, revision: selectedDetail.revision }); }
     catch { result = { status: 'unavailable' }; }
     if (!current()) { return; }
     // Cancellation can race publication. Reload both metadata and media after
     // drainage rather than claiming the previous preview set was preserved.
+    const completed = result?.status === (refresh ? 'refreshed' : 'generated')
+      && result.item?.id === id && typeof result.item.title === 'string';
     let reloaded;
-    if (result?.status === 'cancelled') {
+    if (result?.status === 'cancelled' || (refresh && !completed)) {
       cancelling = true;
-      generationStatus.textContent = 'Regeneration stopped. Refreshing previews…';
+      generationStatus.textContent = refresh ? 'Loading the latest saved details and previews…' : 'Regeneration stopped. Refreshing previews…';
       updateEditor();
       try { reloaded = await api.detail(id); }
       catch { reloaded = { status: 'unavailable' }; }
       if (!current()) { return; }
     }
     regenerating = false;
+    refreshingVideo = false;
     cancelling = false;
     play.disabled = false;
-    if (result?.status === 'generated' && result.item?.id === id && typeof result.item.title === 'string') {
+    if (refresh && !completed) {
+      if (reloaded?.status !== 'ready' || reloaded.item?.id !== id || typeof reloaded.item.title !== 'string') {
+        // The operation may have published or retired this row. Never restore
+        // stale technical details or previews when their authority is uncertain.
+        closeDetails();
+        const clearedEpoch = detailEpoch;
+        await loadPage(offset);
+        if (!locked && !selectedId && detailEpoch === clearedEpoch + 1) {
+          galleryStatus.textContent = 'Video refresh finished without current details. Select the video again to check its saved details and previews.';
+        }
+        return;
+      }
+      applyMetadata(reloaded.item);
+    }
+    if (completed) {
       applyMetadata(result.item);
       refreshPreviews(result.item);
-      generationStatus.textContent = 'Previews regenerated.';
+      generationStatus.textContent = refresh ? 'Video refreshed.' : 'Previews regenerated.';
     } else if (result?.status === 'cancelled') {
       if (reloaded?.status === 'ready' && reloaded.item?.id === id && typeof reloaded.item.title === 'string') {
         applyMetadata(reloaded.item);
         refreshPreviews(reloaded.item);
-        generationStatus.textContent = 'Regeneration stopped. Previews refreshed.';
+        generationStatus.textContent = refresh ? 'Video refresh stopped. Saved details and previews reloaded.' : 'Regeneration stopped. Previews refreshed.';
       } else {
         refreshPreviews(selectedDetail);
-        generationStatus.textContent = 'Regeneration stopped. Reopen this video to check its latest previews.';
+        generationStatus.textContent = refresh ? 'Video refresh stopped. Reopen this video to check its latest details and previews.'
+          : 'Regeneration stopped. Reopen this video to check its latest previews.';
       }
     } else if (result?.status === 'conflict') {
       refreshPreviews(selectedDetail);
       conflict = true;
       retryDetails.hidden = false;
       retryDetails.textContent = 'Reload details';
-      generationStatus.textContent = 'This video changed. Reload its saved details before regenerating previews.';
+      generationStatus.textContent = refresh ? 'This video changed. Reload its saved details before refreshing it.'
+        : 'This video changed. Reload its saved details before regenerating previews.';
     } else {
       refreshPreviews(selectedDetail);
       generationStatus.textContent = result?.status === 'source-unavailable'
         ? 'The source video is unavailable. Connect its folder and try again.'
         : result?.status === 'wrong-folder' ? 'That folder does not match this video’s source. Try again and choose its source folder.'
-          : result?.status === 'busy' ? 'The hub is busy. Try regenerating previews again shortly.'
-            : 'Previews could not be regenerated. Try again or lock the hub.';
+          : result?.status === 'busy' ? (refresh ? 'The hub is busy. Try refreshing this video again shortly.' : 'The hub is busy. Try regenerating previews again shortly.')
+            : refresh ? 'This video could not be refreshed. Try again or lock the hub.' : 'Previews could not be regenerated. Try again or lock the hub.';
     }
     updateEditor();
   }
@@ -1471,7 +1690,7 @@
   function cancelRegeneration() {
     if (locked || !regenerating || cancelling) { return; }
     cancelling = true;
-    generationStatus.textContent = 'Stopping regeneration. Please wait, or lock the hub.';
+    generationStatus.textContent = refreshingVideo ? 'Stopping video refresh. Please wait, or lock the hub.' : 'Stopping regeneration. Please wait, or lock the hub.';
     updateEditor();
     try { api.cancelRegeneration(); }
     catch { generationStatus.textContent = 'Cancellation could not be requested. Wait for completion or lock the hub.'; }
@@ -1645,6 +1864,7 @@
     originalPending = false;
     originalActive = false;
     originalCancelling = false;
+    playbackHistoryNotice = '';
     if (protectionPending === 'original') { protectionPending = ''; }
     playbackStatus.textContent = '';
     // Returning from fullscreen is presentation cleanup only. Revoke and clear
@@ -1653,6 +1873,7 @@
       try { void Promise.resolve(document.exitFullscreen()).catch(() => {}); } catch { /* The window may already be closing. */ }
     }
     video.onloadeddata = null;
+    video.onplaying = null;
     video.onerror = null;
     video.onended = null;
     video.pause();
@@ -1724,6 +1945,7 @@
     stopVideo();
     clipUrl = '';
     selectedId = '';
+    historyRefreshId = '';
     details.hidden = true;
     detailsScroll.scrollTop = 0;
     detailsContent.hidden = true;
@@ -1745,6 +1967,7 @@
     saving = false;
     reloading = false;
     regenerating = false;
+    refreshingVideo = false;
     cancelling = false;
     conflict = false;
     editorComposition.clear();
@@ -1885,7 +2108,7 @@
     if (!result.items.length) {
       if (query) { showEmpty('No matching videos', 'Try a different video title or tag, or choose another collection.'); }
       else if (collection === 'favourites') { showEmpty('No favourites yet', 'This private catalogue has no videos marked as favourites. Choose All videos to browse the catalogue.'); }
-      else if (collection === 'recent') { showEmpty('No recently played videos', 'This collection uses saved catalogue history. Playback in this test build does not update it. Choose All videos to browse the catalogue.'); }
+      else if (collection === 'recent') { showEmpty('No recently played videos', 'This collection uses saved catalogue history. Turn on Record playback history in Protection to update it when playing original videos.'); }
       else { showEmpty('No videos yet', 'This private catalogue has no videos to display.'); }
       return;
     }
@@ -2016,12 +2239,22 @@
     const show = () => {
       if (!current()) { return; }
       video.hidden = false;
-      playbackStatus.textContent = 'Playing original video.';
+      playbackStatus.textContent = playbackHistoryNotice || 'Playing original video.';
       updatePlaybackControls();
     };
     video.onerror = failed;
     video.onloadeddata = show;
-    video.onended = () => { if (current() && !video.loop) { stopVideo(); updateEditor(); } };
+    let acknowledged = false;
+    const selectedEpoch = detailEpoch;
+    video.onplaying = event => {
+      if (event?.isTrusted !== true || acknowledged || !current() || !originalActive
+        || video.getAttribute('src') !== result.url || !api?.ackOriginalPlayback) { return; }
+      acknowledged = true;
+      void recordOriginalPlayback(result.url, selected, selectedEpoch);
+    };
+    video.onended = () => {
+      if (current() && !video.loop) { stopVideo(); updateEditor(); refreshRecordedHistory(); }
+    };
     video.src = result.url;
     playbackStatus.textContent = 'Loading original video…';
     updateEditor();
@@ -2030,6 +2263,39 @@
       if (current()) { show(); }
       else if (locked || !video.getAttribute('src')) { video.pause(); }
     } catch { failed(); }
+  }
+
+  async function recordOriginalPlayback(url, id, epoch) {
+    // Serialize catalogue operations while the main process records this one
+    // capability. Stop and Lock remain available and revoke playback immediately.
+    protectionPending = 'playback-history';
+    updateEditor();
+    let result;
+    try { result = await api.ackOriginalPlayback(url); }
+    catch { result = { status: 'unavailable' }; }
+    if (locked || epoch !== detailEpoch || id !== selectedId) { return; }
+    if (protectionPending === 'playback-history') { protectionPending = ''; }
+    if (result?.status === 'recorded') {
+      // History-only writes preserve the public edit revision. Never apply a
+      // metadata snapshot here: the current note, tag and rating drafts stay put.
+      historyRefreshId = id;
+      historyRefreshEpoch = epoch;
+    } else if (!['disabled', 'ignored'].includes(result?.status)) {
+      playbackHistoryNotice = result?.status === 'conflict'
+        ? 'Playback history could not be saved because this video changed. Your edits are still here.'
+        : 'Playback history could not be saved. Your video and unsaved edits are unchanged.';
+      playbackStatus.textContent = playbackHistoryNotice;
+    }
+    updateEditor();
+    refreshRecordedHistory();
+  }
+
+  function refreshRecordedHistory() {
+    if (!historyRefreshId || locked || originalActive || originalPending || video.getAttribute('src')
+      || protectionPending || saving || reloading || regenerating || listLoading) { return; }
+    const matches = historyRefreshId === selectedId && historyRefreshEpoch === detailEpoch;
+    historyRefreshId = '';
+    if (matches) { void loadPage(offset, 0, undefined, true); }
   }
 
   function stopPlayback() {
@@ -2047,6 +2313,7 @@
     stopVideo();
     updateEditor();
     (wasOriginal ? playOriginalButton : play).focus({ preventScroll: true });
+    refreshRecordedHistory();
   }
 
   function clearSensitiveView() {
@@ -2066,6 +2333,11 @@
     sourcesList.setAttribute('aria-busy', 'false');
     savedProtection = undefined;
     protectionSelect.value = '';
+    savedPlaybackHistory = undefined;
+    historySelect.value = '';
+    playbackResetEpoch++;
+    playbackResetStatus.textContent = '';
+    playbackResetSection.setAttribute('aria-busy', 'false');
     protectionStatus.textContent = '';
     protectionPanel.hidden = true;
     protectionRetry.hidden = true;
@@ -2198,12 +2470,15 @@
   }
   protectionRetry.addEventListener('click', () => { void loadProtection(); });
   protectionSave.addEventListener('click', () => { void saveProtection(); });
-  protectionSelect.addEventListener('change', () => {
-    if (locked || protectionPending || savedProtection === undefined) { return; }
-    protectionStatus.textContent = protectionSelect.value === String(savedProtection) ? 'No unsaved setting changes.'
-      : 'Choose Save setting to apply this change.';
-    updateProtection();
-  });
+  resetLastPlayed.addEventListener('click', () => { void resetPlaybackHistory('lastPlayed'); });
+  resetTimesPlayed.addEventListener('click', () => { void resetPlaybackHistory('timesPlayed'); });
+  for (const control of [protectionSelect, historySelect]) {
+    control.addEventListener('change', () => {
+      if (locked || protectionPending || savedProtection === undefined) { return; }
+      protectionStatus.textContent = browseProtectionDraft() ? 'Choose Save settings to apply this change.' : 'No unsaved setting changes.';
+      updateProtection();
+    });
+  }
   search.addEventListener('compositionstart', () => { composing = true; clearTimeout(searchTimer); updateBrowseControls(); });
   search.addEventListener('compositionend', () => { composing = false; updateBrowseControls(); scheduleSearch(); });
   function scheduleSearch() {
@@ -2256,6 +2531,7 @@
   });
   saveButton.addEventListener('click', () => { void saveChanges(); });
   discardButton.addEventListener('click', () => { void discardChanges(); });
+  refreshVideo.addEventListener('click', () => { void regeneratePreviews(true); });
   regenerate.addEventListener('click', () => { void regeneratePreviews(); });
   cancelGeneration.addEventListener('click', cancelRegeneration);
   play.addEventListener('click', () => { void playPreview(); });

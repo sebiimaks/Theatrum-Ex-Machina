@@ -38,6 +38,7 @@
           <p class="source-folders-note">Moved your videos? Choose Change location.</p>
           <ul class="source-folders-list" id="source-folders-list" aria-label="Saved source folders" aria-busy="false"></ul>
           <p class="source-folders-note" id="source-scan-help">Find new videos skips links and ignored folders. Review up to 100 new videos before importing.</p>
+          <p class="source-folders-note" id="source-check-help">Check saved files reads file metadata for up to 10,000 saved locations, without opening video contents. Not verified includes unknown recorded sizes, links and inaccessible or non-file locations. Results are not saved.</p>
           <p id="source-folders-status" role="status" aria-live="polite"></p>
           <div class="protection-actions">
             <button class="button button-secondary" id="cancel-source-connection" type="button" hidden>Cancel connection</button>
@@ -62,13 +63,30 @@
             <option value="30">30 minutes</option>
           </select>
           <p id="protection-help">Locks after inactivity in this private window, including during video playback or preview regeneration. Locking clears unsaved edits.</p>
-          <p class="protection-storage-note">This setting is saved in this encrypted hub.</p>
+          <label for="record-playback-history">Record playback history</label>
+          <select id="record-playback-history" aria-describedby="playback-history-help" disabled>
+            <option value="" disabled selected>Select a saved setting</option>
+            <option value="off">Off (default)</option>
+            <option value="on">On</option>
+          </select>
+          <p id="playback-history-help">When on, playing an original video updates its Last played and Times played in this encrypted hub. Previews do not count. Turning this off keeps existing history.</p>
+          <p class="protection-storage-note">These settings are saved in this encrypted hub.</p>
           <p class="protection-storage-note">Copying and dragging are disabled. You can paste into password fields.</p>
           <p id="protection-status" role="status" aria-live="polite"></p>
           <div class="protection-actions">
             <button class="button button-secondary" id="retry-protection" type="button" hidden>Try again</button>
-            <button class="button save-button" id="save-protection" type="button" disabled>Save setting</button>
+            <button class="button save-button" id="save-protection" type="button" disabled>Save settings</button>
           </div>
+          <section class="password-section playback-reset-section" id="playback-reset-section" aria-labelledby="playback-reset-heading">
+            <h3 id="playback-reset-heading">Reset playback history</h3>
+            <p id="playback-reset-help">Reset one metric across this hub’s current catalogue. Last played clears playback dates; Times played clears play counts. Your playback recording setting stays unchanged.</p>
+            <div class="playback-reset-actions">
+              <button class="button button-secondary" id="reset-last-played" type="button" aria-describedby="playback-reset-help playback-reset-backups" disabled>Reset Last played…</button>
+              <button class="button button-secondary" id="reset-times-played" type="button" aria-describedby="playback-reset-help playback-reset-backups" disabled>Reset Times played…</button>
+            </div>
+            <p class="protection-storage-note" id="playback-reset-backups">Encrypted recovery backups and separate copies may retain earlier playback history.</p>
+            <p id="playback-reset-status" role="status" aria-live="polite" tabindex="-1"></p>
+          </section>
           <section class="password-section touch-id-section" aria-labelledby="touch-id-heading">
             <h3 id="touch-id-heading">Touch ID</h3>
             <p id="touch-id-summary" role="status" aria-live="polite">Checking Touch ID availability…</p>
@@ -224,9 +242,11 @@
             </div>
             <p id="playback-status" role="status" aria-live="polite"></p>
             <div class="generation-actions">
+              <button class="button button-secondary" id="refresh-video" type="button" aria-describedby="refresh-video-help" disabled>Refresh video</button>
               <button class="button button-secondary" id="regenerate-previews" type="button" disabled>Regenerate previews</button>
               <button class="button button-secondary" id="cancel-regeneration" type="button" hidden>Cancel</button>
             </div>
+            <p id="refresh-video-help">Update technical details and regenerate previews from the saved source. Notes, tags and playback history stay unchanged.</p>
             <p id="generation-status" role="status" aria-live="polite"></p>
           </div>
           <div class="detail-summary">

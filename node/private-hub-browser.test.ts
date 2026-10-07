@@ -162,6 +162,7 @@ function fixture(t: TestContext) {
     readProtection: async () => ({ autoLockMinutes: 5 }),
     updateProtection: async (_generation: number, value: unknown) => value,
     relocateSource: async () => ({ status: 'relocated' }),
+    resetPlaybackHistory: async () => ({ status: 'unchanged' }),
     lock: () => {
       bridgeAtLock.push([...invokeHandlers.keys(), ...ipcMain.eventNames().map(String)]);
       locks++; current = false; controller.abort();
@@ -216,8 +217,8 @@ test('gallery bridge exists before initial navigation and reads the catalogue on
   load = async () => {
     assert.deepEqual([...invokeHandlers.keys()].sort(), ['private-credentials-change-password', 'private-credentials-create-unprotected-copy',
       'private-credentials-touch-id-disable', 'private-credentials-touch-id-enable', 'private-credentials-touch-id-status',
-      'private-gallery-add-source', 'private-gallery-connect-source', 'private-gallery-detail', 'private-gallery-disconnect-source', 'private-gallery-import-progress', 'private-gallery-import-video', 'private-gallery-list', 'private-gallery-play-original', 'private-gallery-protection',
-      'private-gallery-regenerate', 'private-gallery-relocate-source', 'private-gallery-save', 'private-gallery-scan-source', 'private-gallery-set-protection', 'private-gallery-sources']);
+      'private-gallery-ack-original-playback', 'private-gallery-add-source', 'private-gallery-check-source', 'private-gallery-connect-source', 'private-gallery-detail', 'private-gallery-disconnect-source', 'private-gallery-import-progress', 'private-gallery-import-video', 'private-gallery-list', 'private-gallery-play-original', 'private-gallery-protection',
+      'private-gallery-refresh-video', 'private-gallery-regenerate', 'private-gallery-relocate-source', 'private-gallery-reset-playback-history', 'private-gallery-save', 'private-gallery-scan-source', 'private-gallery-set-protection', 'private-gallery-sources']);
     assert.equal(ipcMain.listenerCount('private-gallery-lock'), 1);
     assert.equal(ipcMain.listenerCount('private-gallery-stop-original'), 1);
     assert.equal(ipcMain.listenerCount('private-gallery-cancel-source-connection'), 1);
@@ -1369,4 +1370,77 @@ test('source scan owns and drains native confirmation after its private window c
   await Promise.resolve(); assert.equal(closed, false); finish();
   assert.deepEqual(await work, { status: 'unavailable' }); await closing;
   assert.equal(browser.status.cleanupFailed, false);
+});
+
+for (const metric of ['lastPlayed', 'timesPlayed'] as const) {
+  test(`history reset ${metric} confirmation is count-only, scoped to the private window and defaults to Cancel`, async t => {
+    const f = fixture(t);
+    let confirm: NonNullable<Parameters<typeof galleryRequests.registerPrivateGalleryRequest>[0]['confirmPlaybackHistoryReset']> | undefined;
+    const register = galleryRequests.registerPrivateGalleryRequest;
+    t.mock.method(galleryRequests, 'registerPrivateGalleryRequest', options => { confirm = options.confirmPlaybackHistoryReset; return register(options); });
+    await f.create(); const window = windows[0]; let response = 1; let count = 1;
+    const label = metric === 'lastPlayed' ? 'Last played' : 'Times played';
+    const retained = metric === 'lastPlayed' ? 'Times played' : 'Last played';
+    t.mock.method(dialog, 'showMessageBox', async (owner: unknown, options: any) => {
+      assert.equal(owner, window); assert.equal(options.title, `Reset ${label}?`);
+      assert.equal(options.message, `Reset ${label} for ${count} ${count === 1 ? 'catalogue entry' : 'catalogue entries'}?`);
+      assert.match(options.detail, /current encrypted catalogue/);
+      assert.ok(options.detail.includes(`${retained} and the Record playback history setting will be kept`));
+      assert.match(options.detail, /Encrypted recovery backups and separate copies can retain earlier values/);
+      assert.doesNotMatch(JSON.stringify(options), /root|filePaths|defaultPath|source-folder|secret|\/Users\//);
+      assert.deepEqual(options.buttons, [`Reset ${label}`, 'Cancel']);
+      assert.equal(options.defaultId, 1); assert.equal(options.cancelId, 1); assert.equal(options.noLink, true);
+      return { response };
+    });
+    assert.ok(confirm); assert.equal(await confirm(metric, count), false);
+    response = 0; assert.equal(await confirm(metric, count), true);
+    count = 100_000; assert.equal(await confirm(metric, count), true);
+  });
+}
+
+test('history reset confirmation rejects malformed counts and metrics before opening a dialog', async t => {
+  const f = fixture(t);
+  let confirm: NonNullable<Parameters<typeof galleryRequests.registerPrivateGalleryRequest>[0]['confirmPlaybackHistoryReset']> | undefined;
+  const register = galleryRequests.registerPrivateGalleryRequest;
+  t.mock.method(galleryRequests, 'registerPrivateGalleryRequest', options => { confirm = options.confirmPlaybackHistoryReset; return register(options); });
+  await f.create(); assert.ok(confirm);
+  const prompt = t.mock.method(dialog, 'showMessageBox', async () => { assert.fail('Invalid input cannot reach native confirmation'); });
+  for (const count of [0, -1, 100_001, NaN, Infinity, 1.5]) { await assert.rejects(confirm('lastPlayed', count)); }
+  for (const metric of ['all', '', undefined, {}, ['timesPlayed']]) { await assert.rejects(confirm(metric as any, 1)); }
+  assert.equal(prompt.mock.callCount(), 0);
+});
+
+test('history reset confirmation rejects a late approval after private authority revocation', async t => {
+  const f = fixture(t);
+  let confirm: NonNullable<Parameters<typeof galleryRequests.registerPrivateGalleryRequest>[0]['confirmPlaybackHistoryReset']> | undefined;
+  const register = galleryRequests.registerPrivateGalleryRequest;
+  t.mock.method(galleryRequests, 'registerPrivateGalleryRequest', options => { confirm = options.confirmPlaybackHistoryReset; return register(options); });
+  const controller = new AbortController(); await f.create({ signal: controller.signal }); assert.ok(confirm);
+  let finish!: () => void;
+  t.mock.method(dialog, 'showMessageBox', async () => { await new Promise<void>(resolve => { finish = resolve; }); return { response: 0 }; });
+  const pending = confirm('lastPlayed', 1); controller.abort(); finish(); await assert.rejects(pending);
+});
+
+test('history reset owns and drains native confirmation after its private window closes', async t => {
+  const f = fixture(t); let writes = 0;
+  t.mock.method(f.hub, 'resetPlaybackHistory', async (_generation, metric, current, confirm) => {
+    assert.equal(metric, 'timesPlayed');
+    const approved = await confirm(3);
+    if (!current() || !approved) { return { status: 'cancelled' }; }
+    writes++; return { status: 'reset', count: 3 };
+  });
+  const browser = await f.create(); const window = windows[0];
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  let finish!: () => void; let start!: () => void;
+  const ready = new Promise<void>(resolve => { start = resolve; });
+  t.mock.method(dialog, 'showMessageBox', async (owner: unknown, options: any) => {
+    assert.equal(owner, window); assert.equal(options.title, 'Reset Times played?');
+    start(); await new Promise<void>(resolve => { finish = resolve; }); return { response: 0 };
+  });
+  const work = invokeHandlers.get('private-gallery-reset-playback-history')!(event, 'timesPlayed'); await ready;
+  let closed = false; const closing = browser.close().then(() => { closed = true; });
+  assert.equal(window.destroyed, true); assert.equal(invokeHandlers.size, 0);
+  await Promise.resolve(); assert.equal(closed, false); finish();
+  assert.deepEqual(await work, { status: 'unavailable' }); await closing;
+  assert.equal(writes, 0); assert.equal(closed, true); assert.equal(browser.status.cleanupFailed, false);
 });

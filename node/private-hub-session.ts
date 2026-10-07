@@ -1,7 +1,7 @@
 import type { FinalObject } from '../interfaces/final-object.interface';
 import { getImageLocations } from '../interfaces/media-locations';
 import { readPrivateHubCatalogue, PRIVATE_HUB_MAX_IMAGE_BYTES, type PrivateHubPreviewKind } from './private-hub-catalogue';
-import { resolvePrivatePreviewId } from './private-hub-preview-set';
+import { readPrivatePreviewSet, resolvePrivatePreviewId } from './private-hub-preview-set';
 import { verifyPrivateHubConversion, isPrivateHubConversionCleanupFailure } from './private-hub-conversion';
 import { createPrivateHubImageResponse } from './private-hub-image-response';
 import { createPrivateHubMediaResponse } from './private-hub-media-response';
@@ -12,10 +12,15 @@ import { isPrivatePreviewSource, privatePreviewSourceMatchesLocation, type Priva
 import type { PrivateVideoMetadata } from './private-preview-plan';
 import { checkPrivateVideoImport, createPrivateImportedVideo, snapshotPrivateVideoImportLocation,
   type PrivateVideoImportResult } from './private-video-import';
+import { checkPrivateVideoRefresh, createPrivateRefreshedVideo, snapshotPrivateVideoRefreshUpdate,
+  type PrivateVideoRefreshUpdate, type PrivateVideoRefreshResult } from './private-video-refresh';
 import { PrivateHubStore, isPrivateHubStoreCleanupFailure } from './private-hub-store';
 import { CATALOGUE_FILE_MAX_BYTES, parseVhaJson } from './vha-file-persistence';
 import { applyPrivateVideoMetadata, privateVideoRevision, snapshotPrivateVideoMetadataUpdate,
   type PrivateVideoMetadataUpdate, type PrivateVideoMetadataResult } from './private-hub-metadata';
+import { applyPrivatePlaybackHistory, snapshotPrivatePlaybackHistoryUpdate,
+  type PrivatePlaybackHistoryUpdate, type PrivatePlaybackHistoryResult,
+  type PrivatePlaybackHistoryMetric, type PrivatePlaybackHistoryResetResult } from './private-playback-history';
 import { isPrivateSourceRelocationReview, type PrivateSourceRelocationReview } from './private-source-relocation';
 import { isPrivateSourceAdditionReview, privateSourceRootsOverlap, type PrivateSourceAdditionReview } from './private-source-addition';
 import { snapshotPrivateHubProtection, type PrivateHubProtection } from '../interfaces/private-hub-protection';
@@ -649,6 +654,202 @@ export class PrivateHubSession {
     }
   }
 
+  /** One policy-checked history transaction for a main-owned playback acknowledgement. */
+  async recordVideoPlayback(
+    generation: number, value: PrivatePlaybackHistoryUpdate, isCurrent: () => boolean,
+  ): Promise<PrivatePlaybackHistoryResult> {
+    let requestBytes: Buffer | undefined;
+    let outputBytes: Buffer | undefined;
+    let revoked = false;
+    let checking = false;
+    let writing = false;
+    const current = (): boolean => {
+      if (revoked || checking) { return false; }
+      checking = true;
+      try {
+        if (!this.isCurrent(generation) || typeof isCurrent !== 'function' || isCurrent() !== true || !this.isCurrent(generation)) {
+          revoked = true;
+        }
+      } catch { revoked = true; }
+      finally { checking = false; }
+      return !revoked;
+    };
+    const check = (): void => { if (!current()) { throw unavailable(); } };
+    const storageFailure = (): never => {
+      // Publication may have completed before a failed/retired handoff. Do not
+      // keep live authority over an uncertain result or retry its increment.
+      if (this.isCurrent(generation) && (writing || current())) { void this.lock('storage-error').catch(() => undefined); }
+      throw unavailable();
+    };
+    const retain = (bytes: Buffer): void => {
+      this.#pendingWrites.add(bytes);
+      this.#pendingWriteBytes += bytes.length;
+    };
+    try {
+      this.assertCurrent(generation);
+      const snapshot = snapshotPrivatePlaybackHistoryUpdate(value);
+      if (!snapshot) { return { status: 'invalid' }; }
+      if (this.#previewJob || this.#protectionSaving || this.#passwordChanging || this.#plaintextCopying
+        || this.#pendingOperations >= MAX_PENDING_OPERATIONS) { return { status: 'busy' }; }
+      requestBytes = Buffer.from(JSON.stringify(snapshot));
+      if (requestBytes.length + this.#pendingWriteBytes > CATALOGUE_FILE_MAX_BYTES) { return { status: 'busy' }; }
+      // Reserve before an authority callback can admit generation or export.
+      retain(requestBytes);
+      check();
+      const queued = requestBytes;
+      const result = await this.enqueue(generation, async store => {
+        check();
+        let policy: PrivateHubProtection;
+        try { policy = await readPrivateHubProtection(store); }
+        catch { return storageFailure(); }
+        check();
+        if (policy.recordPlaybackHistory !== true) { return { status: 'disabled' } as const; }
+        let raw: Buffer | undefined;
+        let catalogue: FinalObject;
+        try {
+          try { raw = await store.readRecord('catalogue', CATALOGUE_FILE_MAX_BYTES); }
+          catch { return storageFailure(); }
+          check();
+          try {
+            parseVhaJson(raw);
+            catalogue = JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, '')) as FinalObject;
+          } catch { return storageFailure(); }
+        } finally { raw?.fill(0); }
+        check();
+        const update = JSON.parse(queued.toString('utf8')) as PrivatePlaybackHistoryUpdate;
+        queued.fill(0);
+        const image = catalogue.images[update.index];
+        if (!image || privateVideoRevision(image) !== update.revision) { return { status: 'conflict' } as const; }
+        const edited = applyPrivatePlaybackHistory(image, update);
+        if (!edited) { return { status: 'invalid' } as const; }
+        catalogue.images[update.index] = edited;
+        const json = JSON.stringify(catalogue);
+        const length = Buffer.byteLength(json);
+        if (length > CATALOGUE_FILE_MAX_BYTES) { return { status: 'invalid' } as const; }
+        if (length + this.#pendingWriteBytes > CATALOGUE_FILE_MAX_BYTES) { return { status: 'busy' } as const; }
+        outputBytes = Buffer.from(json);
+        retain(outputBytes);
+        check();
+        try {
+          writing = true;
+          const publication = store.writeRecord('catalogue', outputBytes, current);
+          outputBytes.fill(0);
+          await publication;
+        } catch { return storageFailure(); }
+        check();
+        return { status: 'recorded', image: edited } as const;
+      });
+      check();
+      return result;
+    } catch {
+      if (writing && this.isCurrent(generation)) { void this.lock('storage-error').catch(() => undefined); }
+      throw unavailable();
+    } finally {
+      for (const bytes of [requestBytes, outputBytes]) {
+        if (!bytes) { continue; }
+        bytes.fill(0);
+        if (this.#pendingWrites.delete(bytes)) { this.#pendingWriteBytes -= bytes.length; }
+      }
+    }
+  }
+
+  /** Review and reset one metric in the serial queue; confirmation receives only its bounded count. */
+  async resetPlaybackHistory(
+    generation: number, metric: PrivatePlaybackHistoryMetric, isCurrent: () => boolean,
+    confirm: (count: number) => Promise<boolean>,
+  ): Promise<PrivatePlaybackHistoryResetResult> {
+    let reservation: Buffer | undefined;
+    let outputBytes: Buffer | undefined;
+    let revoked = false;
+    let checking = false;
+    let writing = false;
+    const current = (): boolean => {
+      if (revoked || checking) { return false; }
+      checking = true;
+      try {
+        if (!this.isCurrent(generation) || typeof isCurrent !== 'function' || isCurrent() !== true || !this.isCurrent(generation)) {
+          revoked = true;
+        }
+      } catch { revoked = true; }
+      finally { checking = false; }
+      return !revoked;
+    };
+    const check = (): void => { if (!current()) { throw unavailable(); } };
+    const storageFailure = (): never => {
+      if (this.isCurrent(generation) && (writing || current())) { void this.lock('storage-error').catch(() => undefined); }
+      throw unavailable();
+    };
+    const retain = (bytes: Buffer): void => {
+      this.#pendingWrites.add(bytes);
+      this.#pendingWriteBytes += bytes.length;
+    };
+    try {
+      this.assertCurrent(generation);
+      if ((metric !== 'lastPlayed' && metric !== 'timesPlayed') || typeof confirm !== 'function') { return { status: 'invalid' }; }
+      if (this.#previewJob || this.#protectionSaving || this.#passwordChanging || this.#plaintextCopying
+        || this.#pendingOperations >= MAX_PENDING_OPERATIONS) { return { status: 'busy' }; }
+      reservation = Buffer.from(metric);
+      if (reservation.length + this.#pendingWriteBytes > CATALOGUE_FILE_MAX_BYTES) { return { status: 'busy' }; }
+      // Reserve before invoking main-owned callbacks, including the authority predicate.
+      // Generation, export and password changes must not enter during confirmation.
+      retain(reservation);
+      check();
+      const result = await this.enqueue(generation, async store => {
+        check();
+        let raw: Buffer | undefined;
+        let catalogue: FinalObject;
+        try {
+          try { raw = await store.readRecord('catalogue', CATALOGUE_FILE_MAX_BYTES); }
+          catch { return storageFailure(); }
+          check();
+          try {
+            parseVhaJson(raw);
+            // Keep unknown fields and legacy values; the validated projection can normalize them.
+            catalogue = JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, '')) as FinalObject;
+          } catch { return storageFailure(); }
+        } finally { raw?.fill(0); }
+        check();
+        let count = 0;
+        for (const image of catalogue.images) {
+          if (!image || typeof image !== 'object' || !Object.hasOwn(image, metric) || image[metric] === 0) { continue; }
+          if (++count > 100_000) { return { status: 'invalid' } as const; }
+          // Explicit maintenance also clears malformed, deleted and folder-row metrics.
+          image[metric] = 0;
+        }
+        if (!count) { return { status: 'unchanged' } as const; }
+        const json = JSON.stringify(catalogue);
+        const length = Buffer.byteLength(json);
+        if (length > CATALOGUE_FILE_MAX_BYTES) { return { status: 'invalid' } as const; }
+        if (length + this.#pendingWriteBytes > CATALOGUE_FILE_MAX_BYTES) { return { status: 'busy' } as const; }
+        outputBytes = Buffer.from(json);
+        retain(outputBytes);
+        check();
+        const accepted = await confirm(count);
+        check();
+        if (accepted !== true) { return { status: 'cancelled' } as const; }
+        try {
+          writing = true;
+          const publication = store.writeRecord('catalogue', outputBytes, current);
+          outputBytes.fill(0);
+          await publication;
+        } catch { return storageFailure(); }
+        check();
+        return { status: 'reset', count } as const;
+      });
+      check();
+      return result;
+    } catch {
+      if (writing && this.isCurrent(generation)) { void this.lock('storage-error').catch(() => undefined); }
+      throw unavailable();
+    } finally {
+      for (const bytes of [reservation, outputBytes]) {
+        if (!bytes) { continue; }
+        bytes.fill(0);
+        if (this.#pendingWrites.delete(bytes)) { this.#pendingWriteBytes -= bytes.length; }
+      }
+    }
+  }
+
   /** One guarded read/compare/write transaction; no whole-catalogue data crosses private IPC. */
   async updateVideoMetadata(
     generation: number, value: PrivateVideoMetadataUpdate, isCurrent: () => boolean,
@@ -1108,6 +1309,180 @@ export class PrivateHubSession {
       try { if (externalSignal?.aborted || authorized() !== true) { throw unavailable(); } }
       catch { throw unavailable(); }
       return result;
+    }, error => { throw isPrivatePreviewGenerationCleanupFailure(error) ? error : unavailable(); });
+  }
+
+  /**
+   * Refresh one saved original into a fresh encrypted namespace. Only the final
+   * catalogue replacement exposes its technical fields and complete previews.
+   * Admitted work owns the source until decoder/descriptor drainage completes.
+   */
+  refreshVideo(
+    generation: number, source: PrivatePreviewSource, location: PrivatePreviewSourceLocation,
+    update: PrivateVideoRefreshUpdate, options: { signal?: AbortSignal; isCurrent: () => boolean },
+  ): Promise<PrivateVideoRefreshResult> {
+    let selected: Readonly<PrivatePreviewSourceLocation>;
+    let request: Readonly<PrivateVideoRefreshUpdate>;
+    let externalSignal: AbortSignal | undefined;
+    let authorized: () => boolean;
+    try {
+      this.assertCurrent(generation);
+      if (!isPrivatePreviewSource(source) || !options || typeof options.isCurrent !== 'function') { throw unavailable(); }
+      const snapshot = snapshotPrivateVideoRefreshUpdate(update);
+      if (!snapshot) { return Promise.resolve({ status: 'invalid' }); }
+      request = snapshot;
+      selected = snapshotPrivateVideoImportLocation(location);
+      externalSignal = options.signal;
+      authorized = options.isCurrent;
+      if ((externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) || externalSignal?.aborted
+        || !privatePreviewSourceMatchesLocation(source, selected)) { throw unavailable(); }
+      if (this.#previewJob || this.#protectionSaving || this.#passwordChanging || this.#plaintextCopying
+        || this.#pendingWrites.size > 0 || this.#pendingOperations >= MAX_PENDING_OPERATIONS) {
+        return Promise.resolve({ status: 'busy' });
+      }
+    } catch { return Promise.reject(unavailable()); }
+    const controller = new AbortController();
+    const abort = (): void => controller.abort();
+    let checking = false;
+    let writing = false;
+    const isCurrent = (): boolean => {
+      if (checking) { return false; }
+      let current = false;
+      checking = true;
+      try {
+        current = !controller.signal.aborted && !externalSignal?.aborted && this.isCurrent(generation)
+          && authorized() === true && source.isCurrent() && this.isCurrent(generation)
+          && !controller.signal.aborted && !externalSignal?.aborted;
+      } catch { /* Trusted callbacks still cannot leak private diagnostics. */ }
+      finally { checking = false; }
+      if (!current) { controller.abort(); }
+      return current;
+    };
+    const check = (): void => { if (!isCurrent()) { throw unavailable(); } };
+    const storageFailure = (): never => {
+      if (this.isCurrent(generation)) { void this.lock('storage-error').catch(() => undefined); }
+      throw unavailable();
+    };
+    // The first authority/source callback runs after admission has been reserved.
+    const work = Promise.resolve().then(async (): Promise<PrivateVideoRefreshResult> => {
+      let outputBytes: Buffer | undefined;
+      try {
+        check();
+        const catalogue = await this.enqueue(generation, async store => {
+          let raw: Buffer | undefined;
+          try {
+            try { raw = await store.readRecord('catalogue', CATALOGUE_FILE_MAX_BYTES); }
+            catch { return storageFailure(); }
+            check();
+            try {
+              parseVhaJson(raw);
+              return JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, '')) as FinalObject;
+            } catch { return storageFailure(); }
+          } finally { raw?.fill(0); }
+        });
+        check();
+        const eligibility = checkPrivateVideoRefresh(catalogue, selected, request);
+        if (eligibility !== 'ready') { return { status: eligibility }; }
+        const namespaceTaken = await this.enqueue(generation, async store => {
+          check();
+          try { return await readPrivatePreviewSet(store, selected.hash) !== undefined; }
+          catch { return storageFailure(); }
+        });
+        check();
+        if (namespaceTaken) { return { status: 'conflict' }; }
+        let metadata: PrivateVideoMetadata | undefined;
+        const set = await generatePrivateHubPreviews(this.assertCurrent(generation), source, catalogue.screenshotSettings,
+          { signal: controller.signal, isCurrent, onMetadata: value => {
+            check();
+            if (metadata) { throw unavailable(); }
+            metadata = Object.freeze({ ...value });
+          } });
+        check();
+        if (!metadata) { throw unavailable(); }
+        const replacement = createPrivateRefreshedVideo(catalogue.images[request.index], source, selected, metadata, set);
+        // Re-read under the serial queue immediately before publication. Public
+        // mutation admission is closed, but never overwrite an unexpected writer.
+        return await this.enqueue(generation, async store => {
+          check();
+          let raw: Buffer | undefined;
+          let latest: FinalObject;
+          try {
+            try { raw = await store.readRecord('catalogue', CATALOGUE_FILE_MAX_BYTES); }
+            catch { return storageFailure(); }
+            check();
+            try {
+              parseVhaJson(raw);
+              latest = JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, '')) as FinalObject;
+            } catch { return storageFailure(); }
+          } finally { raw?.fill(0); }
+          check();
+          const latestEligibility = checkPrivateVideoRefresh(latest, selected, request);
+          if (latestEligibility !== 'ready') { return { status: latestEligibility }; }
+          if (JSON.stringify(latest.screenshotSettings) !== JSON.stringify(catalogue.screenshotSettings)) {
+            return { status: 'conflict' };
+          }
+          latest.images[request.index] = replacement;
+          const json = JSON.stringify(latest);
+          const length = Buffer.byteLength(json);
+          if (length > CATALOGUE_FILE_MAX_BYTES) { return { status: 'invalid' }; }
+          if (length + this.#pendingWriteBytes > CATALOGUE_FILE_MAX_BYTES) { return { status: 'busy' }; }
+          const hashes = catalogueHashes(parseVhaJson(json));
+          outputBytes = Buffer.from(json);
+          this.#pendingWrites.add(outputBytes);
+          this.#pendingWriteBytes += outputBytes.length;
+          check();
+          try {
+            writing = true;
+            const publication = store.writeRecord('catalogue', outputBytes, isCurrent);
+            outputBytes.fill(0);
+            await publication;
+            // Uncertain publication must retire both the old and new authority.
+            check();
+            this.#hashes = hashes;
+          } catch { return storageFailure(); }
+          check();
+          return { status: 'refreshed', image: replacement };
+        });
+      } finally {
+        controller.abort();
+        externalSignal?.removeEventListener('abort', abort);
+        if (outputBytes) {
+          outputBytes.fill(0);
+          if (this.#pendingWrites.delete(outputBytes)) { this.#pendingWriteBytes -= outputBytes.length; }
+        }
+        await source.close();
+      }
+    }).catch(error => {
+      if (isPrivatePreviewGenerationCleanupFailure(error)) {
+        this.#previewCleanupFailure = error;
+        void this.lock('storage-error').catch(() => undefined);
+        throw error;
+      }
+      if (writing && this.isCurrent(generation)) { void this.lock('storage-error').catch(() => undefined); }
+      throw unavailable();
+    });
+    const drained = work.then(() => undefined, error => {
+      if (isPrivatePreviewGenerationCleanupFailure(error)) { throw error; }
+    });
+    this.#previewController = controller;
+    this.#previewJob = drained;
+    externalSignal?.addEventListener('abort', abort, { once: true });
+    const cleanup = (): void => {
+      if (this.#previewJob === drained) { this.#previewJob = undefined; }
+      if (this.#previewController === controller) { this.#previewController = undefined; }
+    };
+    void drained.then(cleanup, cleanup);
+    return work.then(result => {
+      try {
+        this.assertCurrent(generation);
+        if (externalSignal?.aborted || authorized() !== true || !this.isCurrent(generation) || externalSignal?.aborted) { throw unavailable(); }
+        return result;
+      } catch {
+        // Source cleanup is awaited after publication. Cancellation during that
+        // drain can no longer safely return the old renderer row as current.
+        if (writing && this.isCurrent(generation)) { void this.lock('storage-error').catch(() => undefined); }
+        throw unavailable();
+      }
     }, error => { throw isPrivatePreviewGenerationCleanupFailure(error) ? error : unavailable(); });
   }
 

@@ -6,11 +6,13 @@ export const PRIVATE_GALLERY_CHANNELS = Object.freeze({
   list: 'private-gallery-list', detail: 'private-gallery-detail', save: 'private-gallery-save', lock: 'private-gallery-lock',
   sources: 'private-gallery-sources', addSource: 'private-gallery-add-source', connectSource: 'private-gallery-connect-source',
   relocateSource: 'private-gallery-relocate-source',
-  scanSource: 'private-gallery-scan-source',
+  scanSource: 'private-gallery-scan-source', checkSource: 'private-gallery-check-source',
   importVideo: 'private-gallery-import-video', importProgress: 'private-gallery-import-progress', cancelImport: 'private-gallery-cancel-import',
   disconnectSource: 'private-gallery-disconnect-source', cancelSourceConnection: 'private-gallery-cancel-source-connection',
   playOriginal: 'private-gallery-play-original', stopOriginal: 'private-gallery-stop-original',
-  regenerate: 'private-gallery-regenerate', cancelRegeneration: 'private-gallery-cancel-regeneration',
+  ackOriginalPlayback: 'private-gallery-ack-original-playback',
+  resetPlaybackHistory: 'private-gallery-reset-playback-history',
+  regenerate: 'private-gallery-regenerate', refreshVideo: 'private-gallery-refresh-video', cancelRegeneration: 'private-gallery-cancel-regeneration',
   protection: 'private-gallery-protection', setProtection: 'private-gallery-set-protection',
   changePassword: 'private-credentials-change-password',
   touchIdStatus: 'private-credentials-touch-id-status',
@@ -49,6 +51,7 @@ export interface PrivateGalleryDetail extends PrivateGalleryItem {
   editable: boolean;
   revision: string;
   regenerable: boolean;
+  refreshable: boolean;
   playable: boolean;
 }
 export type PrivateGalleryUnavailable = { status: 'busy' | 'unavailable' };
@@ -68,6 +71,18 @@ export type PrivateGallerySourceDisconnection = PrivateGalleryUnavailable | { st
   | { status: 'disconnected'; item: PrivateGallerySource };
 export type PrivateGallerySourceRelocation = PrivateGalleryUnavailable
   | { status: 'relocated' | 'cancelled' | 'conflict' | 'invalid' | 'source-unavailable' };
+/** Counts of saved file locations, not unique catalogue videos. */
+export interface PrivateGallerySourceCheckCounts {
+  total: number;
+  sameSize: number;
+  differentSize: number;
+  missing: number;
+  unverified: number;
+  ignored: number;
+}
+export type PrivateGallerySourceCheck = PrivateGalleryUnavailable
+  | { status: 'cancelled' | 'conflict' | 'invalid' | 'limit' | 'wrong-folder' | 'source-unavailable' }
+  | ({ status: 'checked' } & PrivateGallerySourceCheckCounts);
 export interface PrivateGalleryImportCounts {
   total: number;
   processed: number;
@@ -97,9 +112,18 @@ export type PrivateGallerySave = PrivateGalleryUnavailable | { status: 'conflict
 export type PrivateGalleryOriginalPlayback = PrivateGalleryUnavailable
   | { status: 'cancelled' | 'conflict' | 'source-unavailable' | 'wrong-folder' | 'unsupported' }
   | { status: 'ready'; url: string };
+export type PrivateGalleryPlaybackAcknowledgement = PrivateGalleryUnavailable
+  | { status: 'recorded' | 'disabled' | 'ignored' | 'conflict' | 'invalid' };
+export type PrivateGalleryPlaybackHistoryMetric = 'lastPlayed' | 'timesPlayed';
+export type PrivateGalleryPlaybackHistoryReset = PrivateGalleryUnavailable
+  | { status: 'unchanged' | 'cancelled' | 'invalid' }
+  | { status: 'reset'; count: number };
 export type PrivateGalleryRegeneration = PrivateGalleryUnavailable
   | { status: 'cancelled' | 'conflict' | 'source-unavailable' | 'wrong-folder' }
   | { status: 'generated'; item: PrivateGalleryDetail };
+export type PrivateGalleryRefresh = PrivateGalleryUnavailable
+  | { status: 'cancelled' | 'conflict' | 'invalid' | 'source-unavailable' | 'wrong-folder' }
+  | { status: 'refreshed'; item: PrivateGalleryDetail };
 export type PrivateCredentialsPasswordChange = { status: 'changed' | 'incorrect-password' | 'invalid' | 'busy' | 'unavailable' };
 export type PrivateCredentialsUnprotectedCopy = {
   status: 'copied' | 'incorrect-password' | 'cancelled' | 'failed' | 'invalid' | 'busy' | 'unavailable';
