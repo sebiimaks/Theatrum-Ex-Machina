@@ -6,7 +6,7 @@ Use the [release downloads](https://github.com/sebiimaks/Theatrum-Ex-Machina/rel
 
 ## Prerequisites
 
-Use a Node.js version supported by `package.json` (`^22.12.0` or `>=24.0.0`) and install dependencies with `npm ci`. Build natively on Apple Silicon macOS or AMD64 Linux. Media-tool compilation requires `curl`, `make`, `pkg-config`, `tar`, and a C compiler; Linux also requires `nasm` and `xz`.
+Use a Node.js version supported by `package.json` (`^22.12.0` or `>=24.0.0`) and install dependencies with `npm ci`. Build natively on Apple Silicon macOS or AMD64 Linux. Media-tool compilation requires `curl`, `make`, `pkg-config`, `tar`, and a C compiler; Linux also requires `nasm`, `xz`, and the system zlib development package (`zlib1g-dev` on Debian/Ubuntu). On macOS, zlib headers and the system library are supplied with the Apple development tools. FFmpeg explicitly enables zlib for PNG decoding; package checks verify the decoder and require system-only media-tool library linkage.
 
 Review [LICENSE](./LICENSE), [third-party notices](./legal/THIRD_PARTY_NOTICES.txt), and [media-tool licensing](./legal/MEDIA-TOOLS.md) before distributing a package.
 

@@ -18,6 +18,8 @@ test('keeps Debian packaging native, AMD64-specific, verified, and non-publishin
   assert.ok(builder.linux.target.includes('deb'));
   assert.equal(builder.linux.category, 'AudioVideo;Video');
   assert.equal(builder.linux.desktop.entry.Categories, undefined);
+  assert.deepEqual(builder.deb.fpm, ['--depends', 'zlib1g']);
+  assert.equal(builder.deb.depends, undefined, 'Keep the default Electron dependencies.');
   assert.equal(
     builder.linux.artifactName,
     'theatrum-ex-machina-v${version}-linux-${arch}.${ext}',
@@ -30,6 +32,7 @@ test('keeps Debian packaging native, AMD64-specific, verified, and non-publishin
   assert.match(workflow, /runs-on:\s*ubuntu-22\.04/);
   assert.match(workflow, /node-version:\s*24\.16\.0/);
   assert.match(workflow, /npm run media:build/);
+  assert.match(workflow, /zlib1g-dev/);
   assert.match(workflow, /npm run check/);
   assert.match(workflow, /npm test/);
   assert.match(workflow, /--linux deb --x64 --publish never/);
@@ -44,6 +47,7 @@ test('keeps Debian packaging native, AMD64-specific, verified, and non-publishin
 
   assert.match(verifier, /Architecture'\), 'amd64'/);
   assert.match(verifier, /Target: linux-amd64/);
+  assert.match(verifier, /zlib1g/);
   assert.match(verifier, /THEATRUM_PACKAGED_SMOKE_READY/);
   assert.match(verifier, /THIRD_PARTY_NOTICES\.txt/);
   assert.match(verifier, /theatrum-ex-machina-media-source-v\$\{packageVersion\}-linux-amd64/);

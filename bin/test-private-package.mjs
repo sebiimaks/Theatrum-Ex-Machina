@@ -18,9 +18,10 @@ const require = createRequire(import.meta.url);
 const asar = require('@electron/asar');
 const { getCurrentFuseWire, FuseV1Options } = require('@electron/fuses');
 const args = process.argv.slice(2);
-const hostMode = args.includes('--host');
-assert.ok(args.filter(value => value === '--host').length <= 1);
-const appArguments = args.filter(value => value !== '--host');
+const crashMode = args.includes('--host-crash');
+const hostMode = args.includes('--host') || crashMode;
+assert.ok(args.filter(value => value === '--host' || value === '--host-crash').length <= 1);
+const appArguments = args.filter(value => value !== '--host' && value !== '--host-crash');
 assert.ok(appArguments.length <= 1 && !appArguments.some(value => value.startsWith('--')));
 const sourceApp = path.resolve(appArguments[0] || path.join(repository, 'release-test', 'mac-arm64', 'Theatrum Ex Machina.app'));
 assert.ok(sourceApp.startsWith(repository + path.sep) && sourceApp.endsWith('.app'));
@@ -90,10 +91,14 @@ const resources = path.join(fixtureApp, 'Contents', 'Resources');
 const profile = path.join(fixture, 'profile');
 const encrypted = hostMode ? path.join(fixture, 'ordinary-hub', 'selected-folder', 'Private hub 2') : path.join(fixture, 'encrypted-hub');
 const password = 'Packaged private password ' + randomBytes(24).toString('hex');
+const newPassword = 'Packaged replacement password ' + randomBytes(24).toString('hex');
 const marker = 'PACKAGED_PRIVATE_' + randomBytes(24).toString('hex');
-const forbidden = [password, marker].flatMap(value => [Buffer.from(value), Buffer.from(value, 'utf16le')]);
-const expectedStages = hostMode
-  ? ['host-started', 'host-created', 'host-restored', 'host-reopened', 'host-closed']
+const forbidden = [password, newPassword, marker].flatMap(value => [Buffer.from(value), Buffer.from(value, 'utf16le')]);
+const expectedStages = crashMode
+  ? ['host-started', 'host-created', 'host-restored', 'crash-password-retired', 'crash-gallery-retired',
+    'crash-picker-held', 'crash-picker-drained', 'crash-reopened', 'host-closed']
+  : hostMode
+  ? ['host-started', 'host-created', 'host-restored', 'host-reopened', 'host-recovery-reviewed', 'host-recovery-reopened', 'host-closed']
   : ['packaged-material', 'static-protocols', 'credential-windows', 'private-gallery', 'private-closed'];
 const expectedChecks = hostMode ? {
   'host-started': ['packagedMain', 'ordinaryUiLoaded', 'nativeMenuRegistered', 'syntheticCatalogueLoaded'],
@@ -102,6 +107,22 @@ const expectedChecks = hostMode ? {
   'host-restored': ['privateDestroyed', 'ordinaryRestored', 'menuRestored', 'ordinaryUnchanged'],
   'host-reopened': ['nativePasswordUnlock', 'notesPersisted', 'previewDecoded', 'privateIsolated', 'noDiskCache'],
   'host-closed': ['privateDestroyed', 'ordinaryRestored', 'ordinaryClosed', 'settingsSaved', 'noPrivateRecentWrites'],
+  'host-recovery-reviewed': ['credentialsCleared', 'wrongCredentialsBeforeConfirmation', 'nativeConfirmationDefaultCancel',
+    'cancelledRecoveryUnchanged', 'ordinaryPaused', 'ordinaryUnchanged'],
+  'host-recovery-reopened': ['confirmedRecoveryLocked', 'ordinaryRestoredAfterRecovery', 'stagedEnvelopeAdopted',
+    'encryptedRecordsUnchanged', 'oldPasswordRejected', 'newPasswordReopened', 'savedNotesPreserved', 'previewDecoded',
+    'freshPrivateSessions', 'ordinaryPaused', 'noDiskCache'],
+  ...(crashMode ? {
+    'crash-password-retired': ['rendererKilled', 'unsentPasswordDiscarded', 'controlListenerRemovedSynchronously', 'ordinaryStayedPaused',
+      'privateDestroyed', 'ordinaryRestored', 'unownedProbeDenied', 'noDiskCache', 'fixtureCrashDirectoryEmpty'],
+    'crash-gallery-retired': ['rendererKilled', 'unsavedNotesPresent', 'encryptedPreviewDecoded', 'controlListenerRemovedSynchronously',
+      'ordinaryStayedPaused', 'privateDestroyed', 'ordinaryRestored', 'unownedProbeDenied', 'noDiskCache', 'encryptedFilesUnchanged'],
+    'crash-picker-held': ['rendererKilled', 'controlListenerRemovedSynchronously', 'privateDestroyed', 'ordinaryPaused',
+      'menuRestricted', 'pickerPending', 'unownedProbeDenied', 'encryptedFilesUnchanged'],
+    'crash-picker-drained': ['lateSelectionRejected', 'ordinaryRestored', 'menuRestored', 'encryptedFilesUnchanged', 'noDiskCache'],
+    'crash-reopened': ['nativePasswordUnlock', 'savedNotesPreserved', 'draftDiscarded', 'encryptedPreviewDecoded',
+      'freshSessions', 'noSourceGrant', 'unownedProbesDeniedAfterReopen', 'noDiskCache', 'fixtureCrashDirectoryEmpty'],
+  } : {}),
 } : {
   'packaged-material': ['packagedRuntime', 'compiledModules', 'fixedHelperPaths', 'nativeAddonLoaded', 'nativeLeaseUsed'],
   'static-protocols': ['unlockAssets', 'conversionAssets', 'galleryAssets', 'noStore', 'routesRestricted'],
@@ -117,7 +138,7 @@ async function scan(root, scope) {
   for (const entry of entries) {
     assert.ok(!entry.isSymbolicLink(), 'Persistent fixture storage must not contain symbolic links.');
     const file = path.join(root, entry.name);
-    assert.ok(![marker, password].some(value => entry.name.includes(value)), 'Private data appeared in a stored filename.');
+    assert.ok(![marker, password, newPassword].some(value => entry.name.includes(value)), 'Private data appeared in a stored filename.');
     if (entry.isDirectory()) { await scan(file, scope); continue; }
     if (!entry.isFile()) { continue; }
     let bytes;
@@ -221,7 +242,7 @@ async function run() {
     child.once('error', () => reject(new Error('Packaged fixture could not start.')));
     child.once('exit', (code, signal) => resolve({ code, signal }));
   });
-  child.send({ type: 'configuration', marker, password }, error => {
+  child.send({ type: 'configuration', marker, password, newPassword, crashMode }, error => {
     if (error) { failure ??= new Error('Fixture configuration failed.'); child.kill('SIGKILL'); }
   });
   try {
@@ -244,7 +265,7 @@ try {
   if (succeeded) { await fs.rm(fixture, { recursive: true, force: true }); }
   else { process.stderr.write('Synthetic packaged fixture retained under repository tmp for diagnosis.\n'); }
 }
-process.stdout.write(JSON.stringify({ passed: true, mode: hostMode ? 'host' : 'modules', evidence: hostMode
+process.stdout.write(JSON.stringify({ passed: true, mode: crashMode ? 'host-crash' : hostMode ? 'host' : 'modules', evidence: hostMode
   ? 'fixture loading untouched packaged main.js and its registered native menu entries; exact ASAR, unpacked UI assets and native resources; not signing acceptance'
   : 'fixture using exact packaged ASAR, unpacked UI assets and native resources; not untouched-app private entry or signing acceptance',
   archiveSha256: original.get(relativeMaterials[0]), unpackedFilesVerified: unpackedFiles.length, scans, filesScanned, checkpoints }) + '\n');

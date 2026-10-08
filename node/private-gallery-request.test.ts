@@ -69,6 +69,9 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
     return await options.chooseDestination() ? 'copied' : 'cancelled';
   };
   let changingPassword: PrivateHubSession['changePassword'] = async () => 'changed';
+  let confirmingPasswordRecovery = async () => true;
+  let resumingPassword: PrivateHubSession['resumePasswordChange'] = async (_generation, _value, _current, confirm) =>
+    await confirm() ? 'changed' : 'cancelled';
   const appliedProtection: unknown[] = [];
   let applyingProtection = (value: unknown): boolean => { appliedProtection.push(value); return true; };
   let reading = async (): Promise<FinalObject> => ({ images, hubName: 'Secret hub title',
@@ -88,6 +91,8 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
     images[update.index] = { ...selected, hash: source.hash, fileSize: source.byteLength, duration: 30, width: 640, height: 360, screens: 2 };
     return { status: 'refreshed', image: images[update.index] };
   };
+  let settingThumbnail: PrivateHubSession['setCustomThumbnail'] = async () => ({ status: 'updated' });
+  let choosingThumbnail: () => Promise<string | undefined> = async () => undefined;
   let importing: PrivateHubSession['importVideo'] = async () => ({ status: 'imported', index: 2 });
   let adding: PrivateHubSession['addSource'] = async (_generation, review, current) => {
     assert.equal(current(), true); assert.equal(review.isCurrent(), true); return { status: 'added' };
@@ -141,6 +146,7 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
       historyWrites.push(args[1]); return recording(...args);
     },
     refreshVideo: (...args: Parameters<PrivateHubSession['refreshVideo']>) => refreshing(...args),
+    setCustomThumbnail: (...args: Parameters<PrivateHubSession['setCustomThumbnail']>) => settingThumbnail(...args),
     generatePreviews: (...args: Parameters<PrivateHubSession['generatePreviews']>) => generating(...args),
     addSource: (...args: Parameters<PrivateHubSession['addSource']>) => adding(...args),
     importVideo: (...args: Parameters<PrivateHubSession['importVideo']>) => importing(...args),
@@ -151,18 +157,21 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
     disableTouchId: async () => 'disabled',
     updateProtection: (...args: Parameters<PrivateHubSession['updateProtection']>) => writingProtection(...args),
     changePassword: (...args: Parameters<PrivateHubSession['changePassword']>) => changingPassword(...args),
+    resumePasswordChange: (...args: Parameters<PrivateHubSession['resumePasswordChange']>) => resumingPassword(...args),
     createUnprotectedCopy: (...args: Parameters<PrivateHubSession['createUnprotectedCopy']>) => copying(...args),
   } as unknown as PrivateHubSession;
   const options = { contents: contents as unknown as WebContents, hub, generation: 7,
     isCurrent: () => current, onLock: () => lockAction(), chooseSourceDirectory, playback,
     chooseSourceLocation: (root: string) => choosingLocation(root),
     chooseImportVideo: (root: string) => choosingImport(root),
+    chooseCustomThumbnail: () => choosingThumbnail(),
     chooseNewSourceDirectory: () => choosingNewSource(),
     confirmSourceLocation: (root: string, videoCount: number) => confirmingLocation(root, videoCount),
     confirmSourceScan: (count: number, more: boolean) => confirmingScan(count, more),
     confirmPlaybackHistoryReset: (metric: 'lastPlayed' | 'timesPlayed', count: number) => {
       historyConfirmations.push({ metric, count }); return confirmingHistory(metric, count);
     },
+    confirmPasswordRecovery: () => confirmingPasswordRecovery(),
     onProtectionChanged: (value: unknown) => applyingProtection(value),
     chooseUnprotectedCopyDestination: copyDestination ? () => choosingCopyDestination!() : undefined };
   const dispose = register(options);
@@ -183,6 +192,9 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
   const event = { sender: contents, senderFrame: contents.mainFrame };
   return { contents, controller, options, event, list, detail, save, regenerate, dispose, edits, historyWrites,
     refreshVideo: handlers.get(channels.refreshVideo)!,
+    setCustomThumbnail: handlers.get(channels.setCustomThumbnail)!,
+    settingThumbnail: (next: typeof settingThumbnail) => { settingThumbnail = next; },
+    chooseThumbnail: (next: typeof choosingThumbnail) => { choosingThumbnail = next; },
     refreshing: (next: typeof refreshing) => { refreshing = next; },
     playOriginal: handlers.get(channels.playOriginal)!,
     ackOriginalPlayback: handlers.get(channels.ackOriginalPlayback)!,
@@ -210,6 +222,9 @@ function fixture(t: TestContext, images = [image(0), image(1)], initialUrl = ENT
     confirmLocation: (next: typeof confirmingLocation) => { confirmingLocation = next; },
     cancelSource: (...args: unknown[]) => ipcMain.emit(channels.cancelSourceConnection, event, ...args),
     changePassword: handlers.get(channels.changePassword)!,
+    resumePasswordChange: handlers.get(channels.resumePasswordChange)!,
+    resumingPassword: (next: typeof resumingPassword) => { resumingPassword = next; },
+    confirmPasswordRecovery: (next: typeof confirmingPasswordRecovery) => { confirmingPasswordRecovery = next; },
     createUnprotectedCopy: handlers.get(channels.createUnprotectedCopy)!,
     copying: (next: typeof copying) => { copying = next; },
     chooseCopy: (next: NonNullable<typeof choosingCopyDestination>) => { choosingCopyDestination = next; },
@@ -3668,4 +3683,263 @@ test('refresh closes original playback before requesting file access', async t =
   const before = stops;
   f.choose(async () => { assert.ok(stops > before); return f.root; });
   assert.equal((await f.refresh()).status, 'refreshed');
+});
+
+async function thumbnailFixture(t: TestContext, extension = 'jpg') {
+  const f = await sourceFixture(t);
+  const imagePath = path.join(f.root, 'chosen.' + extension);
+  await fs.writeFile(imagePath, 'Synthetic chosen image descriptor');
+  let picks = 0;
+  f.chooseThumbnail(async () => { picks++; return imagePath; });
+  return { ...f, imagePath, thumbnailPicks: () => picks,
+    thumbnail: (revision = f.item.revision) => f.setCustomThumbnail(f.event, { id: f.id, revision }) };
+}
+
+for (const extension of ['jpg', 'PNG']) {
+  test(`${extension} custom thumbnail uses an exact chosen file, preserves row authority and does not grant source access`, async t => {
+    const f = await thumbnailFixture(t, extension);
+    const stored = JSON.stringify(f.images);
+    let captured: Parameters<PrivateHubSession['setCustomThumbnail']>[1] | undefined;
+    f.settingThumbnail(async (generation, source, update, options) => {
+      captured = source;
+      assert.equal(generation, 7); assert.equal(source.hash, f.images[0].hash);
+      assert.deepEqual(update, { index: 0, revision: privateVideoRevision(f.images[0]) });
+      assert.equal(options.isCurrent(), true);
+      const lease = await source.open();
+      assert.equal((await lease.read(0, source.byteLength)).toString(), 'Synthetic chosen image descriptor');
+      await lease.close(); return { status: 'updated' };
+    });
+    const result = await f.thumbnail();
+    assert.equal(result.status, 'updated');
+    assert.equal(result.item.revision, f.item.revision);
+    assert.equal(result.item.clipUrl, f.item.clipUrl); assert.equal(result.item.filmstripUrl, f.item.filmstripUrl);
+    assert.equal(result.item.posterUrl, f.item.posterUrl); assert.notEqual(result.item.thumbnailUrl, f.item.thumbnailUrl);
+    assert.equal(JSON.stringify(f.images), stored); assert.equal(f.picks(), 0);
+    assert.equal(f.thumbnailPicks(), 1); assert.equal(captured!.isCurrent(), false);
+    assert.equal((await f.sources(f.event)).items[0].connected, false);
+    assert.doesNotMatch(JSON.stringify(result), /chosen\.(?:jpe?g|png)|gallery-source-|inputSource|partialPath|fileName/i);
+    assert.equal((await f.thumbnail()).status, 'updated', 'Thumbnail changes do not invalidate an unchanged metadata draft');
+  });
+}
+
+test('custom thumbnail eligibility does not require a saved or connected original source', async t => {
+  const f = fixture(t, [image(0)]);
+  f.read(async () => ({ images: [image(0)], inputDirs: {} } as unknown as FinalObject));
+  const id = (await f.page()).items[0].id;
+  const selected = (await f.detail(f.event, id)).item;
+  assert.equal(selected.thumbnailEditable, true); assert.equal(selected.regenerable, false); assert.equal(selected.playable, false);
+  assert.deepEqual(await f.setCustomThumbnail(f.event, { id, revision: selected.revision }), { status: 'cancelled' });
+});
+
+for (const change of ['notes', 'moved', 'duplicate-hash']) {
+  for (const when of ['before-picker', 'in-picker']) {
+    test(`custom thumbnail refuses ${change} changed ${when}`, async t => {
+      const f = await thumbnailFixture(t);
+      const mutate = () => {
+        if (change === 'notes') f.images[0].notes = 'Newer saved notes';
+        if (change === 'moved') f.images.unshift(image(42));
+        if (change === 'duplicate-hash') f.images.push({ ...f.images[0], deleted: true });
+      };
+      if (when === 'before-picker') mutate();
+      else f.chooseThumbnail(async () => { mutate(); return f.imagePath; });
+      f.settingThumbnail(async () => { assert.fail('Changed row must not import'); });
+      assert.deepEqual(await f.thumbnail(), { status: 'conflict' });
+    });
+  }
+}
+
+test('custom thumbnail requests reject paths, accessors, unissued IDs and untrusted frames', async t => {
+  const f = await thumbnailFixture(t); let getters = 0;
+  const request = { id: f.id, revision: f.item.revision };
+  for (const value of [null, [], {}, { ...request, path: f.imagePath }, { ...request, [Symbol('path')]: f.imagePath },
+    Object.defineProperty({ ...request }, 'hidden', { value: true }),
+    { id: f.id, get revision() { getters++; return f.item.revision; } }]) {
+    assert.deepEqual(await f.setCustomThumbnail(f.event, value), { status: 'invalid' });
+  }
+  assert.equal(getters, 0);
+  assert.deepEqual(await f.setCustomThumbnail({ ...f.event, senderFrame: new Contents().mainFrame }, request), { status: 'unavailable' });
+  assert.deepEqual(await f.setCustomThumbnail(f.event, { ...request, id: 'f'.repeat(32) }), { status: 'unavailable' });
+  assert.equal(f.thumbnailPicks(), 0);
+});
+
+for (const ending of ['cancel', 'lock', 'dispose', 'abort', 'navigate', 'replace-frame']) {
+  test(`custom thumbnail picker drains safely after ${ending}`, async t => {
+    const f = await thumbnailFixture(t);
+    let entered!: () => void, finish!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    f.chooseThumbnail(async () => { entered(); await new Promise<void>(resolve => { finish = resolve; }); return f.imagePath; });
+    f.settingThumbnail(async () => { assert.fail('Revoked picker cannot import'); });
+    const work = f.thumbnail(); await ready;
+    assert.deepEqual(await f.thumbnail(), { status: 'busy' }); assert.deepEqual(await f.page(), { status: 'busy' });
+    assert.deepEqual(await f.run(), { status: 'busy' }); assert.deepEqual(await f.refresh(), { status: 'busy' });
+    let drain: Promise<void> | undefined;
+    if (ending === 'cancel') f.cancel();
+    if (ending === 'lock') { f.lock(); drain = f.dispose(); }
+    if (ending === 'dispose') drain = f.dispose();
+    if (ending === 'abort') f.controller.abort();
+    if (ending === 'navigate') f.contents.emit('did-start-navigation', { isMainFrame: true, url: ENTRY });
+    if (ending === 'replace-frame') f.contents.mainFrame = new Contents().mainFrame;
+    let drained = false; void drain?.then(() => { drained = true; });
+    await Promise.resolve(); assert.equal(drained, false);
+    finish(); assert.deepEqual(await work, { status: ending === 'cancel' ? 'cancelled' : 'unavailable' }); await drain;
+  });
+}
+
+for (const callback of ['reader', 'picker', 'session']) {
+  test(`custom thumbnail registers its drain before reentrant disposal from ${callback}`, async t => {
+    const f = await thumbnailFixture(t);
+    let entered!: () => void, finish!: () => void, drain: Promise<void> | undefined;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const hold = new Promise<void>(resolve => { finish = resolve; });
+    const reenter = () => { drain = f.dispose(); entered(); return hold; };
+    if (callback === 'reader') f.read(async () => { await reenter(); return { images: f.images } as FinalObject; });
+    if (callback === 'picker') f.chooseThumbnail(async () => { await reenter(); return f.imagePath; });
+    if (callback === 'session') f.settingThumbnail(async () => { await reenter(); return { status: 'updated' }; });
+    const work = f.thumbnail(); await ready;
+    let drained = false; void drain!.then(() => { drained = true; });
+    await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(drained, false);
+    finish(); assert.deepEqual(await work, { status: 'unavailable' }); await drain;
+  });
+}
+
+for (const ending of ['cancel', 'throw', 'cancel-throw']) {
+  test(`custom thumbnail reconciles its route after uncertain publication: ${ending}`, async t => {
+    const f = await thumbnailFixture(t);
+    f.settingThumbnail(async () => {
+      if (ending.includes('cancel')) f.cancel();
+      if (ending.includes('throw')) throw new Error('Private image path');
+      return { status: 'updated' };
+    });
+    const result = await f.thumbnail();
+    assert.equal(result.status, ending.includes('cancel') ? 'cancelled' : 'unavailable');
+    const selected = (await f.detail(f.event, f.id)).item;
+    assert.notEqual(selected.thumbnailUrl, f.item.thumbnailUrl);
+    assert.equal(selected.revision, f.item.revision);
+    assert.equal(selected.notes, f.item.notes);
+  });
+}
+
+test('custom thumbnail source finalizer failure quarantines the private gallery', async t => {
+  const f = await thumbnailFixture(t); let restore: (() => Promise<void>) | undefined;
+  f.expectQuarantinedDisposal();
+  f.settingThumbnail(async (_generation, source) => {
+    restore = failSourceDescriptorClose(t, f.imagePath); await source.open(); return { status: 'updated' };
+  });
+  try {
+    assert.deepEqual(await f.thumbnail(), { status: 'unavailable' });
+    assert.ok(f.locks() >= 1); assert.deepEqual(await f.page(), { status: 'unavailable' });
+    await assert.rejects(f.dispose(), /Private gallery cleanup unavailable/);
+  } finally { await restore?.(); }
+});
+
+for (const kind of ['gif', 'video', 'relative', 'nul', 'missing', 'symlink']) {
+  test(`custom thumbnail rejects ${kind} picker output without publishing or granting parent access`, async t => {
+    const f = await thumbnailFixture(t);
+    let selected = f.imagePath;
+    if (kind === 'gif') selected = path.join(f.root, 'chosen.gif');
+    if (kind === 'video') selected = path.join(f.root, 'synthetic.mp4');
+    if (kind === 'relative') selected = 'chosen.jpg';
+    if (kind === 'nul') selected += '\0.jpg';
+    if (kind === 'missing') selected = path.join(f.root, 'missing.jpg');
+    if (kind === 'symlink') { selected = path.join(f.root, 'link.jpg'); await fs.symlink(f.imagePath, selected); }
+    f.chooseThumbnail(async () => selected);
+    f.settingThumbnail(async () => { assert.fail('Rejected selection must not publish'); });
+    assert.deepEqual(await f.thumbnail(), { status: ['missing', 'symlink'].includes(kind) ? 'source-unavailable' : 'invalid' });
+    assert.equal((await f.sources(f.event)).items[0].connected, false);
+    assert.equal(f.picks(), 0);
+  });
+}
+
+
+test('password recovery rejects malformed and foreign requests before credentials or native confirmation', async t => {
+  const f = fixture(t); let calls = 0; let confirmations = 0; let reads = 0;
+  f.resumingPassword(async () => { calls++; return 'not-found'; });
+  f.confirmPasswordRecovery(async () => { confirmations++; return true; });
+  for (const args of [[], [null], [{}], [passwordChange(), 'extra'], [{ ...passwordChange(), path: '/private' }],
+    [{ currentPassword: 'same', newPassword: 'same' }], [{ ...passwordChange(), newPassword: '\ud800' }],
+    [{ get currentPassword() { reads++; return 'private'; }, newPassword: 'replacement' }]]) {
+    assert.deepEqual(await f.resumePasswordChange(f.event, ...args), { status: 'invalid' });
+  }
+  const other = new Contents();
+  for (const event of [null, {}, { sender: other, senderFrame: f.contents.mainFrame },
+    { sender: f.contents, senderFrame: other.mainFrame }]) {
+    assert.deepEqual(await f.resumePasswordChange(event, passwordChange()), { status: 'unavailable' });
+  }
+  assert.equal(calls, 0); assert.equal(confirmations, 0); assert.equal(reads, 0);
+});
+
+test('password recovery clears copied credentials before authentication completes and passes no review data to the dialog', async t => {
+  const f = fixture(t); let seen: any; let copied: unknown; let confirm!: () => Promise<boolean>;
+  let finish!: (result: 'cancelled') => void;
+  f.resumingPassword((_generation, value, current, callback) => {
+    assert.equal(_generation, 7); assert.equal(current(), true); seen = value;
+    copied = snapshotPrivateHubPasswordChange(value); confirm = callback;
+    return new Promise(resolve => { finish = resolve; });
+  });
+  let confirmations = 0;
+  f.confirmPasswordRecovery(async (...args: unknown[]) => { assert.deepEqual(args, []); confirmations++; return false; });
+  const caller = passwordChange(); const work = f.resumePasswordChange(f.event, caller);
+  caller.currentPassword = 'caller changed'; await Promise.resolve();
+  assert.deepEqual(copied, passwordChange()); assert.deepEqual(seen, { currentPassword: '', newPassword: '' });
+  assert.equal(confirmations, 0, 'Only storage authentication may request confirmation');
+  assert.equal(await confirm(), false); assert.equal(confirmations, 1);
+  finish('cancelled'); assert.deepEqual(await work, { status: 'cancelled' });
+  assert.equal(caller.currentPassword, 'caller changed'); assert.equal(f.locks(), 0);
+  assert.equal((await f.page()).status, 'ready');
+});
+
+test('password recovery has only bounded retryable status outcomes and never exposes storage errors', async t => {
+  const f = fixture(t); let confirmations = 0;
+  f.confirmPasswordRecovery(async () => { confirmations++; return true; });
+  for (const status of ['incorrect-password', 'not-found', 'cancelled'] as const) {
+    f.resumingPassword(async () => status);
+    assert.deepEqual(await f.resumePasswordChange(f.event, passwordChange()), { status });
+    assert.equal((await f.page()).status, 'ready');
+  }
+  f.resumingPassword(async () => { throw new Error('private password /private/path'); });
+  assert.deepEqual(await f.resumePasswordChange(f.event, passwordChange()), { status: 'unavailable' });
+  assert.equal(confirmations, 0); assert.equal(f.locks(), 0);
+});
+
+for (const ending of ['lock', 'dispose', 'abort', 'replace-frame', 'navigate']) {
+  test(`password recovery confirmation drains and cannot publish after ${ending}`, async t => {
+    const f = fixture(t); let finish!: (confirmed: boolean) => void;
+    let started!: () => void; const shown = new Promise<void>(resolve => { started = resolve; });
+    f.confirmPasswordRecovery(() => { started(); return new Promise(resolve => { finish = resolve; }); });
+    let accepted: boolean | undefined;
+    f.resumingPassword(async (_generation, _value, _current, confirm) => { accepted = await confirm(); return accepted ? 'changed' : 'cancelled'; });
+    const work = f.resumePasswordChange(f.event, passwordChange()); await shown;
+    assert.deepEqual(await f.resumePasswordChange(f.event, passwordChange()), { status: 'busy' });
+    assert.deepEqual(await f.changePassword(f.event, passwordChange()), { status: 'busy' });
+    assert.deepEqual(await f.page(), { status: 'busy' });
+    if (ending === 'lock') { f.lock(); }
+    if (ending === 'dispose') { void f.dispose(); }
+    if (ending === 'abort') { f.controller.abort(); }
+    if (ending === 'replace-frame') { f.contents.mainFrame = new Contents().mainFrame; }
+    if (ending === 'navigate') { f.contents.emit('did-start-navigation', { isMainFrame: true, url: ENTRY }); }
+    let drained = false; const disposal = f.dispose().then(() => { drained = true; });
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(drained, false);
+    finish(true); assert.deepEqual(await work, { status: 'unavailable' }); assert.equal(accepted, false);
+    await disposal; assert.equal(drained, true);
+  });
+}
+
+test('confirmed password recovery revokes both authorities and waits for session lock independently of UI cleanup', async t => {
+  const f = fixture(t); let finish!: () => void; let returned = false;
+  f.locking(() => { f.stale(); return new Promise<void>(resolve => { finish = resolve; }); });
+  let disposal!: Promise<void>;
+  f.lockAction(() => { disposal = f.dispose(); });
+  const work = f.resumePasswordChange(f.event, passwordChange()).then(value => { returned = true; return value; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.hubLocks(), 1); assert.equal(returned, false);
+  assert.deepEqual(await f.resumePasswordChange(f.event, passwordChange()), { status: 'unavailable' });
+  finish(); assert.deepEqual(await work, { status: 'changed' }); await disposal;
+});
+
+test('password recovery UI cleanup failure cannot retain the session and reports failed disposal', async t => {
+  const f = fixture(t); f.expectQuarantinedDisposal();
+  f.lockAction(() => { throw new Error('private UI failure'); });
+  assert.deepEqual(await f.resumePasswordChange(f.event, passwordChange()), { status: 'unavailable' });
+  assert.equal(f.hubLocks(), 1);
+  await assert.rejects(f.dispose(), /Private gallery cleanup unavailable/);
 });

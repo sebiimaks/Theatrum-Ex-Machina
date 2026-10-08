@@ -707,6 +707,167 @@ export class PrivateHubStore {
     }
   }
 
+  /**
+   * Explicitly finish an interrupted password change. Both credentials must
+   * authenticate this session's data key before asking for confirmation. Adopt
+   * the verified staging inode itself; never delete an unrecognized credential.
+   */
+  async resumePasswordChange(
+    currentPassword: string, newPassword: string, isCurrent: () => boolean,
+    confirm: () => Promise<boolean>, touchId?: PrivateTouchIdProvider,
+  ): Promise<'changed' | 'incorrect-password' | 'not-found' | 'cancelled'> {
+    if (!isPrivateHubPassword(currentPassword) || !isPrivateHubPassword(newPassword)
+      || currentPassword === newPassword || typeof isCurrent !== 'function' || typeof confirm !== 'function'
+      || this.#changingPassword) {
+      throw new Error('Private hub password recovery unavailable.');
+    }
+    let revoked = false;
+    const current = (): boolean => {
+      if (revoked || this.#locked) { return false; }
+      try { revoked = isCurrent() !== true; } catch { revoked = true; }
+      return !revoked && !this.#locked;
+    };
+    this.#changingPassword = true;
+    let publicationStarted = false;
+    let authenticatedKey: Buffer | undefined;
+    let saved: Candidate | undefined;
+    let staged: Candidate | undefined;
+    try {
+      this.assertWriteCurrent(current);
+      const outcome = await this.enqueue(async (): Promise<'changed' | 'incorrect-password' | 'not-found' | 'cancelled'> => {
+        this.assertWriteCurrent(current);
+        const headerPath = path.join(this.directory, PRIVATE_HUB_HEADER_FILE);
+        saved = await this.readFile(headerPath, PRIVATE_HUB_MAX_HEADER_BYTES);
+        this.assertWriteCurrent(current);
+        const header = validatePrivateHubHeader(JSON.parse(saved.bytes.toString('utf8')));
+        if (header.hubId !== this.hubId) { throw new Error(); }
+        try { authenticatedKey = await unlockPrivateHub(header, currentPassword); }
+        catch {
+          await this.assertRoot();
+          this.assertWriteCurrent(current);
+          return 'incorrect-password';
+        } finally { currentPassword = ''; }
+        this.assertWriteCurrent(current);
+        if (authenticatedKey.length !== this.#key.length || !timingSafeEqual(authenticatedKey, this.#key)) { throw new Error(); }
+        authenticatedKey.fill(0);
+        authenticatedKey = undefined;
+
+        const stagedPath = await this.passwordChangeStagingPath(current);
+        if (!stagedPath) {
+          await this.assertRoot();
+          this.assertWriteCurrent(current);
+          return 'not-found';
+        }
+        staged = await this.readFile(stagedPath, PRIVATE_HUB_MAX_HEADER_BYTES);
+        this.assertWriteCurrent(current);
+        const replacement = validatePrivateHubHeader(JSON.parse(staged.bytes.toString('utf8')));
+        if (replacement.hubId !== this.hubId) { throw new Error(); }
+        const verifyStaged = async (): Promise<void> => {
+          if (await this.passwordChangeStagingPath(current) !== stagedPath) { throw new Error(); }
+          const checked = await this.readFile(stagedPath, PRIVATE_HUB_MAX_HEADER_BYTES);
+          try {
+            if (!unchanged(staged.snapshot, checked.snapshot) || !staged.bytes.equals(checked.bytes)) { throw new Error(); }
+          } finally { checked.bytes.fill(0); }
+          // The directory scan and file read both await IO. Recheck the exact
+          // credential namespace after reading, then the saved header/lease.
+          if (await this.passwordChangeStagingPath(current) !== stagedPath) { throw new Error(); }
+          await this.assertRoot();
+          this.assertWriteCurrent(current);
+        };
+        try { authenticatedKey = await unlockPrivateHub(replacement, newPassword); }
+        catch {
+          await verifyStaged();
+          return 'incorrect-password';
+        } finally { newPassword = ''; }
+        this.assertWriteCurrent(current);
+        if (authenticatedKey.length !== this.#key.length || !timingSafeEqual(authenticatedKey, this.#key)) { throw new Error(); }
+        authenticatedKey.fill(0);
+        authenticatedKey = undefined;
+        await verifyStaged();
+        const confirmed = await confirm();
+        this.assertWriteCurrent(current);
+        if (confirmed !== true) { return 'cancelled'; }
+        await verifyStaged();
+        if (touchId) {
+          const identity = privateHubTouchIdIdentity(header);
+          const enrolled = await touchId.has(identity);
+          this.assertWriteCurrent(current);
+          if (enrolled && !await touchId.remove(identity, this.lockSignal)) { throw new Error(); }
+          this.assertWriteCurrent(current);
+          await verifyStaged();
+        }
+        // A process may have died after writing a complete header but before
+        // flushing its staging inode. Sync only that authenticated regular file.
+        const stagedHandle = await fs.promises.open(stagedPath,
+          (process.platform === 'win32' ? fs.constants.O_RDWR : fs.constants.O_RDONLY)
+          | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+        try {
+          const opened = await stagedHandle.stat();
+          if (!opened.isFile() || opened.nlink !== 1 || !unchanged(opened, staged.snapshot)) { throw new Error(); }
+          this.assertWriteCurrent(current);
+          await stagedHandle.sync();
+          const synced = await stagedHandle.stat();
+          if (!synced.isFile() || synced.nlink !== 1 || !unchanged(synced, staged.snapshot)) { throw new Error(); }
+        } finally { await this.confirmCleanup(() => stagedHandle.close()); }
+        await verifyStaged();
+        publicationStarted = true;
+        await fs.promises.rename(stagedPath, headerPath);
+        // Rename changes ctime. Accept only the authenticated inode and its
+        // unchanged size/mtime, then verify the bytes after syncing the parent.
+        await this.assertDirectory();
+        const published = await fileSnapshot(headerPath);
+        if (!published || !sameFile(published, staged.snapshot) || published.size !== staged.snapshot.size
+          || published.mtimeMs !== staged.snapshot.mtimeMs) { throw new Error(); }
+        this.#header = published;
+        await this.assertRoot();
+        await this.syncDirectory();
+        this.assertWriteCurrent(current);
+        const verified = await this.readFile(headerPath, PRIVATE_HUB_MAX_HEADER_BYTES);
+        try {
+          if (!verified.bytes.equals(staged.bytes)) { throw new Error(); }
+        } finally { verified.bytes.fill(0); }
+        if (await this.passwordChangeStagingPath(current) !== undefined) { throw new Error(); }
+        this.assertWriteCurrent(current);
+        return 'changed';
+      });
+      this.assertWriteCurrent(current);
+      return outcome;
+    } catch (error) {
+      if (isPrivateTouchIdCleanupFailure(error)) { this.#touchIdCleanupFailed = true; }
+      if (publicationStarted || this.#touchIdCleanupFailed) { void this.lock(); }
+      if (this.#cleanupFailure) { throw this.#cleanupFailure; }
+      if (isPrivateTouchIdCleanupFailure(error)) { throw error; }
+      throw new Error('Private hub password recovery unavailable.');
+    } finally {
+      authenticatedKey?.fill(0);
+      saved?.bytes.fill(0);
+      staged?.bytes.fill(0);
+      currentPassword = '';
+      newPassword = '';
+      this.#changingPassword = false;
+    }
+  }
+
+  /** Reject every ambiguous header sibling, including unknown staging names. */
+  private async passwordChangeStagingPath(isCurrent: () => boolean): Promise<string | undefined> {
+    await this.assertRoot();
+    this.assertWriteCurrent(isCurrent);
+    const entries = await fs.promises.opendir(this.directory);
+    let selected: string | undefined;
+    try {
+      let entry: fs.Dirent | null;
+      while ((entry = await entries.read()) !== null) {
+        this.assertWriteCurrent(isCurrent);
+        if (!entry.name.startsWith(PRIVATE_HUB_HEADER_FILE + '.')) { continue; }
+        const suffix = entry.name.slice(PRIVATE_HUB_HEADER_FILE.length + 1);
+        if (selected || !/^[0-9a-f]{48}\.pending$/.test(suffix)) { throw new Error(); }
+        selected = path.join(this.directory, entry.name);
+      }
+    } finally { await this.confirmCleanup(() => entries.close()); }
+    this.assertWriteCurrent(isCurrent);
+    return selected;
+  }
+
   /** Explicitly restore an authenticated backup; the backup itself is retained. */
   async recoverRecord(recordId: string): Promise<void> {
     const filePath = this.recordPath(recordId);
@@ -718,6 +879,193 @@ export class PrivateHubStore {
       const current = await fileSnapshot(filePath);
       await this.commitFile(filePath, backup.bytes, current);
     });
+  }
+
+  /**
+   * Review an authenticated backup without silently replacing a readable
+   * primary. A damaged primary is retained inside a separate encrypted record
+   * before replacement; neither the backup nor unknown files are removed.
+   * The review holds this store's queue and lease: callbacks must not enqueue
+   * store operations. Confirmation must settle after its owned UI is cancelled
+   * so a concurrent lock can finish draining that review before lease release.
+   */
+  async recoverRecordWithReview(recordId: string, options: {
+    maximumBytes: number;
+    validate: (plaintext: Buffer) => boolean;
+    confirm: () => Promise<boolean>;
+    isCurrent: () => boolean;
+    guards?: readonly { recordId: string; maximumBytes: number; validate: (plaintext: Buffer | undefined) => boolean }[];
+  }): Promise<'not-needed' | 'cancelled' | 'recovered'> {
+    if (!options || !Number.isSafeInteger(options.maximumBytes) || options.maximumBytes < 0
+      || options.maximumBytes + PRIVATE_HUB_RECORD_OVERHEAD_BYTES > PRIVATE_HUB_MAX_SEALED_RECORD_BYTES
+      || typeof options.validate !== 'function' || typeof options.confirm !== 'function' || typeof options.isCurrent !== 'function') {
+      throw new Error('Private hub record recovery unavailable.');
+    }
+    const { maximumBytes, validate, confirm, isCurrent } = options;
+    if (options.guards !== undefined && (!Array.isArray(options.guards) || options.guards.length > 4)) {
+      throw new Error('Private hub record recovery unavailable.');
+    }
+    const guards = (options.guards ?? []).map(guard => {
+      if (!guard || typeof guard.recordId !== 'string' || guard.recordId === recordId
+        || !Number.isSafeInteger(guard.maximumBytes) || guard.maximumBytes < 0 || guard.maximumBytes > 8192
+        || typeof guard.validate !== 'function') { throw new Error('Private hub record recovery unavailable.'); }
+      return { ...guard, primary: undefined as Candidate | undefined, backup: undefined as Candidate | undefined };
+    });
+    if (new Set(guards.map(guard => guard.recordId)).size !== guards.length) {
+      throw new Error('Private hub record recovery unavailable.');
+    }
+    const maximumSealed = maximumBytes + PRIVATE_HUB_RECORD_OVERHEAD_BYTES;
+    let revoked = false;
+    const current = (): boolean => {
+      if (revoked || this.#locked) { return false; }
+      try { revoked = isCurrent() !== true; } catch { revoked = true; }
+      return !revoked && !this.#locked;
+    };
+    let primary: Candidate | undefined;
+    let backup: Candidate | undefined;
+    let evidence: Buffer | undefined;
+    let evidenceMetadata: Buffer | undefined;
+    let writeStarted = false;
+    try {
+      this.assertWriteCurrent(current);
+      const filePath = this.recordPath(recordId);
+      const backupPath = filePath + '.bak';
+      const outcome = await this.enqueue(async (): Promise<'not-needed' | 'cancelled' | 'recovered'> => {
+        const readOptional = async (target: string, limit = maximumSealed): Promise<Candidate | undefined> => {
+          this.assertWriteCurrent(current);
+          await this.assertRoot();
+          // Catch ENOENT only for this exact namespace lookup, never an error
+          // from checking the header, lease, directory or a submitted read.
+          if (!await fileSnapshot(target)) {
+            await this.assertRoot();
+            this.assertWriteCurrent(current);
+            return undefined;
+          }
+          return this.readFile(target, limit);
+        };
+        const admissible = (candidate: Candidate): boolean => {
+          this.assertWriteCurrent(current);
+          let plaintext: Buffer;
+          // Authentication failure makes only this already safely read record
+          // a recovery candidate. Filesystem and validator errors never do.
+          try { plaintext = decryptPrivateHubRecord(this.#key, this.hubId, recordId, candidate.bytes); }
+          catch { return false; }
+          try {
+            this.assertWriteCurrent(current);
+            const valid = validate(plaintext);
+            this.assertWriteCurrent(current);
+            if (typeof valid !== 'boolean') { throw new Error(); }
+            return valid;
+          } finally { plaintext.fill(0); }
+        };
+        primary = await readOptional(filePath);
+        this.assertWriteCurrent(current);
+        if (primary && admissible(primary)) { return 'not-needed'; }
+        if (primary) {
+          evidenceMetadata = Buffer.from(JSON.stringify({ format: 'theatrum-private-recovery-evidence', version: 1, recordId }), 'utf8');
+          if (4 + evidenceMetadata.length + primary.bytes.length + PRIVATE_HUB_RECORD_OVERHEAD_BYTES > PRIVATE_HUB_MAX_SEALED_RECORD_BYTES) {
+            throw new Error();
+          }
+        }
+        backup = await readOptional(backupPath);
+        if (!backup || !admissible(backup)) { throw new Error(); }
+        for (const guard of guards) {
+          const guardPath = this.recordPath(guard.recordId);
+          const limit = guard.maximumBytes + PRIVATE_HUB_RECORD_OVERHEAD_BYTES;
+          guard.primary = await readOptional(guardPath, limit);
+          guard.backup = await readOptional(guardPath + '.bak', limit);
+          if (!guard.primary && guard.backup) { throw new Error(); }
+          let plaintext: Buffer | undefined;
+          try {
+            this.assertWriteCurrent(current);
+            if (guard.primary) { plaintext = decryptPrivateHubRecord(this.#key, this.hubId, guard.recordId, guard.primary.bytes); }
+            const valid = guard.validate(plaintext);
+            this.assertWriteCurrent(current);
+            if (valid !== true) { throw new Error(); }
+          } finally { plaintext?.fill(0); }
+        }
+        const verifyCandidate = async (target: string, reviewed: Candidate | undefined, limit = maximumSealed): Promise<void> => {
+          const checked = await readOptional(target, limit);
+          try {
+            if (reviewed ? !checked || !unchanged(reviewed.snapshot, checked.snapshot)
+              || !reviewed.bytes.equals(checked.bytes) : checked !== undefined) { throw new Error(); }
+          } finally { checked?.bytes.fill(0); }
+        };
+        const verifyGuards = async (): Promise<void> => {
+          for (const guard of guards) {
+            const guardPath = this.recordPath(guard.recordId);
+            const limit = guard.maximumBytes + PRIVATE_HUB_RECORD_OVERHEAD_BYTES;
+            await verifyCandidate(guardPath, guard.primary, limit);
+            await verifyCandidate(guardPath + '.bak', guard.backup, limit);
+          }
+        };
+        const verifyReviewed = async (): Promise<void> => {
+          this.assertWriteCurrent(current);
+          await verifyCandidate(filePath, primary);
+          await verifyCandidate(backupPath, backup);
+          await verifyGuards();
+          await this.assertRoot();
+          this.assertWriteCurrent(current);
+        };
+        await verifyReviewed();
+        const confirmed = await confirm();
+        this.assertWriteCurrent(current);
+        if (confirmed !== true) { return 'cancelled'; }
+        await verifyReviewed();
+        if (primary) {
+          const evidenceName = randomBytes(24).toString('hex');
+          const evidenceId = 'recovery-evidence:' + evidenceName;
+          // This random name carries no catalogue information and permits an
+          // explicit future evidence reader to reconstruct its authenticated ID.
+          const evidencePath = path.join(this.directory, evidenceName + '.recovery');
+          const payload = Buffer.alloc(4 + evidenceMetadata.length + primary.bytes.length);
+          try {
+            payload.writeUInt32BE(evidenceMetadata.length, 0);
+            evidenceMetadata.copy(payload, 4);
+            primary.bytes.copy(payload, 4 + evidenceMetadata.length);
+            evidence = encryptPrivateHubRecord(this.#key, this.hubId, evidenceId, payload);
+          } finally { payload.fill(0); }
+          writeStarted = true;
+          await this.commitFile(evidencePath, evidence, undefined, current, false, verifyReviewed);
+          const retained = await this.readFile(evidencePath, PRIVATE_HUB_MAX_SEALED_RECORD_BYTES);
+          let retainedPlaintext: Buffer | undefined;
+          try {
+            this.assertWriteCurrent(current);
+            if (!retained.bytes.equals(evidence)) { throw new Error(); }
+            retainedPlaintext = decryptPrivateHubRecord(this.#key, this.hubId, evidenceId, retained.bytes);
+            if (retainedPlaintext.length !== 4 + evidenceMetadata.length + primary.bytes.length
+              || retainedPlaintext.readUInt32BE(0) !== evidenceMetadata.length
+              || !retainedPlaintext.subarray(4, 4 + evidenceMetadata.length).equals(evidenceMetadata)
+              || !retainedPlaintext.subarray(4 + evidenceMetadata.length).equals(primary.bytes)) { throw new Error(); }
+          } finally { retainedPlaintext?.fill(0); retained.bytes.fill(0); }
+          await verifyReviewed();
+        }
+        writeStarted = true;
+        await this.commitFile(filePath, backup.bytes, primary?.snapshot, current, false, verifyReviewed);
+        const recovered = await this.readFile(filePath, maximumSealed);
+        try {
+          this.assertWriteCurrent(current);
+          if (!recovered.bytes.equals(backup.bytes) || !admissible(recovered)) { throw new Error(); }
+        } finally { recovered.bytes.fill(0); }
+        const retainedBackup = await this.readFile(backupPath, maximumSealed);
+        try {
+          if (!unchanged(backup.snapshot, retainedBackup.snapshot) || !retainedBackup.bytes.equals(backup.bytes)) { throw new Error(); }
+        } finally { retainedBackup.bytes.fill(0); }
+        await verifyGuards();
+        this.assertWriteCurrent(current);
+        return 'recovered';
+      });
+      this.assertWriteCurrent(current);
+      return outcome;
+    } catch (error) {
+      this.retainCleanupFailure(error);
+      if (writeStarted) { void this.lock(); }
+      if (this.#cleanupFailure) { throw this.#cleanupFailure; }
+      throw new Error('Private hub record recovery unavailable.');
+    } finally {
+      primary?.bytes.fill(0); backup?.bytes.fill(0); evidence?.fill(0); evidenceMetadata?.fill(0);
+      for (const guard of guards) { guard.primary?.bytes.fill(0); guard.backup?.bytes.fill(0); }
+    }
   }
 
   private assertUnlocked(): void {
@@ -962,7 +1310,8 @@ export class PrivateHubStore {
     }
   }
 
-  private async commitFile(target: string, bytes: Buffer, expected: Snapshot | undefined, isCurrent?: () => boolean, replacingHeader = false): Promise<void> {
+  private async commitFile(target: string, bytes: Buffer, expected: Snapshot | undefined, isCurrent?: () => boolean, replacingHeader = false,
+    beforePublication?: () => Promise<void>): Promise<void> {
     this.assertWriteCurrent(isCurrent);
     if (replacingHeader && (target !== path.join(this.directory, PRIVATE_HUB_HEADER_FILE)
       || !expected || !this.#header || !unchanged(expected, this.#header))) { throw new Error(); }
@@ -983,6 +1332,7 @@ export class PrivateHubStore {
       }
       await close();
       await this.assertRoot();
+      if (beforePublication) { await beforePublication(); }
       const current = await fileSnapshot(target);
       if (expected ? !current || !unchanged(expected, current) : current !== undefined) {
         throw new Error('The private hub file changed before replacement.');

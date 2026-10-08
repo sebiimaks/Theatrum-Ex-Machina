@@ -517,6 +517,8 @@ function verifyMediaTools(resourcesPath) {
   assert.match(ffprobeVersion, /^ffprobe version 8\.1\.2/mu);
   assert.match(ffmpegVersion, /--enable-gpl/u);
   assert.match(ffmpegVersion, /--enable-libx264/u);
+  assert.match(ffmpegVersion, /--enable-zlib/u);
+  assert.match(run(ffmpegPath, ['-hide_banner', '-decoders']), /^\s*V[^\s]*\s+png\s/mu);
   assert.match(ffmpegVersion, /--disable-network/u);
   assert.doesNotMatch(ffmpegVersion, /--enable-nonfree/u);
 
@@ -526,6 +528,22 @@ function verifyMediaTools(resourcesPath) {
   try {
     const mediaPath = path.join(temporaryDirectory, 'packaged test with spaces; value.mp4');
     const thumbnailPath = path.join(temporaryDirectory, 'thumbnail with spaces; value.jpg');
+    const pngPath = path.join(temporaryDirectory, 'PNG decoder fixture.png');
+    const pngThumbnailPath = path.join(temporaryDirectory, 'PNG thumbnail.jpg');
+    fs.writeFileSync(pngPath, Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP4z8DwHwgbGGAMAEBXBvusDhdaAAAAAElFTkSuQmCC',
+      'base64',
+    ));
+    run(ffmpegPath, [
+      '-nostdin', '-hide_banner', '-loglevel', 'error',
+      '-i', pngPath, '-frames:v', '1', '-vf', 'scale=256:144',
+      '-c:v', 'mjpeg', '-f', 'image2', '-y', pngThumbnailPath,
+    ]);
+    const pngThumbnail = JSON.parse(run(ffprobePath, [
+      '-v', 'error', '-select_streams', 'v:0',
+      '-show_entries', 'stream=codec_name,width,height', '-of', 'json', pngThumbnailPath,
+    ]));
+    assert.deepEqual(pngThumbnail.streams, [{ codec_name: 'mjpeg', width: 256, height: 144 }]);
     run(ffmpegPath, [
       '-nostdin',
       '-hide_banner',
@@ -757,7 +775,7 @@ function verifyDebianMetadata(debPath) {
   assert.match(description, /^Personal fork of Video Hub App$/mu);
   assert.match(description, /Theatrum Ex Machina is a personal fork of Video Hub App/u);
   const dependencies = field('Depends');
-  for (const expectedDependency of ['libnss3', 'libxss1', 'xdg-utils']) {
+  for (const expectedDependency of ['libnss3', 'libxss1', 'xdg-utils', 'zlib1g']) {
     assert.match(
       dependencies,
       new RegExp(`(?:^|[, ])${expectedDependency}(?:\\s|,|$)`, 'u'),

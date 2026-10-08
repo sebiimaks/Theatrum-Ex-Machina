@@ -59,6 +59,7 @@
   const filmstripNext = byId('filmstrip-next');
   const regenerate = byId('regenerate-previews');
   const refreshVideo = byId('refresh-video');
+  const chooseThumbnail = byId('choose-thumbnail');
   const cancelGeneration = byId('cancel-regeneration');
   const generationStatus = byId('generation-status');
   const retryDetails = byId('retry-details');
@@ -93,6 +94,7 @@
   const confirmPasswordInput = byId('confirm-password');
   const passwordInputs = [currentPasswordInput, newPasswordInput, confirmPasswordInput];
   const passwordSubmit = byId('change-password-submit');
+  const passwordResume = byId('resume-password-submit');
   const passwordStatus = byId('password-status');
   const copyToggle = byId('unprotected-copy-toggle');
   const copyForm = byId('unprotected-copy-form');
@@ -117,6 +119,8 @@
     ? credentialBridge.disableTouchId.bind(credentialBridge) : undefined;
   const changePassword = typeof credentialBridge?.changePassword === 'function'
     ? credentialBridge.changePassword.bind(credentialBridge) : undefined;
+  const resumePasswordChange = typeof credentialBridge?.resumePasswordChange === 'function'
+    ? credentialBridge.resumePasswordChange.bind(credentialBridge) : undefined;
   const createUnprotectedCopy = typeof credentialBridge?.createUnprotectedCopy === 'function'
     ? credentialBridge.createUnprotectedCopy.bind(credentialBridge) : undefined;
   const cancelUnprotectedCopy = typeof credentialBridge?.cancelUnprotectedCopy === 'function'
@@ -127,6 +131,7 @@
   const api = available ? {
     list: bridge.list.bind(bridge), detail: bridge.detail.bind(bridge), lock: bridge.lock.bind(bridge),
     save: typeof bridge.save === 'function' ? bridge.save.bind(bridge) : undefined,
+    setCustomThumbnail: typeof bridge.setCustomThumbnail === 'function' ? bridge.setCustomThumbnail.bind(bridge) : undefined,
     refreshVideo: typeof bridge.refreshVideo === 'function' ? bridge.refreshVideo.bind(bridge) : undefined,
     regenerate: typeof bridge.regenerate === 'function' ? bridge.regenerate.bind(bridge) : undefined,
     playOriginal: typeof bridge.playOriginal === 'function' ? bridge.playOriginal.bind(bridge) : undefined,
@@ -168,6 +173,7 @@
   let reloading = false;
   let regenerating = false;
   let refreshingVideo = false;
+  let choosingThumbnail = false;
   let cancelling = false;
   let listLoading = false;
   let detailLoading = false;
@@ -189,6 +195,7 @@
   let touchIdEpoch = 0;
   let touchIdComposing = false;
   let passwordEpoch = 0;
+  let passwordAction = 'change';
   let copyEpoch = 0;
   let copyComposing = false;
   let copyCancelling = false;
@@ -278,7 +285,7 @@
     lockWarning.textContent = saving ? 'Locking clears these drafts. A save already in progress may finish.'
       : 'Locking clears unsaved edits.';
     lockButton.title = dirty() ? 'Lock hub and clear unsaved edits'
-      : regenerating ? (refreshingVideo ? 'Lock hub and stop video refresh' : 'Lock hub and stop preview regeneration') : 'Lock hub';
+      : regenerating ? (choosingThumbnail ? 'Lock hub and stop thumbnail selection' : refreshingVideo ? 'Lock hub and stop video refresh' : 'Lock hub and stop preview regeneration') : 'Lock hub';
     regenerate.disabled = locked || pending || editorComposition.size > 0 || selectedDetail?.regenerable !== true
       || conflict || !/^[a-f0-9]{32}$/.test(selectedDetail?.revision) || !api?.regenerate || !api?.cancelRegeneration;
     cancelGeneration.hidden = !regenerating;
@@ -317,7 +324,25 @@
     return '';
   }
 
+  function thumbnailBlockedMessage() {
+    if (locked || !api?.setCustomThumbnail || !api?.cancelRegeneration || selectedDetail?.thumbnailEditable !== true) {
+      return 'Choosing a thumbnail is unavailable for this video.';
+    }
+    if (editorComposition.size || composing) { return 'Finish entering text before choosing a thumbnail.'; }
+    if (conflict || !/^[a-f0-9]{32}$/.test(selectedDetail?.revision)) { return 'Reload the saved video details before choosing a thumbnail.'; }
+    if (browseProtectionDraft()) { return 'Save your protection settings, or restore their saved values, before choosing a thumbnail.'; }
+    if (passwordComposition.size || passwordInputs.some(input => input.value !== '') || copyComposing || copyPassword.value !== ''
+      || copyAcknowledge.checked || touchIdComposing || touchIdPassword.value !== '') {
+      return 'Finish or close the password, Touch ID or unprotected-copy form before choosing a thumbnail.';
+    }
+    if (protectionBlocked() || protectionPending) { return 'Wait for the current operation to finish, or lock the hub.'; }
+    return '';
+  }
+
   function updateRefreshVideo() {
+    const thumbnailReason = thumbnailBlockedMessage();
+    chooseThumbnail.disabled = !!thumbnailReason;
+    chooseThumbnail.title = thumbnailReason || 'Choose a JPEG or PNG image to encrypt as this video’s thumbnail.';
     const reason = refreshVideoBlockedMessage();
     refreshVideo.disabled = !!reason;
     refreshVideo.title = reason || 'Update technical details and encrypted previews from the saved source.';
@@ -345,7 +370,7 @@
     retryGallery.disabled = locked || !!protectionPending;
     retryDetails.disabled = locked || !!protectionPending;
     updatePlaybackControls();
-    if (locked || regenerating || protectionPending) { closeFilmstrip(); }
+    if (locked || (regenerating && !choosingThumbnail) || protectionPending) { closeFilmstrip(); }
     filmstripToggle.disabled = locked || saving || reloading || detailLoading || regenerating || !!protectionPending
       || !selectedDetail || !previewUrl(selectedDetail.filmstripUrl, 'filmstrip');
     updateFilmstripNavigation();
@@ -377,12 +402,17 @@
     const blocked = locked || !!passwordBlockedMessage();
     for (const input of passwordInputs) { input.disabled = blocked; }
     passwordSubmit.disabled = blocked || passwordComposition.size > 0 || passwordForm.hidden || protectionPanel.hidden;
-    passwordSubmit.textContent = protectionPending === 'password' ? 'Changing password…' : 'Change password and lock';
+    const pending = protectionPending === 'password';
+    passwordSubmit.textContent = pending && passwordAction === 'change' ? 'Changing password…' : 'Change password and lock';
+    passwordResume.disabled = passwordSubmit.disabled || !resumePasswordChange;
+    passwordResume.textContent = pending && passwordAction === 'resume' ? 'Finishing interrupted change…' : 'Finish interrupted password change';
     // A pending request can be concealed, but cannot be restarted or reopened.
     passwordToggle.disabled = locked || !changePassword || (!!protectionPending
       && !(protectionPending === 'password' && !passwordForm.hidden));
     if (!passwordForm.hidden && !locked) {
-      if (protectionPending === 'password') { passwordStatus.textContent = 'Changing the password. The hub will lock when it is saved.'; }
+      if (protectionPending === 'password') { passwordStatus.textContent = passwordAction === 'resume'
+        ? 'Checking the interrupted change. Confirm in the dialog to finish and lock the hub.'
+        : 'Changing the password. The hub will lock when it is saved.'; }
       else if (passwordBlockedMessage()) { passwordStatus.textContent = passwordBlockedMessage(); }
     }
   }
@@ -432,7 +462,7 @@
     return '';
   }
 
-  async function submitPasswordChange() {
+  async function submitPasswordChange(resume = false) {
     if (passwordComposition.size) { return; }
     let currentPassword = currentPasswordInput.value;
     let newPassword = newPasswordInput.value;
@@ -448,7 +478,8 @@
         passwordStatus.textContent = 'Return to this window and re-enter your passwords.';
         return;
       }
-      const blocked = passwordBlockedMessage();
+      const blocked = passwordBlockedMessage() || (resume && !resumePasswordChange
+        ? 'Finishing an interrupted change is unavailable in this build.' : '');
       if (blocked) { passwordStatus.textContent = blocked; return; }
       let problem = passwordProblem(currentPassword, 'Current password');
       let invalidInput = currentPasswordInput;
@@ -462,12 +493,13 @@
         return;
       }
       epoch = ++passwordEpoch;
+      passwordAction = resume ? 'resume' : 'change';
       protectionPending = 'password';
       clearTimeout(searchTimer);
       stopVideo();
       play.hidden = !clipUrl;
       updateEditor();
-      try { invocation = changePassword({ currentPassword, newPassword }); }
+      try { invocation = (resume ? resumePasswordChange : changePassword)({ currentPassword, newPassword }); }
       catch { invocation = Promise.resolve({ status: 'unavailable' }); }
     } finally {
       currentPassword = '';
@@ -488,11 +520,16 @@
     }
     updateEditor();
     if (epoch !== passwordEpoch || passwordForm.hidden || protectionPanel.hidden) { return; }
-    passwordStatus.textContent = result?.status === 'incorrect-password'
-      ? 'The current password is incorrect. Re-enter all three fields and try again.'
-      : result?.status === 'invalid' ? 'The passwords were not accepted. Use different passwords of 1–1,024 UTF-8 bytes and confirm the new one.'
-        : result?.status === 'busy' ? 'The hub is busy. Re-enter your passwords and try again when the current operation finishes.'
-          : 'The password could not be changed. Lock the hub and reopen it before trying again.';
+    passwordStatus.textContent = resume && result?.status === 'not-found'
+      ? 'No interrupted password change was found. Use Change password and lock for a new change.'
+      : resume && result?.status === 'cancelled' ? 'The interrupted change was left unfinished. Your current password is unchanged.'
+        : result?.status === 'incorrect-password' ? (resume
+          ? 'The current password or the password from the interrupted change is incorrect. Re-enter all three fields.'
+          : 'The current password is incorrect. Re-enter all three fields and try again.')
+          : result?.status === 'invalid' ? 'The passwords were not accepted. Use different passwords of 1–1,024 UTF-8 bytes and confirm the new one.'
+            : result?.status === 'busy' ? 'The hub is busy. Re-enter your passwords and try again when the current operation finishes.'
+              : resume ? 'The interrupted change could not be finished. Reopen the hub and keep its files intact.'
+                : 'The password could not be changed. Lock the hub and reopen it before trying again.';
     if (passwordWindowFocused && !document.hidden) { currentPasswordInput.focus({ preventScroll: true }); }
   }
 
@@ -1425,7 +1462,9 @@
     if (locked) { return false; }
     if (protectionPending) { return false; }
     if (regenerating) {
-      generationStatus.textContent = refreshingVideo
+      generationStatus.textContent = choosingThumbnail
+        ? (cancelling ? 'Stopping thumbnail selection. Please wait, or lock the hub.' : 'Choosing a thumbnail. Cancel or wait before leaving this video.')
+        : refreshingVideo
         ? (cancelling ? 'Stopping video refresh. Please wait, or lock the hub.' : 'Refreshing video. Cancel or wait before leaving this video.')
         : (cancelling ? 'Stopping regeneration. Please wait, or lock the hub.'
           : 'Regenerating previews. Cancel or wait before leaving this video.');
@@ -1592,6 +1631,65 @@
     void loadPage(offset, 0, undefined, true);
   }
 
+  async function setCustomThumbnail() {
+    const reason = thumbnailBlockedMessage();
+    if (reason) { generationStatus.textContent = reason; return; }
+    const id = selectedId, epoch = detailEpoch, revision = selectedDetail.revision;
+    const current = () => !locked && epoch === detailEpoch && id === selectedId;
+    regenerating = true;
+    choosingThumbnail = true;
+    cancelling = false;
+    stopVideo();
+    generationStatus.textContent = 'Choose a JPEG or PNG image. Its resized thumbnail will be encrypted in this hub.';
+    updateEditor();
+    let result;
+    try { result = await api.setCustomThumbnail({ id, revision }); }
+    catch { result = { status: 'unavailable' }; }
+    if (!current()) { return; }
+    const completed = result?.status === 'updated' && result.item?.id === id && result.item.revision === revision;
+    let saved = completed ? result.item : undefined;
+    if (!completed) {
+      // Cancellation may follow publication. Wait for the native operation to
+      // drain before reading the saved route, without replacing editor drafts.
+      cancelling = true;
+      generationStatus.textContent = 'Loading the saved thumbnail…';
+      updateEditor();
+      try {
+        const latest = await api.detail(id);
+        if (latest?.status === 'ready' && latest.item?.id === id) { saved = latest.item; }
+      } catch { /* The fixed failure message below contains no native details. */ }
+      if (!current()) { return; }
+    }
+    regenerating = false;
+    choosingThumbnail = false;
+    cancelling = false;
+    if (saved?.revision === revision && previewUrl(saved.thumbnailUrl, 'thumbnail')) {
+      selectedDetail.thumbnailUrl = saved.thumbnailUrl;
+      // Preserve notes, tags, rating, and all other preview routes. The grid
+      // replaces decoded thumbnail elements while keeping this editor intact.
+      void loadPage(offset, 0, undefined, true);
+    } else {
+      conflict = true;
+      retryDetails.hidden = false;
+      retryDetails.textContent = 'Reload details';
+    }
+    generationStatus.textContent = conflict
+      ? 'The saved video details could not be confirmed. Your edits are still here. Discard and reload before making another change.'
+      : completed ? 'Thumbnail updated.'
+        : result?.status === 'cancelled' ? 'Thumbnail selection stopped. Saved thumbnail reloaded.'
+          : result?.status === 'conflict' ? 'This video changed. Your edits are still here. Discard and reload before choosing a thumbnail.'
+            : result?.status === 'invalid' ? 'Use a valid JPEG or PNG image up to 32 MiB and 32 megapixels.'
+              : result?.status === 'source-unavailable' ? 'The chosen image is unavailable. Choose it again or select another JPEG or PNG image.'
+                : result?.status === 'busy' ? 'The hub is busy. Try choosing a thumbnail again shortly.'
+                  : 'The thumbnail could not be updated. Try again or lock the hub.';
+    if (result?.status === 'conflict') {
+      conflict = true;
+      retryDetails.hidden = false;
+      retryDetails.textContent = 'Reload details';
+    }
+    updateEditor();
+  }
+
   async function regeneratePreviews(refresh = false) {
     if (refresh) {
       const reason = refreshVideoBlockedMessage();
@@ -1639,6 +1737,7 @@
     }
     regenerating = false;
     refreshingVideo = false;
+    choosingThumbnail = false;
     cancelling = false;
     play.disabled = false;
     if (refresh && !completed) {
@@ -1690,7 +1789,7 @@
   function cancelRegeneration() {
     if (locked || !regenerating || cancelling) { return; }
     cancelling = true;
-    generationStatus.textContent = refreshingVideo ? 'Stopping video refresh. Please wait, or lock the hub.' : 'Stopping regeneration. Please wait, or lock the hub.';
+    generationStatus.textContent = choosingThumbnail ? 'Stopping thumbnail selection. Please wait, or lock the hub.' : refreshingVideo ? 'Stopping video refresh. Please wait, or lock the hub.' : 'Stopping regeneration. Please wait, or lock the hub.';
     updateEditor();
     try { api.cancelRegeneration(); }
     catch { generationStatus.textContent = 'Cancellation could not be requested. Wait for completion or lock the hub.'; }
@@ -1968,6 +2067,7 @@
     reloading = false;
     regenerating = false;
     refreshingVideo = false;
+    choosingThumbnail = false;
     cancelling = false;
     conflict = false;
     editorComposition.clear();
@@ -2444,6 +2544,7 @@
   copyPassword.addEventListener('keydown', event => {
     if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229 || copyComposing)) { event.preventDefault(); }
   });
+  passwordResume.addEventListener('click', () => { void submitPasswordChange(true); });
   passwordForm.addEventListener('submit', event => {
     event.preventDefault();
     if (!event.isComposing) { void submitPasswordChange(); }
@@ -2531,6 +2632,7 @@
   });
   saveButton.addEventListener('click', () => { void saveChanges(); });
   discardButton.addEventListener('click', () => { void discardChanges(); });
+  chooseThumbnail.addEventListener('click', () => { void setCustomThumbnail(); });
   refreshVideo.addEventListener('click', () => { void regeneratePreviews(true); });
   regenerate.addEventListener('click', () => { void regeneratePreviews(); });
   cancelGeneration.addEventListener('click', cancelRegeneration);

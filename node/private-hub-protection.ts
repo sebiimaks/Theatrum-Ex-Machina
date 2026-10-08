@@ -7,6 +7,23 @@ const MAXIMUM_BYTES = 256;
 function unavailable(): Error { return new Error('Private hub protection settings are unavailable.'); }
 function missing(error: unknown): boolean { return (error as NodeJS.ErrnoException)?.code === 'ENOENT'; }
 
+/** Validate already-authenticated bytes without reading or changing storage. */
+export function parsePrivateHubProtection(bytes: Buffer): PrivateHubProtection {
+  try {
+    if (!Buffer.isBuffer(bytes) || bytes.length > MAXIMUM_BYTES) { throw unavailable(); }
+    const value: unknown = JSON.parse(bytes.toString('utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { throw unavailable(); }
+    const fields = value as Record<string, unknown>;
+    const keys = Object.keys(value).sort().join(',');
+    if (!(fields.version === 1 && keys === 'autoLockMinutes,version')
+      && !(fields.version === 2 && keys === 'autoLockMinutes,recordPlaybackHistory,version')) { throw unavailable(); }
+    const settings = snapshotPrivateHubProtection({ autoLockMinutes: fields.autoLockMinutes,
+      recordPlaybackHistory: fields.version === 1 ? false : fields.recordPlaybackHistory });
+    if (!settings) { throw unavailable(); }
+    return settings;
+  } catch { throw unavailable(); }
+}
+
 export async function readPrivateHubProtection(store: PrivateHubStore): Promise<PrivateHubProtection> {
   let bytes: Buffer | undefined;
   try {
@@ -22,16 +39,7 @@ export async function readPrivateHubProtection(store: PrivateHubStore): Promise<
       }
       throw unavailable();
     }
-    const value: unknown = JSON.parse(bytes.toString('utf8'));
-    if (!value || typeof value !== 'object' || Array.isArray(value)) { throw unavailable(); }
-    const fields = value as Record<string, unknown>;
-    const keys = Object.keys(value).sort().join(',');
-    if (!(fields.version === 1 && keys === 'autoLockMinutes,version')
-      && !(fields.version === 2 && keys === 'autoLockMinutes,recordPlaybackHistory,version')) { throw unavailable(); }
-    const settings = snapshotPrivateHubProtection({ autoLockMinutes: fields.autoLockMinutes,
-      recordPlaybackHistory: fields.version === 1 ? false : fields.recordPlaybackHistory });
-    if (!settings) { throw unavailable(); }
-    return settings;
+    return parsePrivateHubProtection(bytes);
   } catch { throw unavailable(); }
   finally { bytes?.fill(0); }
 }

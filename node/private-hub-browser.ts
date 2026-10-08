@@ -463,6 +463,18 @@ export class PrivateHubBrowser {
       this.#disposeGalleryRequest = registerPrivateGalleryRequest({
         contents, hub: this.#hub!, generation: this.#generation!, playback: this.#playback, isCurrent: this.current, onLock: () => this.retire(),
         onProtectionChanged: settings => this.#idleLock?.setMinutes(settings.autoLockMinutes) === true,
+        confirmPasswordRecovery: async () => {
+          this.assertCurrent();
+          if (window.isDestroyed()) { throw unavailable(); }
+          const result = await dialog.showMessageBox(window, {
+            type: 'question', title: 'Finish interrupted password change?',
+            message: 'Finish interrupted password change?',
+            detail: 'The new password will become active and this private hub will lock. Use the new password to reopen it.',
+            buttons: ['Finish password change', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true,
+          });
+          this.assertCurrent();
+          return !window.isDestroyed() && result.response === 0;
+        },
         confirmPlaybackHistoryReset: async (metric, count) => {
           this.assertCurrent();
           if (window.isDestroyed() || (metric !== 'lastPlayed' && metric !== 'timesPlayed')
@@ -518,6 +530,19 @@ export class PrivateHubBrowser {
           this.assertCurrent();
           if (window.isDestroyed() || result.canceled) { return undefined; }
           return result.filePaths.length > 0 ? [...result.filePaths] : undefined;
+        },
+        chooseCustomThumbnail: async () => {
+          this.assertCurrent();
+          if (window.isDestroyed()) { throw unavailable(); }
+          const result = await dialog.showOpenDialog(window, {
+            title: 'Choose video thumbnail',
+            message: 'Choose one JPEG or PNG image (up to 32 MiB and 32 megapixels). A resized copy without embedded metadata will be encrypted in this hub. The original image stays in place.',
+            buttonLabel: 'Use thumbnail', filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png'] }],
+            properties: ['openFile', 'noResolveAliases', 'dontAddToRecent'], securityScopedBookmarks: false,
+          });
+          this.assertCurrent();
+          if (window.isDestroyed() || result.canceled) { return undefined; }
+          return result.filePaths.length === 1 ? result.filePaths[0] : undefined;
         },
         confirmSourceScan: async (count, more) => {
           this.assertCurrent();

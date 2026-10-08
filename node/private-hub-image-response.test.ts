@@ -127,7 +127,7 @@ test('GET authenticates bounded JPEG bytes and transfers only a consumer-owned c
   assert.equal(response.headers.get('Accept-Ranges'), 'bytes');
   assert.equal(response.headers.get('Content-Length'), String(bytes.length));
   assert.equal(response.headers.has('Content-Range'), false);
-  assert.deepEqual(tracked.limits, [1024, PRIVATE_HUB_MAX_IMAGE_BYTES], 'manifest and image reads each retain their own size bound');
+  assert.deepEqual(tracked.limits, [1024, 1024, PRIVATE_HUB_MAX_IMAGE_BYTES], 'preview-set, thumbnail-override and image reads each retain their own size bound');
   await new Promise<void>(resolve => setImmediate(resolve));
   assert.deepEqual(tracked.buffers[0], bytes, 'a response without a consumer has not enqueued or transferred bytes');
   const body = response.body!.getReader();

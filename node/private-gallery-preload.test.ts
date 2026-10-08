@@ -10,7 +10,7 @@ const item = () => ({ id: 'a'.repeat(32), title: 'Private video', duration: 12, 
   rating: 4, favourite: false, tags: ['Birds'], thumbnailUrl: 'theatrum://app/media/thumbnails/hash-1.jpg',
   notes: 'Private notes', clipUrl: 'theatrum://app/media/clips/hash-1.mp4',
   posterUrl: 'theatrum://app/media/clips/hash-1.jpg', filmstripUrl: 'theatrum://app/media/filmstrips/hash-1.jpg',
-  truncated: false, editable: true, regenerable: true, refreshable: true, playable: true, revision: 'b'.repeat(32) });
+  truncated: false, editable: true, regenerable: true, refreshable: true, thumbnailEditable: true, playable: true, revision: 'b'.repeat(32) });
 const page = () => ({ status: 'ready', total: 1, offset: 0, items: [item()] });
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 function fixture(...results: unknown[]) {
@@ -30,13 +30,13 @@ function fixture(...results: unknown[]) {
     native: (next: typeof native) => { native = next; } };
 }
 
-test('sandbox preload keeps twenty-four gallery methods and exposes six separate frozen credential methods', () => {
+test('sandbox preload keeps twenty-five gallery methods and exposes seven separate frozen credential methods', () => {
   const f = fixture();
   assert.deepEqual(f.imported, ['electron']);
   assert.deepEqual(Object.keys(f.exposed), ['privateGallery', 'privateCredentials']);
-  assert.deepEqual(Object.keys(f.credentials).sort(), ['cancelUnprotectedCopy', 'changePassword', 'createUnprotectedCopy', 'disableTouchId', 'enableTouchId', 'touchIdStatus']);
+  assert.deepEqual(Object.keys(f.credentials).sort(), ['cancelUnprotectedCopy', 'changePassword', 'createUnprotectedCopy', 'disableTouchId', 'enableTouchId', 'resumePasswordChange', 'touchIdStatus']);
   assert.equal(Object.isFrozen(f.credentials), true);
-  assert.deepEqual(Object.keys(f.bridge).sort(), ['ackOriginalPlayback', 'addSource', 'cancelImport', 'cancelRegeneration', 'cancelSourceConnection', 'checkSource', 'connectSource', 'detail', 'disconnectSource', 'importProgress', 'importVideo', 'list', 'lock', 'playOriginal', 'protection', 'refreshVideo', 'regenerate', 'relocateSource', 'resetPlaybackHistory', 'save', 'scanSource', 'setProtection', 'sources', 'stopOriginal']);
+  assert.deepEqual(Object.keys(f.bridge).sort(), ['ackOriginalPlayback', 'addSource', 'cancelImport', 'cancelRegeneration', 'cancelSourceConnection', 'checkSource', 'connectSource', 'detail', 'disconnectSource', 'importProgress', 'importVideo', 'list', 'lock', 'playOriginal', 'protection', 'refreshVideo', 'regenerate', 'relocateSource', 'resetPlaybackHistory', 'save', 'scanSource', 'setCustomThumbnail', 'setProtection', 'sources', 'stopOriginal']);
   assert.equal(Object.isFrozen(f.bridge), true);
   for (const key of ['ipc', 'on', 'send', 'invoke', 'files', 'clipboard', 'unlock', 'password', 'process']) {
     assert.equal(f.bridge[key], undefined);
@@ -70,9 +70,9 @@ test('fixed media URLs accept an optional exact opaque refresh token in every re
   versioned.filmstripUrl += version;
   const listing = fixture({ ...page(), items: [versioned] });
   assert.equal((await listing.bridge.list({ query: '', offset: 0 })).items[0].thumbnailUrl, versioned.thumbnailUrl);
-  for (const [mode, status] of [['detail', 'ready'], ['save', 'saved'], ['regenerate', 'generated'], ['refreshVideo', 'refreshed']]) {
+  for (const [mode, status] of [['detail', 'ready'], ['save', 'saved'], ['regenerate', 'generated'], ['refreshVideo', 'refreshed'], ['setCustomThumbnail', 'updated']]) {
     const f = fixture({ status, item: versioned });
-    const request = mode === 'detail' ? versioned.id : ['regenerate', 'refreshVideo'].includes(mode)
+    const request = mode === 'detail' ? versioned.id : ['regenerate', 'refreshVideo', 'setCustomThumbnail'].includes(mode)
       ? { id: versioned.id, revision: versioned.revision }
       : { id: versioned.id, revision: versioned.revision, notes: '', tags: [] };
     assert.deepEqual(plain(await f.bridge[mode](request)), { status, item: versioned });
@@ -1374,7 +1374,7 @@ test('lock permanently suppresses video refresh completion and its cancellation 
 
 test('refreshable is an explicit boolean in every detailed response projection', async () => {
   for (const refreshable of [undefined, null, 0, 1, 'true', {}, []]) {
-    for (const [mode, status] of [['detail', 'ready'], ['save', 'saved'], ['regenerate', 'generated'], ['refreshVideo', 'refreshed']]) {
+    for (const [mode, status] of [['detail', 'ready'], ['save', 'saved'], ['regenerate', 'generated'], ['refreshVideo', 'refreshed'], ['setCustomThumbnail', 'updated']]) {
       const value = { ...item(), refreshable };
       const f = fixture({ status, item: value });
       const request = mode === 'detail' ? value.id : mode === 'save'
@@ -1382,4 +1382,104 @@ test('refreshable is an explicit boolean in every detailed response projection',
       assert.deepEqual(plain(await f.bridge[mode](request)), { status: 'unavailable' });
     }
   }
+});
+
+test('custom thumbnail projects only the updated detail and bounded status vocabulary', async () => {
+  const request = { id: item().id, revision: item().revision };
+  const f = fixture({ status: 'updated', item: { ...item(), width: 640, height: 360, sourcePath: '/secret/video' }, nativeError: 'secret' });
+  assert.deepEqual(plain(await f.bridge.setCustomThumbnail(request)), { status: 'updated', item: { ...item(), width: 640, height: 360 } });
+  assert.deepEqual(plain(f.invoked), [[channels.setCustomThumbnail, request]]);
+  for (const status of ['cancelled', 'conflict', 'invalid', 'source-unavailable', 'busy', 'unavailable']) {
+    f.native(async () => ({ status, nativeError: '/secret/video' }));
+    assert.deepEqual(plain(await f.bridge.setCustomThumbnail(request)), { status });
+  }
+  for (const status of ['generated', 'ready', 'saved', 'unknown']) {
+    f.native(async () => ({ status, item: item() }));
+    assert.deepEqual(plain(await f.bridge.setCustomThumbnail(request)), { status: 'unavailable' });
+  }
+});
+
+test('custom thumbnail requires an exact own data id/revision pair without invoking getters', async () => {
+  const request = { id: item().id, revision: item().revision };
+  const f = fixture();
+  let getters = 0;
+  for (const args of [[], [null], [{}], [request, 'extra'], [{ ...request, path: '/secret' }],
+    [{ ...request, id: 'bad' }], [{ ...request, revision: 'bad' }],
+    [{ ...request, [Symbol('path')]: '/secret' }], [Object.create(request)],
+    [Object.defineProperty({ revision: request.revision }, 'id', { value: request.id })],
+    [{ revision: request.revision, get id() { getters++; return request.id; } }]]) {
+    assert.deepEqual(plain(await f.bridge.setCustomThumbnail(...args)), { status: 'unavailable' });
+  }
+  assert.equal(getters, 0); assert.equal(f.invoked.length, 0);
+});
+
+test('custom thumbnail shares cancellation drainage and cannot overlap regeneration or other requests', async () => {
+  const f = fixture(); let resolve!: (value: unknown) => void;
+  f.native(() => new Promise(yes => { resolve = yes; }));
+  const request = { id: item().id, revision: item().revision };
+  const work = f.bridge.setCustomThumbnail(request);
+  f.bridge.cancelRegeneration('extra'); assert.equal(f.sent.length, 0);
+  f.bridge.cancelRegeneration(); f.bridge.cancelRegeneration();
+  assert.deepEqual(f.sent, [[channels.cancelRegeneration]]);
+  for (const next of [f.bridge.regenerate(request), f.bridge.setCustomThumbnail(request), f.bridge.detail(request.id)]) {
+    assert.deepEqual(plain(await next), { status: 'busy' });
+  }
+  resolve({ status: 'cancelled' }); assert.deepEqual(plain(await work), { status: 'cancelled' });
+  f.bridge.cancelRegeneration(); assert.equal(f.sent.length, 1);
+});
+
+test('lock permanently suppresses custom thumbnail completion and its cancellation channel', async () => {
+  const f = fixture(); let resolve!: (value: unknown) => void;
+  f.native(() => new Promise(yes => { resolve = yes; }));
+  const request = { id: item().id, revision: item().revision };
+  const work = f.bridge.setCustomThumbnail(request);
+  f.bridge.lock(); f.bridge.cancelRegeneration();
+  resolve({ status: 'updated', item: item() });
+  assert.deepEqual(plain(await work), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.setCustomThumbnail(request)), { status: 'unavailable' });
+  assert.deepEqual(f.sent, [[channels.lock]]); assert.equal(f.invoked.length, 1);
+});
+
+
+test('thumbnail editability must be explicit in every detail response', async () => {
+  for (const thumbnailEditable of [undefined, null, 0, 'true']) {
+    const f = fixture({ status: 'updated', item: { ...item(), thumbnailEditable } });
+    assert.deepEqual(plain(await f.bridge.setCustomThumbnail({ id: item().id, revision: item().revision })), { status: 'unavailable' });
+  }
+});
+
+
+test('password recovery preload uses only exact credentials and its fixed channel with bounded output', async () => {
+  for (const status of ['changed', 'incorrect-password', 'not-found', 'cancelled', 'invalid', 'busy', 'unavailable']) {
+    const f = fixture({ status, password: 'secret', path: '/private', candidates: 5 });
+    assert.deepEqual(plain(await f.credentials.resumePasswordChange(passwordChange())), { status });
+    assert.deepEqual(f.invoked, [[channels.resumePasswordChange, passwordChange()]]);
+  }
+  const f = fixture(); let reads = 0;
+  for (const args of [[], [null], [passwordChange(), 'extra'], [{ ...passwordChange(), path: '/private' }],
+    [{ currentPassword: 'same', newPassword: 'same' }], [{ ...passwordChange(), newPassword: 'é'.repeat(513) }],
+    [{ get currentPassword() { reads++; return 'secret'; }, newPassword: 'replacement' }]]) {
+    assert.deepEqual(plain(await f.credentials.resumePasswordChange(...args)), { status: 'invalid' });
+  }
+  assert.equal(reads, 0); assert.deepEqual(f.invoked, []);
+});
+
+test('password recovery preload shares busy admission and locks all methods after confirmed success', async () => {
+  const f = fixture(); let finish!: (result: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  const work = f.credentials.resumePasswordChange(passwordChange());
+  assert.deepEqual(plain(await f.credentials.changePassword(passwordChange())), { status: 'busy' });
+  assert.deepEqual(plain(await f.credentials.resumePasswordChange(passwordChange())), { status: 'busy' });
+  assert.deepEqual(plain(await f.bridge.protection()), { status: 'busy' });
+  finish({ status: 'changed' }); assert.deepEqual(plain(await work), { status: 'changed' });
+  assert.deepEqual(plain(await f.credentials.resumePasswordChange(passwordChange())), { status: 'unavailable' });
+  assert.deepEqual(plain(await f.bridge.protection()), { status: 'unavailable' });
+  assert.equal(f.invoked.length, 1);
+});
+
+test('password recovery preload suppresses late success after explicit lock', async () => {
+  const f = fixture(); let finish!: (result: unknown) => void;
+  f.native(() => new Promise(resolve => { finish = resolve; }));
+  const work = f.credentials.resumePasswordChange(passwordChange()); f.bridge.lock(); finish({ status: 'changed' });
+  assert.deepEqual(plain(await work), { status: 'unavailable' }); assert.deepEqual(f.sent, [[channels.lock]]);
 });

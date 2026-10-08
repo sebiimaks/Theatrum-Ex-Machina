@@ -3,8 +3,8 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createHash } = require('node:crypto');
-const { app, BrowserWindow, dialog, Menu, nativeImage, session } = require('electron');
+const { createHash, randomBytes } = require('node:crypto');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, session, webContents } = require('electron');
 const repository = fs.realpathSync(path.resolve(__dirname, '..'));
 const fixture = process.argv.find(value => value.startsWith('--private-package-fixture='))?.slice('--private-package-fixture='.length);
 assert.ok(repository.startsWith('/Users/sm/Workspace/'));
@@ -41,6 +41,7 @@ function recordPickerDiagnostic(value) {
 let configuration;
 let normalWindow;
 let ordinaryMenu;
+let heldSourcePicker;
 let stage = 'configuration';
 let allowFinalQuit = false;
 let resolveFinalQuit;
@@ -153,6 +154,15 @@ dialog.showOpenDialog = async (owner, options) => {
     assert.equal(fs.realpathSync(encryptedDirectory), encryptedDirectory);
     return { canceled: false, filePaths: [encryptedDirectory] };
   }
+  if (configuration?.crashMode && options.title === 'Allow source folder access') {
+    assert.ok(heldSourcePicker && !heldSourcePicker.entered);
+    assert.equal(owner, heldSourcePicker.owner);
+    assert.equal(options.defaultPath, sourceDirectory);
+    assert.deepEqual(options.properties, ['openDirectory', 'noResolveAliases', 'dontAddToRecent']);
+    assert.equal(options.securityScopedBookmarks, false);
+    heldSourcePicker.entered = true;
+    return heldSourcePicker.result;
+  }
   assert.ok(owner && owner !== normalWindow && !owner.isDestroyed());
   assert.equal(await evaluate(owner, 'typeof globalThis.privateConversion'), 'object');
   assert.equal(options.title, 'Create private copy');
@@ -239,6 +249,10 @@ fs.writeFileSync(path.join(thumbnails, 'normal-video.jpg'), image); image.fill(0
 // production source, window preference or module export is instrumented.
 process.argv = [process.execPath, cataloguePath];
 require(path.join(archive, 'main.js'));
+// Read-only observation of the real host's ordinary admission boundary. Never
+// replace production exports, create a second workspace, or expose private state.
+const { normalOperationScope } = require(path.join(archive, 'node', 'normal-operation-scope.js'));
+const { GLOBALS } = require(path.join(archive, 'node', 'main-globals.js'));
 
 async function restored() {
   await until(() => BrowserWindow.getAllWindows().length === 1 && normalWindow.isVisible()
@@ -256,9 +270,359 @@ async function openGallery() {
   await evaluate(gallery, 'document.querySelector("#gallery-grid .video-card").click(); true');
   return { gallery, partition };
 }
+function ordinaryPaused() {
+  assert.equal(normalWindow.isDestroyed(), false);
+  assert.equal(normalWindow.isVisible(), false);
+  assert.equal(normalOperationScope.accepting, false);
+  assert.equal(GLOBALS.catalogueTransitionActive, true);
+  const menu = Menu.getApplicationMenu();
+  assert.notEqual(menu, ordinaryMenu);
+  assert.ok(menu.getMenuItemById('private-native-close'));
+  assert.equal(menu.getMenuItemById('private-hub-open'), null);
+}
+// Unowned main-process fetches are refused even in a live private session.
+// This supplements lifecycle checks; it is not proof of retiring owned requests.
+async function unownedProbeDenied(partition, url) {
+  let denied = false;
+  try {
+    const response = await partition.fetch(url);
+    denied = !response.ok;
+    await response.body?.cancel();
+  } catch { denied = true; }
+  assert.equal(denied, true);
+}
+async function readableMediaUrl(window) {
+  const url = await evaluate(window, 'document.querySelector("#gallery-grid .video-card img").src');
+  assert.ok(typeof url === 'string' && url.startsWith('theatrum://'));
+  // A main-process session.fetch has no owning webContentsId and is denied even
+  // while the hub is open. The gallery's CSP also prohibits renderer fetch.
+  // Positively decode an Image through the real allowed image route instead;
+  // a fresh cache key prevents reuse of the already decoded gallery element.
+  const probeUrl = new URL(url);
+  probeUrl.search = '?v=native-termination-probe';
+  assert.equal(await evaluate(window, `(async () => {
+    const image = new Image();
+    try {
+      image.src = ${JSON.stringify(probeUrl.href)};
+      await image.decode();
+      return image.naturalWidth === 64 && image.naturalHeight === 36;
+    } finally { image.removeAttribute('src'); }
+  })()`), true);
+  await unownedProbeDenied(window.webContents.session, url);
+  return url;
+}
+function fixtureCrashDirectoryEmpty() {
+  const visit = directory => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      assert.equal(entry.isSymbolicLink(), false);
+      if (entry.isDirectory()) { visit(path.join(directory, entry.name)); }
+      else { assert.fail('Renderer termination produced a persistent crash artifact.'); }
+    }
+  };
+  visit(path.join(fixture, 'profile', 'crash-dumps'));
+}
+async function killPrivateRenderer(window, channel) {
+  ordinaryPaused();
+  await waitDom(normalWindow, 'document.body.inert === true');
+  const contents = window.webContents;
+  const pid = contents.getOSProcessId();
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  assert.notEqual(pid, process.pid);
+  assert.notEqual(pid, normalWindow.webContents.getOSProcessId());
+  for (const other of webContents.getAllWebContents()) {
+    if (other !== contents && !other.isDestroyed()) { assert.notEqual(pid, other.getOSProcessId()); }
+  }
+  assert.equal(ipcMain.listenerCount(channel), 1);
+  let observed = 0;
+  const gone = new Promise((resolve, reject) => {
+    // Installed after production listeners. These assertions run within the
+    // same event emission, before promise continuations or cleanup drainage.
+    contents.once('render-process-gone', (_event, details) => {
+      try {
+        observed++;
+        assert.equal(details.reason, 'killed');
+        assert.equal(ipcMain.listenerCount(channel), 0);
+        ordinaryPaused();
+        resolve();
+      } catch (error) { reject(error); }
+    });
+  });
+  process.kill(pid, 'SIGKILL');
+  await gone;
+  assert.equal(observed, 1);
+  await until(() => window.isDestroyed());
+}
+async function reopenWithPassword(previousPartitions, password = configuration.password) {
+  const prefix = stage;
+  setStage(prefix + '-native-open');
+  await nativeEntry('private-hub-open');
+  setStage(prefix + '-password-window');
+  const prompt = await privateWindow('privateUnlock');
+  const promptPartition = await isolated(prompt, 'privateUnlock');
+  for (const partition of previousPartitions) { assert.notEqual(promptPartition, partition); }
+  previousPartitions.push(promptPartition);
+  await focus(prompt);
+  await waitDom(prompt, '!document.getElementById("unlock").disabled');
+  assert.equal(await evaluate(prompt, 'document.getElementById("password").value'), '');
+  setStage(prefix + '-password-submit');
+  await type(prompt, '#password', password);
+  void evaluate(prompt, 'document.getElementById("unlock-form").requestSubmit(); true').catch(() => undefined);
+  setStage(prefix + '-gallery-open');
+  const opened = await openGallery();
+  assert.equal(prompt.isDestroyed(), true);
+  for (const partition of previousPartitions) { assert.notEqual(opened.partition, partition); }
+  previousPartitions.push(opened.partition);
+  setStage(prefix + '-saved-notes');
+  await waitDom(opened.gallery, `document.getElementById('details-notes').value === ${JSON.stringify(configuration.marker)}`);
+  return opened;
+}
+async function runPasswordRecovery(previousPartitions) {
+  setStage('host-recovery-fixture');
+  // Seed only this locked synthetic hub with the exact authenticated envelope a
+  // password change leaves before publication. Exercise the real packaged UI,
+  // IPC, store and native confirmation without altering production functions.
+  const { PRIVATE_HUB_HEADER_FILE } = require(path.join(archive, 'node', 'private-hub-store.js'));
+  const { validatePrivateHubHeader, unlockPrivateHub, changePrivateHubPassword } =
+    require(path.join(archive, 'node', 'private-hub-crypto.js'));
+  const headerPath = path.join(encryptedDirectory, PRIVATE_HUB_HEADER_FILE);
+  const pendingName = PRIVATE_HUB_HEADER_FILE + '.' + randomBytes(24).toString('hex') + '.pending';
+  const pendingPath = path.join(encryptedDirectory, pendingName);
+  const header = validatePrivateHubHeader(JSON.parse(fs.readFileSync(headerPath, 'utf8')));
+  const key = await unlockPrivateHub(header, configuration.password);
+  let pendingBytes;
+  try {
+    pendingBytes = Buffer.from(JSON.stringify(await changePrivateHubPassword(header, key, configuration.newPassword)), 'utf8');
+    fs.writeFileSync(pendingPath, pendingBytes, { flag: 'wx', mode: 0o600 });
+  } finally { key.fill(0); pendingBytes?.fill(0); }
+  const before = fingerprint(encryptedDirectory);
+  const pendingIdentity = fs.lstatSync(pendingPath);
+  const savedConfirmation = dialog.showMessageBox;
+  let confirmations = 0;
+  let accept = false;
+  let recovering;
+  dialog.showMessageBox = async (owner, options) => {
+    assert.equal(owner, recovering.gallery);
+    assert.equal(options.title, 'Finish interrupted password change?');
+    assert.equal(options.message, 'Finish interrupted password change?');
+    assert.deepEqual(options.buttons, ['Finish password change', 'Cancel']);
+    assert.equal(options.defaultId, 1); assert.equal(options.cancelId, 1); assert.equal(options.noLink, true);
+    const text = JSON.stringify(options);
+    for (const secret of [configuration.password, configuration.newPassword, configuration.marker, encryptedDirectory, pendingName]) {
+      assert.equal(text.includes(secret), false, 'Native confirmation disclosed private information.');
+    }
+    ordinaryPaused();
+    confirmations++;
+    return { response: accept ? 0 : 1, checkboxChecked: false };
+  };
+  try {
+    setStage('host-recovery-open');
+    recovering = await reopenWithPassword(previousPartitions);
+    const ordinaryBeforeRecovery = fingerprint(normalDirectory);
+    ordinaryPaused();
+    await evaluate(recovering.gallery, 'document.getElementById("protection-button").click(); true');
+    await waitDom(recovering.gallery, '!document.getElementById("auto-lock-minutes").disabled');
+    await evaluate(recovering.gallery, 'document.getElementById("change-password-toggle").click(); true');
+    const submit = (currentPassword, newPassword) => evaluate(recovering.gallery, `(() => {
+      for (const [id, value] of ${JSON.stringify([['current-password', currentPassword], ['new-password', newPassword], ['confirm-password', newPassword]])}) {
+        const input = document.getElementById(id); input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      document.getElementById('resume-password-submit').click();
+      return ['current-password', 'new-password', 'confirm-password'].every(id => document.getElementById(id).value === '');
+    })()`);
+    setStage('host-recovery-wrong-credentials');
+    for (const [currentPassword, newPassword] of [
+      [configuration.password + ' incorrect', configuration.newPassword],
+      [configuration.password, configuration.newPassword + ' incorrect'],
+    ]) {
+      assert.equal(await submit(currentPassword, newPassword), true);
+      await waitDom(recovering.gallery, `document.getElementById('password-status').textContent.includes('interrupted change is incorrect')
+        && !document.getElementById('resume-password-submit').disabled`);
+      assert.equal(confirmations, 0);
+      assert.deepEqual(fingerprint(encryptedDirectory), before);
+      ordinaryPaused();
+    }
+    setStage('host-recovery-cancel');
+    assert.equal(await submit(configuration.password, configuration.newPassword), true);
+    await waitDom(recovering.gallery, `document.getElementById('password-status').textContent.includes('left unfinished')
+      && !document.getElementById('resume-password-submit').disabled`);
+    assert.equal(confirmations, 1);
+    assert.deepEqual(fingerprint(encryptedDirectory), before);
+    assert.deepEqual(fingerprint(normalDirectory), ordinaryBeforeRecovery);
+    ordinaryPaused();
+    await waitDom(normalWindow, 'document.body.inert === true');
+    await checkpoint('host-recovery-reviewed', { credentialsCleared: true, wrongCredentialsBeforeConfirmation: true,
+      nativeConfirmationDefaultCancel: true, cancelledRecoveryUnchanged: true, ordinaryPaused: true, ordinaryUnchanged: true });
+
+    setStage('host-recovery-confirm');
+    accept = true;
+    assert.equal(await submit(configuration.password, configuration.newPassword), true);
+    await restored();
+    assert.equal(confirmations, 2);
+    assert.equal(recovering.gallery.isDestroyed(), true);
+    assert.equal(await recovering.partition.getCacheSize(), 0);
+    assert.deepEqual(fingerprint(normalDirectory), ordinaryBeforeRecovery);
+    const after = fingerprint(encryptedDirectory);
+    const expected = { ...before, [PRIVATE_HUB_HEADER_FILE]: before[pendingName] }; delete expected[pendingName];
+    assert.deepEqual(after, expected, 'Only the credential envelope may change.');
+    const publishedIdentity = fs.lstatSync(headerPath);
+    assert.equal(publishedIdentity.dev, pendingIdentity.dev);
+    assert.equal(publishedIdentity.ino, pendingIdentity.ino);
+    assert.equal(fs.existsSync(headerPath + '.bak'), false);
+    setStage('host-recovery-old-password');
+    await nativeEntry('private-hub-open');
+    const oldPrompt = await privateWindow('privateUnlock');
+    const oldPartition = await isolated(oldPrompt, 'privateUnlock');
+    for (const partition of previousPartitions) { assert.notEqual(oldPartition, partition); }
+    previousPartitions.push(oldPartition);
+    await focus(oldPrompt);
+    await waitDom(oldPrompt, '!document.getElementById("unlock").disabled');
+    ordinaryPaused();
+    await type(oldPrompt, '#password', configuration.password);
+    void evaluate(oldPrompt, 'document.getElementById("unlock-form").requestSubmit(); true').catch(() => undefined);
+    await restored();
+    assert.equal(oldPrompt.isDestroyed(), true);
+    assert.deepEqual(fingerprint(encryptedDirectory), after);
+    setStage('host-recovery-new-password');
+    const reopened = await reopenWithPassword(previousPartitions, configuration.newPassword);
+    ordinaryPaused();
+    const ordinaryAfterReopen = fingerprint(normalDirectory);
+    assert.deepEqual(fingerprint(encryptedDirectory), after);
+    assert.equal(await reopened.partition.getCacheSize(), 0);
+    await checkpoint('host-recovery-reopened', { confirmedRecoveryLocked: true, ordinaryRestoredAfterRecovery: true,
+      stagedEnvelopeAdopted: true, encryptedRecordsUnchanged: true, oldPasswordRejected: true,
+      newPasswordReopened: true, savedNotesPreserved: true, previewDecoded: true, freshPrivateSessions: true,
+      ordinaryPaused: true, noDiskCache: true });
+    setStage('host-recovery-lock');
+    void evaluate(reopened.gallery, 'document.getElementById("lock-hub").click(); true').catch(() => undefined);
+    await restored();
+    assert.equal(reopened.gallery.isDestroyed(), true);
+    await closeHost(ordinaryAfterReopen);
+  } finally { dialog.showMessageBox = savedConfirmation; }
+}
+async function closeHost(ordinarySnapshot) {
+  assert.deepEqual(fingerprint(normalDirectory), ordinarySnapshot);
+  assert.deepEqual(recentDocuments, [cataloguePath]);
+  assertDestinationPreserved();
+  allowFinalQuit = true;
+  normalWindow.close();
+  await finalQuit;
+  assert.equal(normalWindow.isDestroyed(), true);
+  const settings = JSON.parse(fs.readFileSync(path.join(settingsDirectory, 'settings.json'), 'utf8'));
+  assert.equal(settings.appState.currentVhaFile, cataloguePath);
+  await checkpoint('host-closed', { privateDestroyed: true, ordinaryRestored: true, ordinaryClosed: true,
+    settingsSaved: true, noPrivateRecentWrites: true });
+  await send({ type: 'complete' }); app.exit(0);
+}
+async function runRendererTermination(firstPartition) {
+  const partitions = [firstPartition];
+  const encryptedBefore = fingerprint(encryptedDirectory);
+  setStage('crash-password');
+  await nativeEntry('private-hub-open');
+  const prompt = await privateWindow('privateUnlock');
+  const promptPartition = await isolated(prompt, 'privateUnlock');
+  partitions.push(promptPartition);
+  await focus(prompt);
+  await waitDom(prompt, '!document.getElementById("unlock").disabled');
+  await type(prompt, '#password', configuration.password + ' unsent');
+  await killPrivateRenderer(prompt, 'private-password-cancel');
+  await restored();
+  await unownedProbeDenied(promptPartition, 'theatrum://app/index.html');
+  assert.equal(await promptPartition.getCacheSize(), 0);
+  assert.deepEqual(fingerprint(encryptedDirectory), encryptedBefore);
+  fixtureCrashDirectoryEmpty();
+  await checkpoint('crash-password-retired', { rendererKilled: true, unsentPasswordDiscarded: true,
+    controlListenerRemovedSynchronously: true, ordinaryStayedPaused: true, privateDestroyed: true, ordinaryRestored: true,
+    unownedProbeDenied: true, noDiskCache: true, fixtureCrashDirectoryEmpty: true });
+
+  setStage('crash-gallery');
+  const draft = await reopenWithPassword(partitions);
+  setStage('crash-gallery-preview-control');
+  const draftUrl = await readableMediaUrl(draft.gallery);
+  const draftText = configuration.marker + ' unsaved draft';
+  setStage('crash-gallery-draft');
+  await type(draft.gallery, '#details-notes', draftText);
+  await waitDom(draft.gallery, '!document.getElementById("save-details").disabled');
+  const beforeDraftDeath = fingerprint(encryptedDirectory);
+  setStage('crash-gallery-termination');
+  await killPrivateRenderer(draft.gallery, 'private-gallery-lock');
+  setStage('crash-gallery-restoration');
+  await restored();
+  setStage('crash-gallery-retired-session');
+  await unownedProbeDenied(draft.partition, draftUrl);
+  assert.equal(await draft.partition.getCacheSize(), 0);
+  assert.deepEqual(fingerprint(encryptedDirectory), beforeDraftDeath);
+  await checkpoint('crash-gallery-retired', { rendererKilled: true, unsavedNotesPresent: true,
+    encryptedPreviewDecoded: true, controlListenerRemovedSynchronously: true, ordinaryStayedPaused: true,
+    privateDestroyed: true, ordinaryRestored: true, unownedProbeDenied: true, noDiskCache: true, encryptedFilesUnchanged: true });
+
+  setStage('crash-picker');
+  const picking = await reopenWithPassword(partitions);
+  setStage('crash-picker-preview-control');
+  const pickerUrl = await readableMediaUrl(picking.gallery);
+  let releasePicker;
+  let lateSelectionReads = 0;
+  heldSourcePicker = { owner: picking.gallery, entered: false,
+    result: new Promise(resolve => { releasePicker = resolve; }) };
+  setStage('crash-picker-source-list');
+  await evaluate(picking.gallery, 'document.getElementById("source-folders-toggle").click(); true');
+  await waitDom(picking.gallery, 'document.querySelector("[data-action=connect-source]")?.disabled === false');
+  void evaluate(picking.gallery, 'document.querySelector("[data-action=connect-source]").click(); true').catch(() => undefined);
+  await until(() => heldSourcePicker.entered);
+  const beforePickerDeath = fingerprint(encryptedDirectory);
+  setStage('crash-picker-termination');
+  await killPrivateRenderer(picking.gallery, 'private-gallery-lock');
+  setStage('crash-picker-retired-session');
+  await unownedProbeDenied(picking.partition, pickerUrl);
+  // The checkpoint round trip also leaves time for cleanup to attempt an
+  // incorrect early ordinary restoration while the native choice is pending.
+  ordinaryPaused();
+  await waitDom(normalWindow, 'document.body.inert === true');
+  assert.deepEqual(fingerprint(encryptedDirectory), beforePickerDeath);
+  await checkpoint('crash-picker-held', { rendererKilled: true, controlListenerRemovedSynchronously: true,
+    privateDestroyed: true, ordinaryPaused: true, menuRestricted: true, pickerPending: true,
+    unownedProbeDenied: true, encryptedFilesUnchanged: true });
+  ordinaryPaused();
+  setStage('crash-picker-late-selection');
+  releasePicker({ canceled: false, get filePaths() { lateSelectionReads++; return [sourceDirectory]; } });
+  await restored();
+  assert.equal(lateSelectionReads, 0);
+  heldSourcePicker = undefined;
+  assert.deepEqual(fingerprint(encryptedDirectory), beforePickerDeath);
+  assert.equal(await picking.partition.getCacheSize(), 0);
+  await checkpoint('crash-picker-drained', { lateSelectionRejected: true, ordinaryRestored: true,
+    menuRestored: true, encryptedFilesUnchanged: true, noDiskCache: true });
+
+  setStage('crash-reopening');
+  const recovered = await reopenWithPassword(partitions);
+  setStage('crash-reopening-saved-state');
+  assert.equal(await evaluate(recovered.gallery, `document.getElementById('details-notes').value === ${JSON.stringify(draftText)}`), false);
+  assert.equal(await evaluate(recovered.gallery, `(async () => {
+    const sources = await globalThis.privateGallery.sources();
+    return sources.status === 'ready' && sources.items.length === 1 && sources.items.every(source => source.connected === false);
+  })()`), true);
+  // The URL identifies a preview, not a bearer capability: the same URL can
+  // legitimately work in the freshly authenticated hub. Retired partitions
+  // must still reject unowned probes after a new owner unlocks that same hub.
+  // Direct request retirement is covered separately by protocol/browser unit tests.
+  await unownedProbeDenied(draft.partition, draftUrl);
+  await unownedProbeDenied(picking.partition, pickerUrl);
+  assert.equal(await recovered.partition.getCacheSize(), 0);
+  fixtureCrashDirectoryEmpty();
+  await checkpoint('crash-reopened', { nativePasswordUnlock: true, savedNotesPreserved: true, draftDiscarded: true,
+    encryptedPreviewDecoded: true, freshSessions: true, noSourceGrant: true, unownedProbesDeniedAfterReopen: true,
+    noDiskCache: true, fixtureCrashDirectoryEmpty: true });
+  const ordinarySnapshot = fingerprint(normalDirectory);
+  setStage('crash-reopening-lock');
+  void evaluate(recovered.gallery, 'document.getElementById("lock-hub").click(); true').catch(() => undefined);
+  await restored();
+  assert.equal(recovered.gallery.isDestroyed(), true);
+  await closeHost(ordinarySnapshot);
+}
 async function run() {
   if (!configuration) { await new Promise(resolve => waiting.set('configuration', resolve)); }
-  assert.ok(typeof configuration.marker === 'string' && typeof configuration.password === 'string');
+  assert.ok(typeof configuration.marker === 'string' && typeof configuration.password === 'string'
+    && typeof configuration.newPassword === 'string');
   setStage('host-starting');
   await app.whenReady();
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] },
@@ -328,6 +692,7 @@ async function run() {
   assert.equal(await first.partition.getCacheSize(), 0);
   assert.deepEqual(fingerprint(normalDirectory), ordinaryBeforeConversion);
   await checkpoint('host-restored', { privateDestroyed: true, ordinaryRestored: true, menuRestored: true, ordinaryUnchanged: true });
+  if (configuration.crashMode === true) { await runRendererTermination(first.partition); return; }
 
   setStage('host-reopening');
   await nativeEntry('private-hub-open');
@@ -358,16 +723,6 @@ async function run() {
   await restored();
   assert.equal(reopened.gallery.isDestroyed(), true);
   assert.deepEqual(fingerprint(normalDirectory), ordinaryBeforeReopen);
-  assert.deepEqual(recentDocuments, [cataloguePath]);
-  assertDestinationPreserved();
-  allowFinalQuit = true;
-  normalWindow.close();
-  await finalQuit;
-  assert.equal(normalWindow.isDestroyed(), true);
-  const settings = JSON.parse(fs.readFileSync(path.join(settingsDirectory, 'settings.json'), 'utf8'));
-  assert.equal(settings.appState.currentVhaFile, cataloguePath);
-  await checkpoint('host-closed', { privateDestroyed: true, ordinaryRestored: true, ordinaryClosed: true,
-    settingsSaved: true, noPrivateRecentWrites: true });
-  await send({ type: 'complete' }); app.exit(0);
+  await runPasswordRecovery([first.partition, reopened.partition]);
 }
 void run().catch(fail);

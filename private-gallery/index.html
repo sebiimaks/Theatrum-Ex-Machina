@@ -115,6 +115,8 @@
               <input id="confirm-password" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="password-status">
               <p id="password-status" role="status" aria-live="polite"></p>
               <button class="button save-button" id="change-password-submit" type="submit">Change password and lock</button>
+              <p id="password-recovery-help">If the app closed during an earlier change, enter the password that still opens this hub and the new password from that attempt. You will confirm before finishing the change.</p>
+              <button class="button" id="resume-password-submit" type="button" aria-describedby="password-recovery-help password-status">Finish interrupted password change</button>
             </form>
           </div>
           <div class="password-section">
@@ -242,10 +244,12 @@
             </div>
             <p id="playback-status" role="status" aria-live="polite"></p>
             <div class="generation-actions">
+              <button class="button button-secondary" id="choose-thumbnail" type="button" aria-describedby="choose-thumbnail-help" disabled>Choose thumbnail</button>
               <button class="button button-secondary" id="refresh-video" type="button" aria-describedby="refresh-video-help" disabled>Refresh video</button>
               <button class="button button-secondary" id="regenerate-previews" type="button" disabled>Regenerate previews</button>
               <button class="button button-secondary" id="cancel-regeneration" type="button" hidden>Cancel</button>
             </div>
+            <p id="choose-thumbnail-help">Choose a JPEG or PNG image up to 32 MiB and 32 megapixels. A resized copy without embedded metadata is encrypted in this hub. Transparent areas use a black background. Regenerating previews restores the generated thumbnail.</p>
             <p id="refresh-video-help">Update technical details and regenerate previews from the saved source. Notes, tags and playback history stay unchanged.</p>
             <p id="generation-status" role="status" aria-live="polite"></p>
           </div>

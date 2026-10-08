@@ -43,9 +43,16 @@ fi
 if [ "$ensure_valid" = true ]; then
   ensure_version=$($ensure_output_dir/ffmpeg -version 2>/dev/null || true)
   case "$ensure_version" in
-    *"ffmpeg version 8.1.2"*"--enable-gpl"*"--enable-libx264"*) ;;
+    *"ffmpeg version 8.1.2"*"--enable-gpl"*"--enable-libx264"*"--enable-zlib"*) ;;
     *) ensure_valid=false ;;
   esac
+fi
+
+if [ "$ensure_valid" = true ]; then
+  if ! "$ensure_output_dir/ffmpeg" -hide_banner -decoders 2>/dev/null | \
+    awk '$2 == "png" { found = 1 } END { exit !found }'; then
+    ensure_valid=false
+  fi
 fi
 
 if [ "$ensure_valid" = true ]; then

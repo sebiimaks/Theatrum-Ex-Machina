@@ -65,7 +65,8 @@ h1, h2, h3, p { margin: 0; }
 #change-password-form input:disabled, #unprotected-copy-form input:disabled, #touch-id-password:disabled { opacity: .6; }
 #change-password-form #password-help, #unprotected-copy-help { margin-top: 3px; }
 #password-status, #unprotected-copy-status, #touch-id-status { color: #d6c49f; min-height: 18px; overflow-wrap: anywhere; }
-#change-password-submit { margin-top: 12px; width: 100%; }
+#change-password-submit, #resume-password-submit { margin-top: 12px; width: 100%; }
+#password-recovery-help { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px; }
 #unprotected-copy-form .copy-acknowledgement { align-items: flex-start; cursor: pointer; display: flex; font-size: 12px; gap: 9px; line-height: 1.5; margin: 15px 0 0; }
 #unprotected-copy-acknowledge { accent-color: var(--accent); flex: 0 0 16px; height: 16px; margin: 2px 0 0; padding: 0; width: 16px; }
 .copy-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
@@ -140,7 +141,7 @@ input::placeholder { color: #8ea1a9; }
 .preview-column { min-width: 0; }
 .generation-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
 .generation-actions .button { font-size: 12px; min-height: 34px; padding: 7px 10px; }
-#generation-status, #refresh-video-help { color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: 8px; }
+#generation-status, #refresh-video-help, #choose-thumbnail-help { color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: 8px; }
 .detail-summary { min-width: 0; }
 #details-title { font-size: 16px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
 .detail-facts { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 8px; }

@@ -134,7 +134,8 @@
   "deb": {
     "packageName": "theatrum-ex-machina",
     "packageCategory": "video",
-    "priority": "optional"
+    "priority": "optional",
+    "fpm": ["--depends", "zlib1g"]
   },
   "nsis": {
     "oneClick": false,

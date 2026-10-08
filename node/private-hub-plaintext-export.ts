@@ -7,6 +7,7 @@ import { PRIVATE_HUB_MAX_IMAGE_BYTES, type PrivateHubPreviewKind } from './priva
 import { openPrivateHubMedia, privateHubMediaManifestRecordId, PRIVATE_HUB_MEDIA_CHUNK_BYTES,
   PRIVATE_HUB_MEDIA_MAX_BYTES, PRIVATE_HUB_MEDIA_MAX_MANIFEST_BYTES } from './private-hub-media';
 import { readPrivatePreviewSet, privatePreviewSetMemberId, type PrivatePreviewSet } from './private-hub-preview-set';
+import { readPrivateThumbnailOverride, privateThumbnailOverrideMemberId, type PrivateThumbnailOverride } from './private-thumbnail-override';
 import type { PrivateHubStore } from './private-hub-store';
 import { CATALOGUE_FILE_MAX_BYTES, parseVhaJson } from './vha-file-persistence';
 
@@ -111,6 +112,7 @@ export async function exportPrivateHubToPlaintext(
   const directories: Snapshot[] = [];
   const sourceRecords: SourceRecord[] = [];
   const previewSets = new Map<string, PrivatePreviewSet | undefined>();
+  const thumbnailOverrides = new Map<string, PrivateThumbnailOverride | undefined>();
   const outputs: Output[] = [];
   let previewCount = 0;
   let byteLength = 0;
@@ -297,15 +299,20 @@ export async function exportPrivateHubToPlaintext(
       const set = await readPrivatePreviewSet(store, hash);
       guard();
       previewSets.set(hash, set);
+      const override = await readPrivateThumbnailOverride(store, hash);
+      guard();
+      thumbnailOverrides.set(hash, override);
       for (const layout of LAYOUT) {
         guard();
         if (set && !set.clip && (layout.kind === 'clip' || layout.kind === 'clip-poster')) {
           progress('copying', ++completed, total); continue;
         }
-        const id = set ? privatePreviewSetMemberId(set, layout.kind) : `preview:${layout.kind}:${hash}`;
+        const custom = layout.kind === 'thumbnail' && override?.baseGeneration === (set?.generation ?? 'legacy') ? override : undefined;
+        const id = custom ? privateThumbnailOverrideMemberId(custom)
+          : set ? privatePreviewSetMemberId(set, layout.kind) : `preview:${layout.kind}:${hash}`;
         const recordId = layout.kind === 'clip' ? privateHubMediaManifestRecordId(id) : id;
         const maximum = layout.kind === 'clip' ? PRIVATE_HUB_MEDIA_MAX_MANIFEST_BYTES : PRIVATE_HUB_MAX_IMAGE_BYTES;
-        const bytes = await readRecord(recordId, maximum, !set);
+        const bytes = await readRecord(recordId, maximum, !set && !custom);
         try {
           sourceRecords.push({ id: recordId, maximum, digest: bytes ? digest(bytes) : undefined });
           if (bytes) {
@@ -345,6 +352,12 @@ export async function exportPrivateHubToPlaintext(
       const current = await readPrivatePreviewSet(store, hash);
       guard();
       if (JSON.stringify(current) !== JSON.stringify(set)) { throw unavailable(); }
+    }
+    for (const [hash, override] of thumbnailOverrides) {
+      guard();
+      const current = await readPrivateThumbnailOverride(store, hash);
+      guard();
+      if (JSON.stringify(current) !== JSON.stringify(override)) { throw unavailable(); }
     }
     for (const saved of sourceRecords) {
       const bytes = await readRecord(saved.id, saved.maximum, saved.digest === undefined);

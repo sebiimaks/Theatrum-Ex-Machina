@@ -56,10 +56,16 @@ async function fixture(t: TestContext, expectSourceCleanupFailure = false) {
  * that module in tests, retaining the real media/source WeakSet authorities. */
 function isolatedGenerator(): typeof generatePrivateHubPreviews {
   const id = require.resolve('./private-hub-preview-generation.ts');
+  const admissionId = require.resolve('./private-preview-admission.ts');
   const cached = require.cache[id];
+  const cachedAdmission = require.cache[admissionId];
   delete require.cache[id];
+  delete require.cache[admissionId];
   try { return (require(id) as typeof import('./private-hub-preview-generation')).generatePrivateHubPreviews; }
-  finally { if (cached) { require.cache[id] = cached; } else { delete require.cache[id]; } }
+  finally {
+    if (cached) { require.cache[id] = cached; } else { delete require.cache[id]; }
+    if (cachedAdmission) { require.cache[admissionId] = cachedAdmission; } else { delete require.cache[admissionId]; }
+  }
 }
 
 async function realCleanupFailure(t: TestContext): Promise<Error> {

@@ -677,10 +677,10 @@ test('unread image responses reserve a bounded byte budget before storage reads 
   let reads = 0;
   t.mock.method(store, 'readRecord', (id: string, limit?: number) => { reads++; return read(id, limit); });
   const unread = await Promise.all(Array.from({ length: 4 }, () => session.createPreviewResponse(generation, 'thumbnail', hash, request())));
-  assert.equal(reads, 8, 'each admitted image checks its preview-set manifest and then reads its image');
+  assert.equal(reads, 12, 'each admitted image checks its preview-set and thumbnail-override manifests before reading its image');
   await assert.rejects(session.createPreviewResponse(generation, 'thumbnail', hash, request()));
   await assert.rejects(session.createPreviewResponse(generation, 'clip', hash, request()));
-  assert.equal(reads, 8, 'capacity rejection must happen before reading a manifest or allocating a preview');
+  assert.equal(reads, 12, 'capacity rejection must happen before reading a manifest or allocating a preview');
   assert.equal(await unread[0].text(), 'thumbnail');
   const afterRead = await session.createPreviewResponse(generation, 'thumbnail', hash, request());
   await assert.rejects(session.createPreviewResponse(generation, 'thumbnail', hash, request()));

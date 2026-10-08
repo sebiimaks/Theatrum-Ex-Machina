@@ -78,10 +78,10 @@ function item(value, details) {
     if (!string(value.notes, 65_536) || !url(value.clipUrl, 'clips', 'mp4') || !url(value.posterUrl, 'clips', 'jpg')
       || !url(value.filmstripUrl, 'filmstrips', 'jpg')
       || typeof value.truncated !== 'boolean' || typeof value.editable !== 'boolean' || typeof value.regenerable !== 'boolean'
-      || typeof value.refreshable !== 'boolean' || typeof value.playable !== 'boolean'
+      || typeof value.thumbnailEditable !== 'boolean' || typeof value.refreshable !== 'boolean' || typeof value.playable !== 'boolean'
       || !validId(value.revision)) { return; }
     Object.assign(result, { notes: value.notes, clipUrl: value.clipUrl, posterUrl: value.posterUrl, filmstripUrl: value.filmstripUrl, truncated: value.truncated,
-      editable: value.editable, regenerable: value.regenerable, refreshable: value.refreshable, playable: value.playable, revision: value.revision });
+      editable: value.editable, regenerable: value.regenerable, refreshable: value.refreshable, thumbnailEditable: value.thumbnailEditable, playable: value.playable, revision: value.revision });
   }
   return result;
 }
@@ -100,6 +100,10 @@ function importCounts(value) {
 }
 function response(value, mode) {
   if (!value || typeof value !== 'object') { return unavailable(); }
+  if (mode === 'resumePasswordChange') {
+    return ['changed', 'incorrect-password', 'not-found', 'cancelled', 'invalid', 'busy', 'unavailable'].includes(value.status)
+      ? { status: value.status } : unavailable();
+  }
   if (mode === 'changePassword') {
     return ['changed', 'incorrect-password', 'invalid', 'busy', 'unavailable'].includes(value.status)
       ? { status: value.status } : unavailable();
@@ -183,6 +187,11 @@ function response(value, mode) {
     return ['recorded', 'disabled', 'ignored', 'conflict', 'invalid'].includes(value.status)
       ? { status: value.status } : unavailable();
   }
+  if (mode === 'setCustomThumbnail') {
+    if (['cancelled', 'conflict', 'invalid', 'source-unavailable'].includes(value.status)) { return { status: value.status }; }
+    const updated = value.status === 'updated' ? item(value.item, true) : undefined;
+    return updated ? { status: 'updated', item: updated } : unavailable();
+  }
   if (mode === 'regenerate' || mode === 'refreshVideo') {
     if (['cancelled', 'conflict', 'source-unavailable', 'wrong-folder'].includes(value.status)
       || (mode === 'refreshVideo' && value.status === 'invalid')) { return { status: value.status }; }
@@ -217,17 +226,17 @@ async function invoke(channel, argument, mode) {
     // Electron copies invoke arguments synchronously. Release our owned password
     // references while the main process performs the slower credential work.
     const work = ipcRenderer.invoke(channel, ...(['protection', 'sources', 'addSource'].includes(mode) ? [] : [argument]));
-    if (mode === 'changePassword') { clearPasswordChange(argument); argument = undefined; }
+    if (mode === 'changePassword' || mode === 'resumePasswordChange') { clearPasswordChange(argument); argument = undefined; }
     if (mode === 'createUnprotectedCopy') { clearUnprotectedCopy(argument); argument = undefined; }
     const value = await work;
     if (locked) { return unavailable(); }
     if (mode === 'playOriginal' && playbackEpoch !== originalEpoch) { return { status: 'cancelled' }; }
     const result = response(value, mode);
-    if (mode === 'changePassword' && result.status === 'changed') { locked = true; }
+    if ((mode === 'changePassword' || mode === 'resumePasswordChange') && result.status === 'changed') { locked = true; }
     return result;
   } catch { return unavailable(); }
   finally {
-    if (mode === 'changePassword') { clearPasswordChange(argument); }
+    if (mode === 'changePassword' || mode === 'resumePasswordChange') { clearPasswordChange(argument); }
     if (mode === 'createUnprotectedCopy') { clearUnprotectedCopy(argument); }
     pending = undefined;
     invocationEpoch++;
@@ -403,8 +412,21 @@ contextBridge.exposeInMainWorld('privateGallery', Object.freeze({
       return await invoke('private-gallery-refresh-video', { id: id.value, revision: revision.value }, 'refreshVideo');
     } catch { return unavailable(); }
   },
+  setCustomThumbnail: async (...args) => {
+    try {
+      const value = args[0];
+      if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value)) { return unavailable(); }
+      const keys = Reflect.ownKeys(value);
+      if (keys.length !== 2 || !keys.includes('id') || !keys.includes('revision')) { return unavailable(); }
+      const id = Object.getOwnPropertyDescriptor(value, 'id');
+      const revision = Object.getOwnPropertyDescriptor(value, 'revision');
+      if (!id?.enumerable || !revision?.enumerable || !Object.hasOwn(id, 'value') || !Object.hasOwn(revision, 'value')
+        || !validId(id.value) || !validId(revision.value)) { return unavailable(); }
+      return await invoke('private-gallery-set-custom-thumbnail', { id: id.value, revision: revision.value }, 'setCustomThumbnail');
+    } catch { return unavailable(); }
+  },
   cancelRegeneration: (...args) => {
-    if (locked || !['regenerate', 'refreshVideo'].includes(pending) || cancellationSent || args.length !== 0) { return; }
+    if (locked || !['regenerate', 'refreshVideo', 'setCustomThumbnail'].includes(pending) || cancellationSent || args.length !== 0) { return; }
     cancellationSent = true;
     try { ipcRenderer.send('private-gallery-cancel-regeneration'); } catch { /* Ownership may already have ended. */ }
   },
@@ -446,6 +468,17 @@ contextBridge.exposeInMainWorld('privateCredentials', Object.freeze({
     if (locked || pending !== 'createUnprotectedCopy' || cancellationSent || args.length !== 0) { return; }
     cancellationSent = true;
     try { ipcRenderer.send('private-credentials-cancel-unprotected-copy'); } catch { /* Ownership may already have ended. */ }
+  },
+  resumePasswordChange: async (...args) => {
+    let request;
+    try {
+      if (locked) { return unavailable(); }
+      request = args.length === 1 ? passwordChange(args[0]) : undefined;
+      args.fill(undefined);
+      if (!request) { return { status: 'invalid' }; }
+      return await invoke('private-credentials-resume-password-change', request, 'resumePasswordChange');
+    } catch { return { status: 'invalid' }; }
+    finally { args.fill(undefined); clearPasswordChange(request); }
   },
   changePassword: async (...args) => {
     let request;

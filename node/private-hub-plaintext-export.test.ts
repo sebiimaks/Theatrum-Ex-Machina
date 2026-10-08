@@ -10,6 +10,8 @@ import * as media from './private-hub-media';
 import { createPrivatePreviewSet, privatePreviewSetMemberId, privatePreviewSetRecordId, publishPrivatePreviewSet } from './private-hub-preview-set';
 import { exportPrivateHubToPlaintext, isPrivateHubPlaintextExportCleanupFailure,
   type PrivateHubPlaintextExportOptions } from './private-hub-plaintext-export';
+import { createPrivateThumbnailOverride, privateThumbnailOverrideMemberId, privateThumbnailOverrideRecordId,
+  publishPrivateThumbnailOverride } from './private-thumbnail-override';
 
 const hash = 'Synthetic-Video_1';
 const hubName = 'Synthetic export hub';
@@ -49,6 +51,63 @@ async function fingerprint(directory: string): Promise<Record<string, string>> {
   return result;
 }
 async function assertNoCatalogue(filePath: string): Promise<void> { await assert.rejects(fs.lstat(filePath), { code: 'ENOENT' }); }
+
+for (const generated of [false, true]) {
+  test(`custom thumbnail export preserves other ${generated ? 'generated' : 'legacy'} previews and exact catalogue`, async t => {
+    const f = await fixture(t);
+    const set = createPrivatePreviewSet(hash, 256, 144, 5, false);
+    if (generated) {
+      await f.store.writeNewRecord(privatePreviewSetMemberId(set, 'thumbnail'), Buffer.from('Generated thumbnail'));
+      await f.store.writeNewRecord(privatePreviewSetMemberId(set, 'filmstrip'), payloads.filmstrip);
+      await publishPrivatePreviewSet(f.store, set, () => true);
+    }
+    const override = createPrivateThumbnailOverride(hash, generated ? set.generation : 'legacy', 144);
+    await f.store.writeNewRecord(privateThumbnailOverrideMemberId(override), Buffer.from('Custom thumbnail'));
+    await publishPrivateThumbnailOverride(f.store, override, () => true);
+    assert.equal((await exportPrivateHubToPlaintext(f.store, f.options)).previewCount, generated ? 2 : 4);
+    assert.equal((await fs.readFile(path.join(f.assets, 'thumbnails', hash + '.jpg'))).toString(), 'Custom thumbnail');
+    assert.deepEqual(await fs.readFile(path.join(f.assets, 'filmstrips', hash + '.jpg')), payloads.filmstrip);
+    assert.deepEqual(await fs.readFile(f.ordinary), f.raw);
+  });
+}
+for (const broken of ['missing-member', 'malformed', 'stale-malformed', 'backup-only'] as const) {
+  test(`custom thumbnail ${broken} prevents export catalogue publication`, async t => {
+    const f = await fixture(t);
+    const override = createPrivateThumbnailOverride(hash, broken === 'stale-malformed' ? '0'.repeat(48) : 'legacy', 144);
+    await publishPrivateThumbnailOverride(f.store, override, () => true);
+    if (broken === 'malformed' || broken === 'stale-malformed') {
+      await f.store.writeRecord(privateThumbnailOverrideRecordId(hash), Buffer.from(JSON.stringify({ ...override, width: 12 })));
+    }
+    if (broken === 'backup-only') {
+      await publishPrivateThumbnailOverride(f.store, createPrivateThumbnailOverride(hash, 'legacy', 144), () => true);
+      const read = f.store.readRecord.bind(f.store);
+      t.mock.method(f.store, 'readRecord', (id: string, maximum?: number) => {
+        if (id === privateThumbnailOverrideRecordId(hash)) { return Promise.reject(absent()); }
+        return read(id, maximum);
+      });
+    }
+    await assert.rejects(exportPrivateHubToPlaintext(f.store, f.options)); await assertNoCatalogue(f.ordinary);
+  });
+}
+for (const before of ['absent', 'present'] as const) {
+  test(`override changed from ${before} while exporting prevents catalogue publication`, async t => {
+    const f = await fixture(t);
+    const override = createPrivateThumbnailOverride(hash, 'legacy', 144);
+    await f.store.writeNewRecord(privateThumbnailOverrideMemberId(override), Buffer.from('First custom'));
+    if (before === 'present') { await publishPrivateThumbnailOverride(f.store, override, () => true); }
+    let changed = false;
+    const read = f.store.readRecord.bind(f.store);
+    t.mock.method(f.store, 'readRecord', async (id: string, maximum?: number) => {
+      if (!changed && id === 'preview:filmstrip:' + hash) {
+        changed = true;
+        await publishPrivateThumbnailOverride(f.store, createPrivateThumbnailOverride(hash, 'legacy', 144), () => true);
+      }
+      return read(id, maximum);
+    });
+    await assert.rejects(exportPrivateHubToPlaintext(f.store, f.options)); assert.equal(changed, true);
+    await assertNoCatalogue(f.ordinary);
+  });
+}
 
 test('legacy export preserves exact catalogue bytes and all preview types without touching encrypted source or originals', async t => {
   const f = await fixture(t);

@@ -7,8 +7,8 @@ import { isPrivateMediaProcessCleanupFailure, streamPrivateMediaProcess } from '
 import { buildPrivatePreviewPlan, parsePrivateProbe, privateProbeCommand, validatePrivateJpeg,
   type PrivateMediaCommandPlan, type PrivateVideoMetadata } from './private-preview-plan';
 import { isPrivatePreviewSource, isPrivatePreviewSourceCleanupFailure, type PrivatePreviewSource } from './private-preview-source';
+import { admitPrivatePreviewJob } from './private-preview-admission';
 
-let generating = false;
 function unavailable(): Error { return new Error('Private preview generation could not be completed.'); }
 /** Trusted main-only cleanup classification, preserved across nested producers. */
 export function isPrivatePreviewGenerationCleanupFailure(error: unknown): error is Error {
@@ -34,7 +34,7 @@ export async function generatePrivateHubPreviews(
   store: PrivateHubStore, source: PrivatePreviewSource, settings: ScreenshotSettings,
   options: PrivatePreviewGenerationOptions,
 ): Promise<PrivatePreviewSet> {
-  if (generating || !isPrivatePreviewSource(source) || !options || typeof options.isCurrent !== 'function'
+  if (!isPrivatePreviewSource(source) || !options || typeof options.isCurrent !== 'function'
     || (options.onMetadata !== undefined && typeof options.onMetadata !== 'function')) { throw unavailable(); }
   const screenshotSettings = Object.freeze({ ...settings });
   const authorized = options.isCurrent;
@@ -66,7 +66,8 @@ export async function generatePrivateHubPreviews(
   };
   const check = (): void => { if (!isCurrent()) { throw unavailable(); } };
   const discard = (bytes: Buffer): void => { bytes.fill(0); owned.delete(bytes); };
-  generating = true;
+  const releaseAdmission = admitPrivatePreviewJob();
+  if (!releaseAdmission) { throw unavailable(); }
   for (const signal of signals) {
     signal.addEventListener('abort', revoke, { once: true });
     if (signal.aborted) { revoke(); }
@@ -215,7 +216,7 @@ export async function generatePrivateHubPreviews(
     // Unproven decoder/descriptor cleanup quarantines generation for the rest
     // of this process. Normal cancellation may release admission only after
     // every owned producer and descriptor has completed its cleanup.
-    if (!cleanupFailure) { generating = false; }
+    if (!cleanupFailure) { releaseAdmission(); }
   }
   if (cleanupFailure) { throw cleanupFailure; }
   if (failed) { throw unavailable(); }

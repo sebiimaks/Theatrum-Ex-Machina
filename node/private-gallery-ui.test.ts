@@ -109,7 +109,7 @@ function detail(entry = item(), overrides: Record<string, unknown> = {}): any {
   return { status: 'ready', item: { ...entry, notes: 'Private notes',
     posterUrl: 'theatrum://app/media/clips/0.jpg', clipUrl: 'theatrum://app/media/clips/0.mp4',
     filmstripUrl: 'theatrum://app/media/filmstrips/0.jpg',
-    editable: true, regenerable: true, refreshable: true, playable: true, revision: 'a'.repeat(32), ...overrides } };
+    editable: true, regenerable: true, refreshable: true, thumbnailEditable: true, playable: true, revision: 'a'.repeat(32), ...overrides } };
 }
 
 function sourceFolder(index = 1, overrides: Record<string, unknown> = {}): any {
@@ -124,6 +124,8 @@ function harness(options: {
   save?: (request: PrivateGalleryEdit) => Promise<any>;
   refreshVideo?: (request: { id: string; revision: string }) => Promise<any>;
   refreshAvailable?: boolean;
+  setCustomThumbnail?: (request: { id: string; revision: string }) => Promise<any>;
+  thumbnailAvailable?: boolean;
   regenerate?: (request: { id: string; revision: string }) => Promise<any>;
   cancelRegeneration?: () => void;
   playOriginal?: (request: { id: string; revision: string }) => Promise<any>;
@@ -157,6 +159,8 @@ function harness(options: {
   enableTouchId?: (request: { password: string }) => Promise<any>;
   disableTouchId?: () => Promise<any>;
   changePassword?: (request: { currentPassword: string; newPassword: string }) => Promise<any>;
+  resumePasswordChange?: (request: { currentPassword: string; newPassword: string }) => Promise<any>;
+  resumeAvailable?: boolean;
   createUnprotectedCopy?: (request: { password: string; acknowledge: true }) => Promise<any>;
   cancelUnprotectedCopy?: () => void;
   copyAvailable?: boolean;
@@ -194,9 +198,11 @@ function harness(options: {
   const selections: string[] = [];
   const saves: PrivateGalleryEdit[] = [];
   const refreshes: { id: string; revision: string }[] = [];
+  const thumbnailChanges: { id: string; revision: string }[] = [];
   const generations: { id: string; revision: string }[] = [];
   const protectionSaves: { autoLockMinutes: number; recordPlaybackHistory: boolean }[] = [];
   const passwordChanges: { currentPassword: string; newPassword: string }[] = [];
+  const passwordResumptions: { currentPassword: string; newPassword: string }[] = [];
   const unprotectedCopies: { password: string; acknowledge: true }[] = [];
   const touchIdEnrollments: { password: string }[] = [];
   let touchIdDisables = 0;
@@ -249,6 +255,10 @@ function harness(options: {
     refreshVideo: options.refreshAvailable === false ? undefined : async (request: { id: string; revision: string }) => {
       refreshes.push({ ...request });
       return options.refreshVideo ? options.refreshVideo(request) : { status: 'refreshed', item: detail().item };
+    },
+    setCustomThumbnail: options.thumbnailAvailable === false ? undefined : async (request: { id: string; revision: string }) => {
+      thumbnailChanges.push({ ...request });
+      return options.setCustomThumbnail ? options.setCustomThumbnail(request) : { status: 'updated', item: detail().item };
     },
     regenerate: async (request: { id: string; revision: string }) => {
       generations.push({ ...request });
@@ -334,6 +344,10 @@ function harness(options: {
         passwordChanges.push({ ...request });
         return options.changePassword ? options.changePassword(request) : Promise.resolve({ status: 'incorrect-password' });
       },
+      resumePasswordChange: options.resumeAvailable === false ? undefined : (request: { currentPassword: string; newPassword: string }) => {
+        passwordResumptions.push({ ...request });
+        return options.resumePasswordChange?.(request) ?? Promise.resolve({ status: 'cancelled' });
+      },
       createUnprotectedCopy: options.copyAvailable === false ? undefined : (request: { password: string; acknowledge: true }) => {
         unprotectedCopies.push({ ...request });
         return options.createUnprotectedCopy ? options.createUnprotectedCopy(request) : Promise.resolve({ status: 'incorrect-password' });
@@ -349,7 +363,7 @@ function harness(options: {
   }, { filename: path.join(galleryRoot, 'gallery.js') });
   const byId = (id: string) => elements.get(id)!;
   return {
-    byId, created, document, window, requests, selections, saves, generations, refreshes, observers, protectionSaves, passwordChanges, unprotectedCopies,
+    byId, created, document, window, requests, selections, saves, generations, refreshes, thumbnailChanges, observers, protectionSaves, passwordChanges, passwordResumptions, unprotectedCopies,
     touchIdEnrollments, get touchIdDisables() { return touchIdDisables; }, get touchIdReads() { return touchIdReads; },
     get protectionReads() { return protectionReads; },
     sourceConnections, sourceDisconnections, sourceRelocations, videoImports, sourceChecks, sourceScans,
@@ -4861,4 +4875,234 @@ test('an uncertain refresh failure reloads actual published metadata instead of 
   assert.match(h.byId('generation-status').textContent, /could not be refreshed/);
   h.byId('refresh-video').fire('click'); await settle(); await settle();
   assert.equal(h.refreshes[1].revision, 'c'.repeat(32));
+});
+
+test('custom thumbnail preserves unsaved notes, tags, rating and unchanged previews while refreshing gallery media', async () => {
+  const pending = deferred();
+  const nextUrl = `theatrum://app/media/thumbnails/0.jpg?v=${'b'.repeat(32)}`;
+  let updated = false;
+  const h = harness({ list: async () => ready([item(0, updated ? { thumbnailUrl: nextUrl } : {})]),
+    setCustomThumbnail: async () => pending.promise });
+  await selectFirst(h);
+  const oldThumbnail = h.images.find(image => image.src.includes('/thumbnails/'))!;
+  oldThumbnail.onload!(); h.byId('detail-poster').onload!();
+  h.byId('toggle-filmstrip').fire('click'); h.byId('detail-filmstrip').onload!();
+  const strip = h.byId('detail-filmstrip').src, poster = h.byId('detail-poster').src;
+  h.byId('details-notes').value = 'Unsaved notes'; h.byId('details-notes').fire('input');
+  h.byId('tag-draft').value = 'Unsaved tag'; h.byId('tag-draft').fire('input');
+  h.byId('details-rating-input').value = '5'; h.byId('details-rating-input').fire('change');
+  h.byId('choose-thumbnail').fire('click');
+  assert.deepEqual(h.thumbnailChanges, [{ id: 'opaque-0', revision: 'a'.repeat(32) }]);
+  assert.equal(h.byId('details-notes').readOnly, true); assert.equal(h.byId('save-details').disabled, true);
+  assert.equal(h.byId('cancel-regeneration').hidden, false);
+  assert.equal(h.byId('choose-thumbnail').disabled, true);
+  h.byId('choose-thumbnail').fire('click'); assert.equal(h.thumbnailChanges.length, 1);
+  updated = true;
+  pending.resolve({ status: 'updated', item: detail(item(0, { thumbnailUrl: nextUrl })).item });
+  await settle(); await settle();
+  assert.equal(h.byId('details-notes').value, 'Unsaved notes');
+  assert.equal(h.byId('tag-draft').value, 'Unsaved tag'); assert.equal(h.byId('details-rating-input').value, '5');
+  assert.equal(h.byId('detail-filmstrip').src, strip); assert.equal(h.byId('detail-poster').src, poster);
+  assert.equal(oldThumbnail.src, ''); assert.equal(oldThumbnail.isConnected, false);
+  assert.ok(h.activeImages.some(image => image.src === nextUrl));
+  assert.equal(h.byId('generation-status').textContent, 'Thumbnail updated.');
+  assert.equal(h.byId('save-details').disabled, false);
+  h.byId('save-details').fire('click'); await settle();
+  assert.equal(h.saves[0].revision, 'a'.repeat(32)); assert.equal(h.saves[0].notes, 'Unsaved notes');
+  assert.deepEqual(h.saves[0].tags, ['Nature', 'Unsaved tag']); assert.equal(h.saves[0].rating, 5);
+});
+
+test('custom thumbnail cancellation waits for drainage and reconciles the saved thumbnail without replacing drafts', async () => {
+  const pending = deferred();
+  const nextUrl = `theatrum://app/media/thumbnails/0.jpg?v=${'c'.repeat(32)}`;
+  let reads = 0;
+  const h = harness({ setCustomThumbnail: async () => pending.promise,
+    detail: async () => detail(item(0, ++reads > 1 ? { thumbnailUrl: nextUrl } : {})),
+    list: async () => ready([item(0, reads > 1 ? { thumbnailUrl: nextUrl } : {})]) });
+  await selectFirst(h);
+  h.byId('details-notes').value = 'Keep draft'; h.byId('details-notes').fire('input');
+  h.byId('choose-thumbnail').fire('click'); h.byId('cancel-regeneration').fire('click'); h.byId('cancel-regeneration').fire('click');
+  assert.equal(h.cancellations, 1); assert.equal(h.selections.length, 1);
+  assert.equal(h.byId('cancel-regeneration').disabled, true);
+  pending.resolve({ status: 'cancelled' }); await settle(); await settle();
+  assert.equal(h.byId('details-notes').value, 'Keep draft'); assert.equal(h.byId('save-details').disabled, false);
+  assert.equal(h.byId('generation-status').textContent, 'Thumbnail selection stopped. Saved thumbnail reloaded.');
+  assert.equal(h.byId('cancel-regeneration').hidden, true);
+  assert.ok(h.activeImages.some(image => image.src === nextUrl));
+});
+
+for (const ending of ['lock', 'pagehide']) {
+  test(`${ending} clears thumbnail import and suppresses late completion`, async () => {
+    const pending = deferred(); const h = harness({ setCustomThumbnail: async () => pending.promise });
+    await selectFirst(h); h.byId('choose-thumbnail').fire('click');
+    if (ending === 'lock') h.byId('lock-hub').fire('click'); else h.window.fire('pagehide');
+    pending.resolve({ status: 'updated', item: detail().item }); await settle(); await settle();
+    assert.equal(h.byId('details-notes').value, ''); assert.equal(h.byId('generation-status').textContent, '');
+    assert.equal(h.byId('cancel-regeneration').hidden, true); assert.equal(h.requests.length, 1);
+  });
+}
+
+for (const response of ['conflict', 'unavailable', 'cancelled']) {
+  test(`${response} thumbnail outcome preserves drafts and blocks stale edits when the stored revision changed`, async () => {
+    let reads = 0;
+    const h = harness({ setCustomThumbnail: async () => ({ status: response }),
+      detail: async () => detail(item(), ++reads > 1 ? { revision: 'b'.repeat(32), notes: 'Newer saved notes' } : {}) });
+    await selectFirst(h); h.byId('details-notes').value = 'Keep draft'; h.byId('details-notes').fire('input');
+    h.byId('choose-thumbnail').fire('click'); await settle(); await settle();
+    assert.equal(h.byId('details-notes').value, 'Keep draft'); assert.equal(h.byId('save-details').disabled, true);
+    assert.equal(h.byId('choose-thumbnail').disabled, true); assert.equal(h.byId('discard-details').disabled, false);
+    assert.match(h.byId('generation-status').textContent, /Your edits are still here/);
+  });
+}
+
+for (const status of ['invalid', 'source-unavailable', 'busy', 'unavailable']) {
+  test(`custom thumbnail ${status} reports only fixed diagnostics and preserves editing`, async () => {
+    const h = harness({ setCustomThumbnail: async () => ({ status, path: '/private/image.jpg', error: 'private diagnostics' }) });
+    await selectFirst(h); h.byId('choose-thumbnail').fire('click'); await settle(); await settle();
+    assert.doesNotMatch(h.byId('generation-status').textContent, /private diagnostics|image\.jpg/);
+    assert.equal(h.byId('choose-thumbnail').disabled, false); assert.equal(h.byId('cancel-regeneration').hidden, true);
+  });
+}
+
+test('custom thumbnail requires explicit editability but no regenerable or playable source', async () => {
+  for (const enabled of [true, false, undefined]) {
+    const h = harness({ detail: async () => detail(item(), { thumbnailEditable: enabled, regenerable: false, playable: false }) });
+    await selectFirst(h); assert.equal(h.byId('choose-thumbnail').disabled, enabled !== true);
+    h.byId('choose-thumbnail').fire('click'); await settle(); await settle();
+    assert.equal(h.thumbnailChanges.length, enabled === true ? 1 : 0);
+  }
+  const absent = harness({ thumbnailAvailable: false }); await selectFirst(absent);
+  assert.equal(absent.byId('choose-thumbnail').disabled, true);
+});
+
+test('custom thumbnail helper explains format, encrypted storage and regeneration reset', () => {
+  assert.match(html, /Choose a JPEG or PNG image up to 32 MiB and 32 megapixels/);
+  assert.match(html, /without embedded metadata is encrypted in this hub/);
+  assert.match(html, /Transparent areas use a black background/);
+  assert.match(html, /Regenerating previews restores the generated thumbnail/);
+});
+
+test('custom thumbnail respects text composition and pending protection or credential drafts', async () => {
+  for (const kind of ['notes-composition', 'search-composition', 'protection', 'password', 'copy']) {
+    const h = harness(); await selectFirst(h);
+    if (kind === 'notes-composition') h.byId('details-notes').fire('compositionstart');
+    if (kind === 'search-composition') h.byId('gallery-search').fire('compositionstart');
+    if (kind === 'protection') {
+      h.byId('protection-button').fire('click'); await settle();
+      h.byId('auto-lock-minutes').value = '15'; h.byId('auto-lock-minutes').fire('change');
+    }
+    if (kind === 'password') { h.byId('protection-button').fire('click'); await settle(); await settle(); h.byId('change-password-toggle').fire('click'); h.byId('current-password').value = 'Unsubmitted'; h.byId('current-password').fire('input'); }
+    if (kind === 'copy') { h.byId('protection-button').fire('click'); await settle(); await settle(); h.byId('unprotected-copy-toggle').fire('click'); h.byId('unprotected-copy-password').value = 'Unsubmitted'; h.byId('unprotected-copy-password').fire('input'); }
+    // Recheck the event handler even if a stale button is accidentally enabled.
+    h.byId('choose-thumbnail').disabled = false; h.byId('choose-thumbnail').fire('click'); await settle();
+    assert.equal(h.thumbnailChanges.length, 0, kind);
+  }
+});
+
+
+test('interrupted password recovery is an explicit secondary action using the existing masked fields', async () => {
+  const h = harness(); await openPasswordForm(h);
+  const button = html.match(/<button[^>]+id="resume-password-submit"[^>]*>/)![0];
+  assert.match(button, /type="button"/);
+  assert.match(button, /aria-describedby="password-recovery-help password-status"/);
+  assert.match(html, /new password from that attempt/);
+  assert.match(html, /confirm before finishing/);
+  assert.equal(h.byId('resume-password-submit').disabled, false);
+  fillPasswords(h); h.byId('change-password-form').fire('submit'); await settle();
+  assert.equal(h.passwordChanges.length, 1);
+  assert.equal(h.passwordResumptions.length, 0, 'Ordinary Enter/submit cannot resume a staged change implicitly.');
+  const unavailable = harness({ resumeAvailable: false }); await openPasswordForm(unavailable);
+  assert.equal(unavailable.byId('resume-password-submit').disabled, true);
+  assert.equal(unavailable.byId('change-password-submit').disabled, false);
+});
+
+test('password recovery clears credentials before IPC, stops media and holds admission through native confirmation', async () => {
+  const pending = deferred();
+  const h = harness({ resumePasswordChange: request => {
+    assertPasswordsCleared(h);
+    assert.equal(h.byId('preview-video').src, '');
+    assert.equal(request.currentPassword, '  old password  ');
+    assert.equal(request.newPassword, '  attempted password  ');
+    return pending.promise;
+  } });
+  await selectFirst(h); h.byId('play-preview').fire('click'); await settle();
+  await openPasswordForm(h); fillPasswords(h, '  old password  ', '  attempted password  ');
+  h.byId('resume-password-submit').fire('click');
+  assert.equal(h.passwordResumptions.length, 1); assert.equal(h.passwordChanges.length, 0);
+  assert.equal(h.byId('change-password-submit').disabled, true);
+  assert.equal(h.byId('resume-password-submit').disabled, true);
+  assert.equal(h.byId('save-protection').disabled, true);
+  assert.equal(h.byId('lock-hub').disabled, false);
+  assert.match(h.byId('password-status').textContent, /Confirm in the dialog/);
+  h.byId('change-password-form').fire('submit');
+  h.byId('resume-password-submit').fire('click');
+  assert.equal(h.passwordResumptions.length + h.passwordChanges.length, 1);
+  h.window.fire('blur'); assertPasswordsCleared(h);
+  pending.resolve({ status: 'cancelled', path: '/private/untrusted', newPassword: 'DO-NOT-DISPLAY' }); await settle();
+  assert.match(h.byId('password-status').textContent, /left unfinished.*unchanged/);
+  assert.doesNotMatch(h.byId('password-status').textContent, /untrusted|DO-NOT-DISPLAY/);
+  assert.equal(h.byId('resume-password-submit').disabled, false);
+  assert.equal(h.byId('details-notes').value, 'Private notes');
+  assert.equal(h.byId('preview-video').src, '');
+});
+
+test('password recovery validates both passwords and confirmation before invoking the bridge', async () => {
+  for (const [current, replacement, confirmation] of [['', 'new', 'new'], ['old', '', ''],
+    ['old', 'new', 'different'], ['same', 'same', 'same'], ['old', '\ud800', '\ud800']]) {
+    const h = harness(); await openPasswordForm(h); fillPasswords(h, current, replacement, confirmation);
+    h.byId('resume-password-submit').fire('click'); await settle();
+    assertPasswordsCleared(h); assert.equal(h.passwordResumptions.length, 0);
+    assert.ok(h.byId('password-status').textContent.length > 0);
+  }
+  const h = harness(); await openPasswordForm(h); fillPasswords(h);
+  h.byId('new-password').fire('compositionstart'); h.byId('resume-password-submit').fire('click');
+  assert.equal(h.passwordResumptions.length, 0);
+});
+
+test('password recovery gives fixed outcome guidance and never displays diagnostics', async () => {
+  for (const [status, message] of [['not-found', /No interrupted password change/],
+    ['incorrect-password', /current password or the password from the interrupted change/],
+    ['invalid', /not accepted/], ['busy', /busy/], ['unavailable', /keep its files intact/], ['unknown', /keep its files intact/]] as const) {
+    const h = harness({ resumePasswordChange: async () => ({ status, error: 'SECRET-DIAGNOSTICS', path: '/private/hidden' }) });
+    await openPasswordForm(h); fillPasswords(h); h.byId('resume-password-submit').fire('click'); await settle();
+    assertPasswordsCleared(h); assert.match(h.byId('password-status').textContent, message);
+    assert.doesNotMatch(h.byId('password-status').textContent, /SECRET-DIAGNOSTICS|private|hidden/);
+    assert.equal(h.lockCalls, 0);
+  }
+});
+
+test('password recovery refuses video and protection drafts without discarding them', async () => {
+  const h = harness(); await selectFirst(h); await openPasswordForm(h);
+  h.byId('details-notes').value = 'Unsaved private draft'; h.byId('details-notes').fire('input');
+  assert.equal(h.byId('resume-password-submit').disabled, true);
+  h.byId('resume-password-submit').fire('click'); assert.equal(h.passwordResumptions.length, 0);
+  assert.equal(h.byId('details-notes').value, 'Unsaved private draft');
+  h.byId('discard-details').fire('click');
+  h.byId('auto-lock-minutes').value = '15'; h.byId('auto-lock-minutes').fire('change');
+  assert.equal(h.byId('resume-password-submit').disabled, true);
+  assert.equal(h.passwordResumptions.length, 0);
+});
+
+test('pending recovery remains gated when concealed and a late reply cannot restore locked content', async () => {
+  for (const end of ['conceal', 'lock']) {
+    const pending = deferred(); const h = harness({ resumePasswordChange: async () => pending.promise });
+    await selectFirst(h); await openPasswordForm(h); fillPasswords(h);
+    h.byId('resume-password-submit').fire('click');
+    h.byId(end === 'lock' ? 'lock-hub' : 'close-protection').fire('click');
+    assertPasswordsCleared(h);
+    assert.equal(h.byId('protection-button').disabled, true);
+    pending.resolve({ status: 'cancelled' }); await settle();
+    assert.equal(h.byId('change-password-form').hidden, true);
+    assert.equal(h.byId('password-status').textContent, '');
+    if (end === 'lock') { assert.equal(h.cards.length, 0); assert.equal(h.byId('details-notes').value, ''); }
+  }
+});
+
+test('successful resumed password change clears sensitive gallery content without awaiting renderer locking', async () => {
+  const h = harness({ resumePasswordChange: async () => ({ status: 'changed' }) });
+  await selectFirst(h); await openPasswordForm(h); fillPasswords(h);
+  h.byId('resume-password-submit').fire('click'); await settle();
+  assertPasswordsCleared(h); assert.equal(h.cards.length, 0);
+  assert.equal(h.byId('details-notes').value, '');
+  assert.equal(h.byId('resume-password-submit').disabled, true);
 });

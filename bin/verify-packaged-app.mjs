@@ -468,12 +468,30 @@ assert.match(ffmpegVersion, /^ffmpeg version 8\.1\.2/m);
 assert.match(ffprobeVersion, /^ffprobe version 8\.1\.2/m);
 assert.match(ffmpegVersion, /--enable-gpl/);
 assert.match(ffmpegVersion, /--enable-libx264/);
+assert.match(ffmpegVersion, /--enable-zlib/);
+assert.match(run(ffmpegPath, ['-hide_banner', '-decoders']), /^\s*V[^\s]*\s+png\s/m);
 assert.doesNotMatch(ffmpegVersion, /--enable-nonfree/);
 
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'theatrum-ex-machina-artifact-'));
 try {
   const mediaPath = path.join(temporaryDirectory, 'packaged test with spaces; value.mp4');
   const thumbnailPath = path.join(temporaryDirectory, 'thumbnail with spaces; value.jpg');
+  const pngPath = path.join(temporaryDirectory, 'PNG decoder fixture.png');
+  const pngThumbnailPath = path.join(temporaryDirectory, 'PNG thumbnail.jpg');
+  fs.writeFileSync(pngPath, Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP4z8DwHwgbGGAMAEBXBvusDhdaAAAAAElFTkSuQmCC',
+    'base64',
+  ));
+  run(ffmpegPath, [
+    '-nostdin', '-hide_banner', '-loglevel', 'error',
+    '-i', pngPath, '-frames:v', '1', '-vf', 'scale=256:144',
+    '-c:v', 'mjpeg', '-f', 'image2', '-y', pngThumbnailPath,
+  ]);
+  const pngThumbnail = JSON.parse(run(ffprobePath, [
+    '-v', 'error', '-select_streams', 'v:0',
+    '-show_entries', 'stream=codec_name,width,height', '-of', 'json', pngThumbnailPath,
+  ]));
+  assert.deepEqual(pngThumbnail.streams, [{ codec_name: 'mjpeg', width: 256, height: 144 }]);
   run(ffmpegPath, [
     '-nostdin',
     '-hide_banner',

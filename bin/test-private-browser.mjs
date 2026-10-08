@@ -69,10 +69,12 @@ const checkpointFields = {
   'unprotected-copy-created': 'passwordBeforePicker cancelledPickerNoOutput copyCredentialsCleared catalogueByteIdentical generatedPreviewsIdentical encryptedSourceUnchanged sourceRemainsUnlocked restrictedMenuRetained intentionalPlaintextDestination',
   'playback-history-reset': 'resetCancelledNoWrite resetTimesIndependent resetLastIndependent resetNoOpNoWrite resetRecordingUnchanged resetRecentRefreshed resetRetiredIds resetLockDrained resetLateConfirmationRefused resetOtherMetadataPreserved resetOriginalUnchanged resetCompactFits resetReopened',
   'workspace-closed': 'uiLock synchronousRevocation drained freshGalleryPartition fullscreenLockDrained originalLockRetired sourceConnectionsClearedOnLock libraryViewClearedOnLock ratingSavedReopened savedMetadataReopened generatedSetReopened generatedMediaMarkersStripped nativeInputRenewsDeadline syntheticDomDoesNotRenew automaticLockDrained deadlineClock passwordChangeFormCleared passwordMismatchRejected incorrectCurrentRetryable passwordChangeLocked oldPasswordRejected newPasswordReopened systemLockDrained originalMenuRestored privateMenuObservations restoredMenuObservations credentialPasteAllowed wrongPassword retryAvailable',
+  'password-change-resumed': 'passwordRecoveryCredentialsCleared passwordRecoveryWrongPasswordNoConfirmation passwordRecoveryCancelUnchanged passwordRecoveryDefaultCancel passwordRecoveryCompactFits passwordRecoveryLocked passwordRecoveryAdoptedStagingInode passwordRecoveryRecordsUnchanged passwordRecoverySourceUnchanged passwordRecoveryOldPasswordRejected passwordRecoveryNewPasswordReopened passwordRecoveryFreshPartition passwordRecoveryCacheEmpty',
   'video-refreshed': 'refreshPickerCancelled refreshDraftGuard refreshAliasedRefused refreshMetadataSaved refreshGeometrySaved refreshPreviewsDecoded refreshUserMetadataPreserved refreshOriginalUnchanged refreshGrantReused refreshCancelAfterPublication refreshCompactFits refreshReopened',
+  'custom-thumbnail-saved': 'thumbnailPickerCancelledNoWrite thumbnailJpegDecoded thumbnailReplacementDecoded thumbnailPngDecoded thumbnailPngTransparencyFlattened thumbnailDraftPreserved thumbnailMetadataStripped thumbnailOtherPreviewsPreserved thumbnailCatalogueByteIdentical thumbnailOriginalsUnchanged thumbnailPathsMainOnly thumbnailNoSourceConnection thumbnailCompactFits thumbnailLockDrainedPicker thumbnailLateChoiceRefused thumbnailReopened thumbnailPlaintextCopyCurrent',
   'source-files-checked': 'sourceCheckCounts sourceCheckPathsMainOnly sourceCheckGrantReused sourceCheckPickerCancellation sourceCheckMetadataCancellation sourceCheckDisconnectedRefused sourceCheckReconnect sourceCheckDraftPreserved sourceCheckNoCatalogueWrite sourceCheckOriginalUnchanged sourceCheckCompactFits sourceCheckLockDrainedPicker sourceCheckLateGrantRefused sourceCheckSessionOnly',
   'touch-id-synthetic': 'touchIdControlsSyntheticProvider wrongPasswordBeforeEnrollment credentialCleared enrollmentDisableAndReenable passwordFallbackVisible promptDrainedBeforeUnlock reopenedCatalogue temporarySecretsWiped compactEnrollmentFits credentialPasteAllowed originalMenuRestored',
-  restarted: 'fresh persistent cacheBytes videoRefreshPersisted savedMetadataPersisted generatedSetPersisted protectionPersisted changedPasswordPersisted unrelatedMetadataPreserved playbackHistoryResetPersisted playbackHistoryDisabledPersisted ratingPersisted sourceScanImportsPersisted sourceRelocationPersisted importedVideoPersisted addedSourcePersisted batchImportsPersisted cancelledBatchKnownCompletionPersisted defaultRequests',
+  restarted: 'fresh persistent cacheBytes customThumbnailPersisted videoRefreshPersisted savedMetadataPersisted generatedSetPersisted protectionPersisted changedPasswordPersisted unrelatedMetadataPreserved playbackHistoryResetPersisted playbackHistoryDisabledPersisted ratingPersisted sourceScanImportsPersisted sourceRelocationPersisted importedVideoPersisted addedSourcePersisted batchImportsPersisted cancelledBatchKnownCompletionPersisted defaultRequests',
 };
 const nestedFields = {
   surface: 'methods credentials ordinary unlock node process masked overflow',
@@ -83,8 +85,8 @@ const nestedFields = {
   fresh: 'local session indexed cache cookie',
 };
 const statusWords = new Set(['undefined', 'stored', 'blocked', 'unavailable', 'advanced in main test', 'excluded from private profile scan']);
-const methodWords = new Set(['ackOriginalPlayback', 'resetPlaybackHistory', 'addSource', 'cancel', 'submit', 'importVideo', 'importProgress', 'cancelImport', 'cancelRegeneration', 'cancelSourceConnection', 'checkSource', 'connectSource', 'disconnectSource', 'sources', 'detail', 'list', 'lock', 'playOriginal', 'stopOriginal', 'scanSource', 'protection', 'refreshVideo', 'regenerate', 'relocateSource', 'save', 'setProtection',
-  'cancelUnprotectedCopy', 'changePassword', 'createUnprotectedCopy', 'touchIdStatus', 'enableTouchId', 'disableTouchId', 'touchIdAvailable', 'useTouchId']);
+const methodWords = new Set(['ackOriginalPlayback', 'resetPlaybackHistory', 'addSource', 'cancel', 'submit', 'importVideo', 'importProgress', 'cancelImport', 'cancelRegeneration', 'cancelSourceConnection', 'checkSource', 'connectSource', 'disconnectSource', 'sources', 'detail', 'list', 'lock', 'playOriginal', 'stopOriginal', 'scanSource', 'protection', 'refreshVideo', 'regenerate', 'relocateSource', 'save', 'setCustomThumbnail', 'setProtection',
+  'cancelUnprotectedCopy', 'changePassword', 'resumePasswordChange', 'createUnprotectedCopy', 'touchIdStatus', 'enableTouchId', 'disableTouchId', 'touchIdAvailable', 'useTouchId']);
 function safeCheckpointChecks(stage, checks) {
   const validate = (object, fields) => {
     assert.ok(object && typeof object === 'object' && !Array.isArray(object));
@@ -93,7 +95,7 @@ function safeCheckpointChecks(stage, checks) {
       assert.ok(allowed.has(key), 'Unexpected native checkpoint field.');
       if (nestedFields[key]) { validate(value, nestedFields[key]); }
       else if (key === 'methods' || key === 'credentials') {
-        assert.ok(Array.isArray(value) && value.length <= 24 && value.every(method => methodWords.has(method)));
+        assert.ok(Array.isArray(value) && value.length <= 25 && value.every(method => methodWords.has(method)));
       } else {
         assert.ok(typeof value === 'boolean' || (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
           || (typeof value === 'string' && statusWords.has(value)), 'Unbounded native checkpoint content.');
@@ -120,7 +122,7 @@ async function scanProfile() {
     }
   };
   await visit(profile);
-  for (const name of ['private-hub', 'source-check-hub', 'refresh-hub']) {
+  for (const name of ['private-hub', 'password-recovery-hub', 'source-check-hub', 'refresh-hub', 'custom-thumbnail-hub']) {
     try { await visit(path.join(fixture, name), true); }
     catch (error) { if (error.code !== 'ENOENT') { throw error; } }
   }
@@ -160,10 +162,10 @@ async function run(phase) {
       if (message?.type === 'progress') {
         if (typeof message.stage === 'string' && /^[a-z-]{1,50}$/.test(message.stage)) { lastStage = message.stage; }
       } else if (message?.type === 'checkpoint') {
-        assert.ok(['password-entry', 'password-submitted', 'password-cancelled', 'unlocked', 'locked', 'reopened', 'workspace-opened', 'unprotected-copy-created', 'playback-history-reset', 'workspace-closed', 'source-files-checked', 'video-refreshed', 'touch-id-synthetic', 'restarted'].includes(message.stage), 'Invalid native-test stage.');
+        assert.ok(['password-entry', 'password-submitted', 'password-cancelled', 'unlocked', 'locked', 'reopened', 'workspace-opened', 'unprotected-copy-created', 'playback-history-reset', 'workspace-closed', 'password-change-resumed', 'source-files-checked', 'video-refreshed', 'custom-thumbnail-saved', 'touch-id-synthetic', 'restarted'].includes(message.stage), 'Invalid native-test stage.');
         if (message.previewPatterns !== undefined) {
-          assert.ok(['workspace-opened', 'workspace-closed', 'unprotected-copy-created'].includes(message.stage));
-          const expectedPatterns = message.stage === 'workspace-opened' ? 1 : 4;
+          assert.ok(['workspace-opened', 'workspace-closed', 'unprotected-copy-created', 'custom-thumbnail-saved'].includes(message.stage));
+          const expectedPatterns = message.stage === 'workspace-opened' ? 1 : message.stage === 'custom-thumbnail-saved' ? 2 : 4;
           assert.ok(Array.isArray(message.previewPatterns) && message.previewPatterns.length === expectedPatterns);
           for (const pattern of message.previewPatterns) {
             assert.ok(typeof pattern === 'string' && pattern.length < 1_500_000);
@@ -200,7 +202,7 @@ let succeeded = false;
 try {
   await run('initial');
   await run('restart');
-  assert.deepEqual(checkpoints.map(item => item.stage), ['password-entry', 'password-submitted', 'password-cancelled', 'unlocked', 'locked', 'reopened', 'workspace-opened', 'unprotected-copy-created', 'playback-history-reset', 'workspace-closed', 'source-files-checked', 'video-refreshed', 'touch-id-synthetic', 'restarted']);
+  assert.deepEqual(checkpoints.map(item => item.stage), ['password-entry', 'password-submitted', 'password-cancelled', 'unlocked', 'locked', 'reopened', 'workspace-opened', 'unprotected-copy-created', 'playback-history-reset', 'workspace-closed', 'password-change-resumed', 'source-files-checked', 'video-refreshed', 'custom-thumbnail-saved', 'touch-id-synthetic', 'restarted']);
   assert.deepEqual(network, { connections: 0, http: 0, websocket: 0, udp: 0 });
   succeeded = true;
   process.stdout.write(JSON.stringify({ passed: true, phases: 2, scans, scannedFiles, encryptedFilesScanned, checkpoints, network }) + '\n');

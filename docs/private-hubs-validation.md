@@ -1,6 +1,6 @@
-# Private-hub development validation — updated 7 October 2026
+# Private-hub development validation — updated 8 October 2026
 
-This record covers experimental storage, generation, browser isolation, the dedicated password/opening and private-copy workflows, the normal-application pause boundary, the saved-document/application transition adapters, the connected ordinary renderer safeguards, the main host lifecycle integration, and the private gallery with collections and sorting, encrypted notes/tag/rating editing, optional encrypted playback history and metric resets, isolated original-video playback, native source selection, session source-folder connections, saved-location changes and read-only saved-file checks, manual selected-video batch import, reviewed source-folder discovery, saved source-folder addition, per-video encrypted preview regeneration and single-location technical metadata refresh, encrypted automatic-lock settings, authenticated password changes, verified unprotected copies, and native menu/clipboard controls. It is not an application release. The latest macOS development build enables native File menu entry for the password workflow; earlier milestones below describe its previously disabled state. All published verification results below use synthetic catalogue and media fixtures. Touch ID work is deferred at the user's request.
+This record covers experimental storage, generation, browser isolation, the dedicated password/opening and private-copy workflows, the normal-application pause boundary, the saved-document/application transition adapters, the connected ordinary renderer safeguards, the main host lifecycle integration, and the private gallery with collections and sorting, encrypted notes/tag/rating editing, optional encrypted playback history and metric resets, isolated original-video playback, native source selection, session source-folder connections, saved-location changes and read-only saved-file checks, manual selected-video batch import, reviewed source-folder discovery, saved source-folder addition, per-video encrypted preview regeneration and single-location technical metadata refresh, custom JPEG and static PNG thumbnail import, encrypted automatic-lock settings, authenticated password changes, verified unprotected copies, and native menu/clipboard controls. It is not an application release. The latest macOS development build enables native File menu entry for the password workflow; earlier milestones below describe its previously disabled state. All published verification results below use synthetic catalogue and media fixtures. Touch ID work is deferred at the user's request.
 
 ## Earlier checkout and native helper build
 
@@ -23,6 +23,400 @@ The table above records the earlier integration milestones before commit `0bfe18
 ## Checks
 
 Run commands from the repository root above, with `TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp` for filesystem tests.
+
+### Catalogue-recovery storage foundation — 8 October 2026
+
+The main process now has an explicit, reviewed transaction for restoring a missing, unauthenticatable or schema-invalid catalogue from its authenticated backup. This stage adds the storage transaction and catalogue adapter only. It does not connect recovery to opening, IPC or the gallery, and no new application package was built.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `private-hubs` |
+| HEAD | `9d71f2d8c254a8dd6013bcb9c31b4521ba5d8a63` |
+| Worktree state | Dirty; prior work preserved; this stage is uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2` |
+
+A valid primary returns without confirmation or writes. A recoverable backup must authenticate and satisfy the same catalogue schema and active-video hash limits as normal opening. Recovery requires an existing valid activation marker and current protection policy; it never creates activation, recovers policy from an older backup or treats backup-only policy as default settings. A narrow protection-parser extraction keeps ordinary settings validation unchanged. The confirmation receives a frozen video count without catalogue text or source paths. Exact primary, backup and guard identities and bytes are checked before and after confirmation and again after staging sync. The store queue and native lease remain held until the review drains; callbacks must not await queued same-store operations.
+
+Before replacement, any damaged primary is saved in a new authenticated encrypted evidence file with an opaque random name. Tests decrypt the evidence and compare its metadata and raw payload against the exact original, including accidental plaintext and empty-file cases. The backup stays unchanged. Oversized evidence is refused before confirmation, including an actual 256 MiB sparse damaged-file case. Permission, submitted-read, link, header and cleanup failures are not treated as catalogue corruption. Owned decrypted record buffers are cleared before confirmation; the unlocked store key remains live until lock. Errors after recovery writing starts lock the store, and unconfirmed cleanup retains process quarantine.
+
+**234 targeted tests passed**, with no failures, skips or cancellations:
+
+| Command | Tests | Evidence under `tmp/private-catalogue-recovery-stage` |
+| --- | ---: | --- |
+| `npm run test:private-hub-record-recovery` | 59 | `store-recovery.log` |
+| `node_modules/.bin/ts-node --preferTsExts --project tsconfig.persistence-tests.json node/private-catalogue-recovery.test.ts` | 27 | `adapter.log` |
+| `npm run test:private-hub-protection` | 21 | Tool output summarized in `adapter-results.json` |
+| `npm run test:private-catalogue-recovery-interruption` | 2 | `interruption.log` |
+| `npm run test:private-hub-store` | 35 | `store-regression.log` |
+| `npm run test:private-hub-session` | 53 | `session-regression.log` |
+| `npm run test:private-hub-password-resume` | 37 | `password-resume-regression.log` |
+
+The two process-interruption cases kill an owned writer immediately before and after the real primary rename, after the encrypted evidence has been published. A competing opener is refused while the writer holds its lease. Tests wait for both writer closure and its captured native helper's exit before reopening. Before replacement, the damaged primary and backup survive and explicit retry succeeds; after replacement, the restored primary opens and retry does not offer another recovery. Earlier evidence, backup and orphan staging files remain unchanged. Fixture file scans and zero child output found no configured synthetic password or catalogue canary in UTF-8 or UTF-16LE. This tests local process termination, including a point before directory sync; it does not establish power-loss durability, GUI cancellation, packaged application recovery, Linux execution or absence of OS diagnostic/swap copies.
+
+`npm run check`, the full persistence-test TypeScript check, child-driver syntax and `git diff --check` passed. The three new suites are registered in `test:private-hubs`. The full private-hub suite was not rerun. Source files and results are local; no commit, push, promotion, installation or packaging was performed. User-facing integration still needs an owned confirmation during opening and an explanation that catalogue recovery can roll back membership and metadata while preview records and protection settings remain current.
+
+### Local password-recovery test package — 8 October 2026
+
+A new unsigned Apple Silicon development app includes the current JPEG/PNG thumbnail work, failure handling and explicit interrupted-password recovery. Earlier test packages remain in place. This package was built locally and has not been installed, published or promoted.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `private-hubs` |
+| HEAD | `9d71f2d8c254a8dd6013bcb9c31b4521ba5d8a63` |
+| Worktree state | Dirty; prior uncommitted implementation included and preserved |
+| Release designation | `vha.releaseWorktree=false` |
+| Target | macOS arm64, unsigned, Electron `42.11.1` |
+| Artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-password-recovery/mac-arm64/Theatrum Ex Machina.app` |
+| ASAR SHA-256 | `71afb1b1fab857af273518b749a3198f85f67d3309d2604c1b4bd58a458388d8` |
+
+Exact build command, run from the repository root:
+
+```sh
+test ! -e release-test-private-password-recovery && THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-password-recovery TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-password-recovery-build/temp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-password-recovery-build/build.log 2>&1
+```
+
+The build and its packaged runtime/startup, media-tool and licensing checks passed. The existing Electron runtime resolves beneath `/Users/sm/Workspace`; media and privacy helpers are local to this checkout. Build caches and temporary files were directed into the privacy checkout. No installed application was changed. Angular reported unused-compilation/CommonJS optimization warnings without failing the build.
+
+Independent package inspection found **116 application-owned compiled modules, main/preload and private UI files byte-identical to the workspace at packaging time**. All password-recovery entry points were present. Test sources, node test files and every node `.cjs` driver—including the process-kill fixtures—were absent. Physical private assets and native helper architectures passed verification. Details are in `tmp/private-password-recovery-build/package-source-verification.json`.
+
+The actual packaged-host fixture was extended through the current main process’s native menu entries, DOM, preload, IPC and store. It passed **seven checkpoints**: ordinary startup, conversion, ordinary restoration, private reopen, recovery review, confirmed recovery/reopen, and orderly close/settings save. It checked both incorrect credentials before prompting, Cancel-default native confirmation, cancellation with byte-identical files, exact staging inode adoption, unchanged encrypted records, independent private locking, old-password rejection and new-password reopening with saved notes and decoded previews. Ordinary actions stayed paused during private work and restored afterward. The native confirmation adapter inspected the dialog options and supplied responses; this does not claim manual system-sheet interaction.
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-password-recovery TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-password-recovery-build/temp npm run test:private-package:host > tmp/private-password-recovery-build/packaged-host.log 2>&1
+```
+
+Eight scans performed **283 profile-file, 50 encrypted-hub and 87 ordinary-hub checks** for the configured synthetic secrets. Private disk-cache size remained zero. The wrapper verified **18 unpacked files** and preserved the original packaged ASAR/resources. These checks concern the isolated synthetic fixture, not personal hubs, OS diagnostics, swap or arbitrary transformed data. Ten instrumentation tests and syntax/whitespace checks passed; the production implementation was already covered by the focused and native results in the next section and did not change during this packaging stage.
+
+The package retains the existing unsigned test configuration. This is not signing, notarization, Linux or Touch ID acceptance. `tmp/private-password-recovery-build/results.json` records the build identity and packaged-host results. The [review directions](./private-hubs-first-build.md#local-test-package) now point to this new app. No commit or push was performed.
+
+### Finish an interrupted password change — 8 October 2026
+
+The gallery now provides **Protection → Change password → Finish interrupted password change**. Enter the password that currently opens the hub and the intended new password from the interrupted attempt. Storage authenticates both before a native confirmation with Cancel selected by default. Normal password changes continue to refuse unexplained credential files; recovery is a separate explicit action.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `private-hubs` |
+| HEAD | `9d71f2d8c254a8dd6013bcb9c31b4521ba5d8a63` |
+| Worktree state | Dirty; prior changes preserved; recovery implementation is uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2`, Electron `42.11.1` |
+
+Recovery accepts exactly one complete regular staging file with the expected opaque suffix. The saved and staged envelopes must authenticate to the same active hub and data key. After confirmation the store rechecks namespace, identity and content, syncs the verified staging inode and atomically renames it onto the active header. It verifies the resulting file and syncs the directory before success. No old-header backup is created. Encrypted records are not rewritten. Unknown siblings, multiple candidates, links, foreign keys/hubs and malformed data are refused and retained. Cancellation is read-only. Ambiguous publication locks the session; unconfirmed cleanup preserves quarantine.
+
+The handler shares credential admission, immediate revocation and disposal drainage with ordinary password changes. Native confirmation cannot outlive that authority and publish a late result. Successful recovery invalidates IPC and independently locks the session and browser. The renderer clears masked fields before invocation, keeps draft/composition/focus guards, and displays fixed statuses only. Ordinary form submission does not implicitly invoke recovery.
+
+**1,096 focused tests passed**, with no failures, cancellations or skips:
+
+| Command | Tests | Log in `tmp/private-password-resume-stage` |
+| --- | ---: | --- |
+| `npm run test:private-hub-password-resume` | 37 | `store.log` |
+| `npm run test:private-hub-password-change` | 20 | `password-change.log` |
+| `npm run test:private-hub-store` | 35 | `store-regression.log` |
+| `npm run test:private-password-recovery-session` | 6 | `session-integration.log` |
+| `npm run test:private-hub-password-session` | 9 | `password-session-regression.log` |
+| `npm run test:private-gallery-request` | 423 | `request-integration.log` |
+| `npm run test:private-gallery-preload` | 102 | `preload-integration.log` |
+| `npm run test:private-hub-browser` | 100 | `browser-integration.log` |
+| `npm run test:private-gallery-ui` | 362 | `ui.log` |
+| `npm run test:private-password-interruption` | 2 | `interruptions.log` |
+
+Storage cases cover wrong passwords, absent/ambiguous/corrupt/linked/foreign candidates, substitutions during confirmation, lock and cancellation, key wiping, staging sync failure, uncertain close, rename/directory-sync failures and the existing Touch ID removal policy through a synthetic provider. The actual killed-writer test now also resumes its real orphan, verifies exact staged-header adoption, confirms other bytes are unchanged and reopens with the replacement password.
+
+The native Electron run passed **16 checkpoints** across two processes. The new recovery checkpoint checked a separate synthetic encrypted copy: wrong credentials did not prompt, Cancel preserved every file, confirmed recovery adopted the staged inode, encrypted records remained byte-identical, the old password failed and the new password reopened in a fresh nonpersistent session. Its control remained fully reachable at 600 × 400. The original synthetic hub remained unchanged. The native dialog adapter verified message/buttons and Cancel defaults and supplied decline/accept responses; it does not test a physical click in the system sheet.
+
+Eighteen scans made **344 profile-file and 2,584 encrypted-file checks**. Configured synthetic markers were absent, the private cache remained empty, and network connection/HTTP/WebSocket/UDP counters were all zero. These observations concern the fixture roots and specified markers, not universal absence from memory, swap or OS diagnostics.
+
+```sh
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-password-resume-stage/temp npm run test:private-browser:native > tmp/private-password-resume-stage/native-browser.log 2>&1
+npm run check > tmp/private-password-resume-stage/check.log 2>&1
+```
+
+Component filesystem tests used the same `TMPDIR`. TypeScript, lint, JavaScript syntax and whitespace checks passed; `results.json` records the aggregate. Independent store, integration and UI reviews found no blocking issue.
+
+This does not recover forgotten passwords or damaged/missing primary headers, handle multiple ambiguous credential files, revoke earlier saved copies, or establish power-loss durability. Native Linux and provisioned Touch ID remain unverified. User directions now describe the explicit recovery action and its limits. No application package was built or installed, and no commit, push or promotion was performed. Earlier packaged test artifacts do not include this new action.
+
+### Password-change interruption — 8 October 2026
+
+`npm run test:private-password-interruption` adds two real writer-process termination cases to the private-hub suite. A test-only child receives synthetic credentials over IPC and calls the production `PrivateHubStore.changePassword`. Filesystem wrappers stop immediately before the header rename or after the actual rename returns, before the store adopts the new header and syncs the directory. No production hook or implementation change was added.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `private-hubs` |
+| HEAD | `9d71f2d8c254a8dd6013bcb9c31b4521ba5d8a63` |
+| Worktree state | Dirty; prior work preserved; this stage is uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2` |
+
+The parent confirms a competing opener is refused, sends `SIGKILL` only to its owned writer child, then waits for its close event and the observed native lease helper’s disappearance. The saved synthetic catalogue and storage-level preview record each have an authenticated backup.
+
+| Interrupted point | Password accepted after reopening | Additional result |
+| --- | --- | --- |
+| Before header rename | Previous password; replacement rejected | Encrypted staged header remains; another password change is refused without modifying stored files |
+| After header rename, before directory sync | New password; previous rejected | No staged header or old-password header backup remains; a subsequent password change succeeds |
+
+Both cases retained the encrypted catalogue, preview record and their backups byte for byte. Authenticated content matched after reopening, and an ordinary catalogue save survived another reopen. Wrong-password attempts were read-only. The pre-rename orphan was neither promoted nor removed. The post-rename case also completed a further password change and reopened with that credential. The child emitted no stdout/stderr; the specified synthetic credentials and catalogue marker were absent from scanned hub files in UTF-8 and UTF-16LE form.
+
+The targeted result was **39 passing tests**, none failed, cancelled or skipped:
+
+| Command | Tests | Log in `tmp/private-password-interruption-stage` |
+| --- | ---: | --- |
+| `npm run test:private-password-interruption` | 2 | `native-password-tests.log` |
+| `npm run test:private-hub-password-change` | 20 | `change.log` |
+| `npm run test:private-hub-password-session` | 9 | `session.log` |
+| `npm run test:private-hub-password-verification` | 8 | `verification.log` |
+
+All filesystem tests used `TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-password-interruption-stage/temp`. TypeScript, lint and whitespace checks passed. Code-check output is in `check.log`; `results.json` records the aggregate. Independent production-code, fixture and user-guidance review found no blocking issue.
+
+The two interruption points use a fully written, synced staged header. They do not establish incomplete-write behavior, power-loss durability, packaged whole-app crash recovery, native Linux behavior, Touch ID behavior, or image/video decoding. Preview payloads in this fixture are synthetic record bytes. Marker scans cover the fixture hub only, not swap, diagnostics or transformed data elsewhere. The current app cannot reconcile an orphaned credential header, and tests deliberately preserve it rather than bypass that restriction.
+
+User directions now explain changing a password, checking which password survived an interruption, and retaining the complete hub folder. No application was built, installed, committed, pushed or promoted.
+
+### Encrypted save interruption — 8 October 2026
+
+`npm run test:private-save-interruption` adds four real writer-process termination cases to the private-hub suite. The test child uses the production encrypted catalogue writer, store and native lease. Test-only filesystem wrappers pause immediately before or after a real rename; no production interruption hooks were added. Fixtures and redirected temporary files stay beneath this checkout.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `private-hubs` |
+| HEAD | `9d71f2d8c254a8dd6013bcb9c31b4521ba5d8a63` |
+| Worktree state | Dirty; earlier changes preserved; this stage is uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2` |
+
+Each case starts with saved catalogue B and backup A, then attempts C. The parent waits for the selected filesystem boundary, confirms a competing opener is refused, and sends `SIGKILL` only to its own writer child. It waits for the writer’s `close` event and the observed lock helper’s disappearance before reopening.
+
+| Interrupted point | Authenticated primary after reopen | Authenticated backup after reopen |
+| --- | --- | --- |
+| Before backup rename | B | A |
+| After backup rename | B | B |
+| Before primary rename | B | B |
+| After primary rename, before directory sync | C | B |
+
+All four outcomes matched. Independent staging files and an unrelated fixture file were retained byte for byte; reopening neither promoted nor removed them. Saving catalogue D then reopening succeeded in every case, with the preceding primary preserved as its backup. Synthetic password and catalogue markers were absent from scanned hub files in UTF-8 and UTF-16LE form. Credentials and catalogue data travel to the child over IPC, not command arguments, and the writer produced no stdout/stderr output.
+
+The targeted result was **106 passing tests**, none failed, cancelled or skipped:
+
+| Command | Tests | Log in `tmp/private-save-interruption-stage` |
+| --- | ---: | --- |
+| `npm run test:private-save-interruption` | 4 | `native-save-tests.log` |
+| `npm run test:private-hub-store` | 35 | `store.log` |
+| `npm run test:private-hub-lock` | 14 | `lease.log` |
+| `npm run test:private-hub-session` | 53 | `session.log` |
+
+All test commands used `TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-save-interruption-stage/temp`. TypeScript, lint and whitespace checks passed; `check.log` records the code checks and `results.json` contains the aggregate. Independent storage and fixture review found no blocking issue.
+
+This covers process termination while replacing a catalogue on the tested local filesystem. It does not simulate power loss, storage-device failure, password-header interruption, or termination of the packaged app. Native Linux execution remains unverified; unsupported-platform cases are skipped. Exact marker scans do not establish absence of transformed data, swap or OS diagnostics. Existing authenticated-backup recovery tests remain separate, and the gallery does not yet expose damaged-catalogue recovery.
+
+No production defect was found and no application implementation changed. User directions now explain uncertain save completion and retaining the complete encrypted folder after an opening failure. No app was built, installed, committed, pushed or promoted.
+
+### Native decoder interruption — 8 October 2026
+
+`npm run test:private-decoder-failure` now exercises actual bundled media processes against small synthetic source files and a real encrypted store. Six cases interrupt FFprobe, the thumbnail decoder, the filmstrip assembler with a live nested frame decoder, the clip remuxer with a live nested encoder, and custom PNG/JPEG thumbnail replacement. The new suite is included in `test:private-hubs`.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `private-hubs` |
+| HEAD | `9d71f2d8c254a8dd6013bcb9c31b4521ba5d8a63` |
+| Worktree state | Dirty; prior JPEG/PNG and renderer-failure work preserved; this stage is uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2`, bundled FFmpeg/FFprobe `8.1.2` |
+
+The fixture observes real child handles returned by the production spawn call. It suspends the selected child to hold a deterministic interruption point, confirms a second job is refused, and sends `SIGKILL` only to that owned child. For nested assembly, a live nested child is also suspended; production cleanup must terminate it through SIGTERM/SIGKILL. Tests require every real child `close` event, closed source FileHandles and invalid inherited parent descriptors before operation rejection returns. Test teardown runs afterward and cannot satisfy those assertions on production's behalf.
+
+All six cases preserved the bytes of existing encrypted records, including the catalogue, active preview-set record and custom-thumbnail override. Decrypted thumbnails, filmstrips, posters and clips still matched their prior contents. Original video/image files were unchanged, and the test roots gained no readable intermediate media files. The stored source-name/notes canary was absent from inspected encrypted-directory files. The hub reopened successfully and a subsequent generation or thumbnail replacement succeeded with the same process-local admission state. Observed PNG stdin copies were zeroed after failure. Errors contained the fixed public message rather than native diagnostics or source paths.
+
+The targeted result was **49 passing tests**, with none failed, cancelled or skipped on macOS:
+
+| Command | Tests | Log in `tmp/private-decoder-failure-stage` |
+| --- | ---: | --- |
+| `npm run test:private-decoder-failure` | 6 | `native-process-tests.log` |
+| `npm run test:private-media-process` | 24 | `media-process.log` |
+| `npm run test:private-hub-preview-failure` | 7 | `preview-failure.log` |
+| `npm run test:private-custom-thumbnail-session` | 12 | `thumbnail-session.log` |
+
+```sh
+TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-decoder-failure-stage/temp npm run test:private-decoder-failure > tmp/private-decoder-failure-stage/native-process-tests.log 2>&1
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-decoder-failure-stage/temp npm run test:private-media-process > tmp/private-decoder-failure-stage/media-process.log 2>&1
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-decoder-failure-stage/temp npm run test:private-hub-preview-failure > tmp/private-decoder-failure-stage/preview-failure.log 2>&1
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-decoder-failure-stage/temp npm run test:private-custom-thumbnail-session > tmp/private-decoder-failure-stage/thumbnail-session.log 2>&1
+npm run check > tmp/private-decoder-failure-stage/check.log 2>&1
+```
+
+TypeScript, lint and whitespace checks passed. Independent code and fixture reviews found no blocking issue.
+
+The clip-remux interruption occurs before its first output; it does not establish native failure behavior after provisional output. The PNG case observes an actual input write and its cleared owned copy, without forcing pipe backpressure. Mocked fault tests retain coverage for those precise handoffs, delayed encrypted writes and unconfirmed cleanup. SIGKILL is an external interruption, not malformed-input crash testing. These backend tests do not exercise GUI error handling, whole-app abrupt termination, OS diagnostic retention or native decoder memory erasure. POSIX signal cases are skipped on Windows; native Linux execution remains unverified.
+
+No production defect was found, and no application implementation changed during this stage. No new app was built, installed, committed, pushed or promoted.
+
+### Private renderer failure acceptance — 8 October 2026
+
+The packaged-host fixture now provides `npm run test:private-package:crash`. It terminates a real private renderer during unsent password entry, with an unsaved notes draft after encrypted image decoding, and while native source selection is pending. Each termination uses `SIGKILL` only after checking the live private renderer PID differs from main and every other live WebContents. This tests unexpected renderer death, not a main-process crash, decoder crash, machine power failure or operating-system crash-report generation.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `private-hubs` |
+| HEAD | `9d71f2d8c254a8dd6013bcb9c31b4521ba5d8a63` |
+| Worktree state | Dirty; existing JPEG/PNG work and this acceptance stage are uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2`, Electron `42.11.1` |
+| Existing tested artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-png-thumbnail/mac-arm64/Theatrum Ex Machina.app` |
+
+The production failure handlers required no change. This stage adds tests and review directions. Thirty-two packaged implementation files, including main, the browser, protocol and workspace transition, matched the current workspace byte for byte. The unchanged ASAR SHA-256 is `9601a293ca39c93d7ada95aa4eec7c4bfac38b4512528e29e2a8be17e2a4316f`; details are in `tmp/private-renderer-failure-stage/package-source-verification.json`. No new app was built or installed.
+
+The native run passed **nine checkpoints**. Within the renderer-death event, it observed removal of the password-cancel or gallery-lock listener while ordinary work remained paused and the restricted menu stayed active. The dead window was destroyed. A held source picker prevented ordinary restoration until its promise settled; the returned file-path getter was never read. The encrypted files remained unchanged during those failures. Fresh password entry reopened saved notes in new nonpersistent sessions, without retaining unsaved drafts or a source grant. The ordinary window and menus recovered afterward, and normal close saved settings without adding a private recent-document entry.
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-png-thumbnail TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-renderer-failure-stage/temp npm run test:private-package:crash > tmp/private-renderer-failure-stage/packaged-crash-final.log 2>&1
+```
+
+Ten scans performed **351 profile-file, 63 encrypted-hub and 110 ordinary-hub checks**. The synthetic password and saved/unsaved note markers were absent from those targets in UTF-8 and UTF-16 form. Private disk-cache size was zero; the redirected fixture crash directory stayed empty. Eighteen unpacked files and the original package identity were verified. These observations do not establish absence of transformed data, OS diagnostics, swap or decoded-memory remnants outside the scanned fixture roots.
+
+Image decoding uses the production image route and a fresh cache key. An initial fixture probe used `fetch`, which the gallery's `connect-src 'none'` policy correctly rejected; the probe was corrected to use `Image.decode()` without changing that policy. Unowned main-process `session.fetch` probes are denied both before and after renderer death and again after reopening. They are supplementary isolation observations, not independent proof of revoking a previously authorized request. Broader IPC retirement and media response revocation are covered by the component tests.
+
+Twelve new browser tests cover renderer death, unresponsiveness and direct destruction during pending source/thumbnail selection, stale requests, separate picker/storage drainage, late credential submission, preload failure and failed native destruction. The complete targeted results were **178 passing tests**, none skipped or cancelled:
+
+| Command | Tests | Log in `tmp/private-renderer-failure-stage` |
+| --- | ---: | --- |
+| `npm run test:private-hub-browser` | 99 | `browser.log` |
+| `npm run test:private-browser-protocol` | 17 | `protocol.log` |
+| `npm run test:private-application-transition` | 23 | `transition.log` |
+| `npm run test:private-hub-workspace` | 9 | `workspace.log` |
+| `npm run test:private-native-menu` | 30 | `native-menu.log` |
+
+All commands ran with `TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-renderer-failure-stage/temp`. JavaScript syntax and whitespace checks passed. Unit tests establish synchronous generation/IPC revocation and failed-cleanup quarantine; the native fixture observes the production host without substituting its lifecycle handlers. Native file-picker answers and system recent-document/single-instance adapters remain controlled by the fixture.
+
+The existing `--host` acceptance path also passed all five checkpoints. Six scans checked 215 profile, 35 encrypted-hub and 62 ordinary-hub files. It was run separately using:
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-png-thumbnail TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-renderer-failure-stage/temp npm run test:private-package:host > tmp/private-renderer-failure-stage/packaged-host.log 2>&1
+```
+
+No production promotion, commit, push, release or installed-application replacement was performed. Whole-app abrupt termination, in-flight encrypted publication/decoder failures and OS diagnostic behavior still need native acceptance.
+
+### Protected custom PNG thumbnails — 7 October 2026
+
+**Choose thumbnail** now accepts JPEG and static PNG. Transparent pixels are composited over black before resizing, and the result remains a metadata-stripped encrypted JPEG. The exact-file picker, source identity checks, shared preview admission, cancellation, locking and encrypted publication protections are retained. The selected image is never modified, and the renderer receives no filesystem path.
+
+PNG admission validates the signature, IHDR, dimensions, color/depth combinations, every chunk CRC, ordering and complete IEND. Limits are 32 MiB, 16,384 pixels per side, 32 million pixels and 4,096 chunks. APNG and unknown critical chunks are refused. Ancillary metadata, including compressed text and color profiles, is removed before native decoding. Capability reads are bounded to 256 KiB; sanitized input reaches the decoder through a memory pipe. No plaintext intermediate file is created. Embedded color profiles are discarded, so color-managed images may look different.
+
+Pixel tests identified a native decoder issue with transparency in 1-, 2- and 4-bit grayscale PNGs. Those inputs are normalized to equivalent grayscale palettes in memory while retaining their compressed image data. Tests verify both transparent and opaque pixels. Input and output limits constrain admitted data and application buffers, not total native memory or OS memory retention.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `private-hubs` |
+| HEAD | `9d71f2d8c254a8dd6013bcb9c31b4521ba5d8a63` |
+| Worktree state | Dirty; JPEG and PNG custom-thumbnail changes are uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2`, Electron `42.11.1` |
+| Artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-png-thumbnail/mac-arm64/Theatrum Ex Machina.app` |
+
+The media tools were rebuilt with system zlib enabled, retaining FFmpeg 8.1.2 and the pinned x264 version. The former shared `build/media-tools` symlink was retained as `build/media-tools-shared-reference`; the new binaries use a real directory in this private worktree. The shared target was not modified. macOS linkage checks found only system libraries. Linux build instructions and Debian dependencies include zlib; native Linux execution remains unverified.
+
+```sh
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-png-thumbnail-stage/temp npm run media:build > tmp/private-png-thumbnail-stage/media-build.log 2>&1
+```
+
+All **2,448 tests across 82 privacy component suites** passed in one complete run, with none failed, cancelled or skipped. `tmp/private-png-thumbnail-stage/privacy-suite-results.json` verifies every component declared by `test:private-hubs` completed exactly once. This includes 48 PNG sanitizer and 27 custom-thumbnail tests. Fixtures cover RGB, RGBA, grayscale alpha, indexed palettes, 16-bit samples, interlacing, grayscale transparency, corrupt CRCs, animation refusal, oversized inputs, compressed metadata removal, reads spanning multiple capability chunks and cancellation while input/output buffers are owned.
+
+```sh
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-png-thumbnail-stage/temp npm run test:private-hubs > tmp/private-png-thumbnail-stage/full-private-tests.log 2>&1
+node tmp/private-png-thumbnail-stage/verify-privacy-suite.mjs
+npm run check > tmp/private-png-thumbnail-stage/check.log 2>&1
+```
+
+TypeScript and lint passed. Focused toolchain checks passed 27 media-toolchain, one Linux-packaging and three corresponding-source tests against the rebuilt tools. Packaging verification now requires an available PNG decoder and decodes an independent RGBA fixture into a JPEG of the expected geometry.
+
+Native browser acceptance passed two phases and fifteen checkpoints. It verified JPEG replacement with a PNG, opaque/transparent/half-transparent output pixels, removal of a PNG text canary, unchanged source images, catalogue and other previews, preserved metadata drafts, picker cancellation, lock drainage, late-choice refusal, explicit plaintext export, reopening and process restart. Compact control bounds and hit tests passed at 600×400; `tmp/private-png-thumbnail-stage/compact-custom-thumbnail.png` was visually inspected.
+
+Seventeen persistence scans performed 324 profile-file and 1,603 encrypted-file checks. Private markers were absent from those scan targets; network traffic, default-session private requests and private disk-cache sizes were zero. Source fixtures, deliberate plaintext exports and review screenshots are excluded from those targets. Native picker answers remain fixture-controlled; these checks do not establish real permission-dialog behavior, OS-wide erasure or signing acceptance.
+
+```sh
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-png-thumbnail-stage/temp npm run test:private-browser:native > tmp/private-png-thumbnail-stage/native-browser.log 2>&1
+```
+
+Exact local test-packaging command:
+
+```sh
+test ! -e release-test-private-png-thumbnail && THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-png-thumbnail TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-png-thumbnail-stage/temp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-png-thumbnail-stage/build.log 2>&1
+```
+
+Packaging, runtime startup and licensing verification passed. Twenty-five packaged implementation files matched the workspace byte for byte. ASAR SHA-256: `9601a293ca39c93d7ada95aa4eec7c4bfac38b4512528e29e2a8be17e2a4316f`. The file list is recorded in `tmp/private-png-thumbnail-stage/package-source-verification.json`.
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-png-thumbnail TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-png-thumbnail-stage/temp npm run test:private-package:host > tmp/private-png-thumbnail-stage/packaged-host.log 2>&1
+```
+
+Packaged-host acceptance passed five checkpoints against the unchanged packaged main and registered native menus. Creation, preview decoding, saving notes, restoring the ordinary window, reopening and close passed. Six scans checked 215 profile, 35 encrypted-hub and 62 ordinary-hub files; eighteen unpacked files were verified. PNG interaction was exercised in native browser acceptance, with the matching implementation verified inside the packaged archive.
+
+This is an unsigned local test build. No commit, push, production promotion, release or installed-application replacement was performed.
+
+### Protected custom JPEG thumbnails — 7 October 2026
+
+**Choose thumbnail** selects one JPEG through a native picker and saves a resized, metadata-stripped encrypted thumbnail. The original video can remain disconnected. Unsaved notes, tag and rating drafts survive the operation, and catalogue bytes, filmstrips, posters, clips and source images are preserved. JPEG is the only supported format in this stage: the bundled decoder has no PNG decoder. Encoded input is limited to 32 MiB, dimensions to 16,384 per side and 32 million pixels, and pre-decode header inspection to 256 KiB.
+
+An immutable encrypted image is published through a strict authenticated override bound to the current generated-preview generation or initial converted-preview format. Regeneration and refresh supersede it. Invalid overrides, missing active members and missing primaries with surviving backups fail closed. Plaintext export includes the active thumbnail and rechecks the override before catalogue publication. Preview jobs share admission, cancellation and cleanup quarantine; exact-file selection does not retain a source-folder grant. Older encrypted members and backups remain; this is not secure erasure.
+
+| Field | Value |
+| --- | --- |
+| Repository root | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs` |
+| Origin | `https://github.com/sebiimaks/Theatrum-Ex-Machina.git` |
+| Branch | `private-hubs` |
+| HEAD | `9d71f2d8c254a8dd6013bcb9c31b4521ba5d8a63` |
+| Worktree state | Dirty; this custom-thumbnail stage is uncommitted |
+| Release designation | `vha.releaseWorktree=false` |
+| Runtime | macOS arm64, Node.js `22.23.2`, Electron `42.11.1` |
+| Artifact | `/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/release-test-private-custom-thumbnail/mac-arm64/Theatrum Ex Machina.app` |
+
+All **2,385 tests across 81 privacy component suites** passed, with no skipped or cancelled tests. The run was completed in two parts after updating two existing assertions to count the added authenticated thumbnail-override lookup; the original preview buffer and admission limits were retained. `tmp/private-custom-thumbnail-stage/privacy-suite-results.json` verifies that every component listed by `test:private-hubs` has one passing result. Its source logs are `full-private-tests-verified.log` (passing prefix) and `remaining-private-tests.log` (session suite onward).
+
+```sh
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-custom-thumbnail-stage/temp npm run test:private-hubs > tmp/private-custom-thumbnail-stage/full-private-tests-verified.log 2>&1
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-custom-thumbnail-stage/temp node tmp/private-custom-thumbnail-stage/remaining-privacy-tests.cjs > tmp/private-custom-thumbnail-stage/remaining-private-tests.log 2>&1
+```
+
+Focused checks passed **11 override, 13 decoder, 12 session, 32 plaintext-export, 7 preview-failure, 412 controller, 355 UI, 99 preload and 87 browser tests**. Coverage includes corruption and backup boundaries, legacy/generated preview compatibility, immutable members, export mutation checks, JPEG geometry/header bounds, metadata removal, exact-file substitution, cancellation during buffer handoff or publication, reentrant write exclusion, descriptor drainage, cleanup-failure quarantine, strict bridge projection, stale rows and draft preservation. TypeScript and lint passed. Independent backend and gallery reviews found no remaining blocking issues. Review caught competing JPEG frame headers before decoding; the header check now rejects duplicates and unsupported frame types before the scan.
+
+Native acceptance passed two phases and fifteen checkpoints, including decoded gold/purple thumbnail pixels, metadata canaries, exact catalogue/other-preview preservation, missing original-video sources, native picker cancellation without writes, draft preservation, replacement, Lock waiting for a held picker, late-choice refusal, unprotected export, reopening and a new Electron process. The first native run found that the gallery closed the open filmstrip during thumbnail-only work; the UI was corrected and regression-tested. The new control passed bounds and hit tests at 600×400, and `tmp/private-custom-thumbnail-stage/compact-custom-thumbnail.png` was visually inspected.
+
+Seventeen persistence scans performed 324 profile-file and 1,603 encrypted-file checks. Synthetic private markers were absent from those targets; measured network counters, default-session private requests and private disk-cache sizes were zero. Original synthetic images, explicit plaintext copies and review screenshots are excluded from those scan targets. Picker answers remain fixture-controlled; this is not verification of real permission dialogs, OS-wide erasure or signing.
+
+```sh
+npm run check > tmp/private-custom-thumbnail-stage/check-final.log 2>&1
+env TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-custom-thumbnail-stage/temp npm run test:private-browser:native > tmp/private-custom-thumbnail-stage/native-browser-final.log 2>&1
+```
+
+Exact local test-packaging command:
+
+```sh
+test ! -e release-test-private-custom-thumbnail && THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-custom-thumbnail TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-custom-thumbnail-stage/temp npm_config_cache=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/npm-cache ELECTRON_BUILDER_CACHE=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/electron-builder-cache CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:mac:private:test > tmp/private-custom-thumbnail-stage/build.log 2>&1
+```
+
+Packaging, runtime startup and licensing verification passed. Twenty-three packaged implementation files matched the workspace byte for byte. ASAR SHA-256: `910174d9d319b1b21740718eec156a710af50860be189af166c5b0d6761918e1`. The file list is recorded in `tmp/private-custom-thumbnail-stage/package-source-verification.json`.
+
+```sh
+THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-custom-thumbnail TMPDIR=/Users/sm/Workspace/Theatrum-Ex-Machina-private-hubs/tmp/private-custom-thumbnail-stage/temp npm run test:private-package:host > tmp/private-custom-thumbnail-stage/packaged-host.log 2>&1
+```
+
+Packaged-host acceptance passed all five checkpoints using the unchanged packaged main and its registered native menus. Creation, encrypted preview decoding, notes saving, restoration, reopening and ordinary close passed without private recent-history writes. Six scans checked 215 profile, 35 encrypted-hub and 62 ordinary-hub files; eighteen unpacked files were verified. Custom-thumbnail interaction was exercised in native browser acceptance; its packaged implementation was separately matched to the tested workspace files.
+
+All local `main` commits through `7a569c7936f8f71b2af2af097ddad03aa2510e3e` remain included (`git rev-list --count HEAD..main` returned zero). No merge or branch switch was needed. This is an unsigned local test build. No commit, push, promotion, publication, installation or replacement of the installed app was performed. Touch ID remains deferred. Other image formats, alternate-location refresh, broader filesystem/lifecycle fault acceptance and other-platform verification remain separate work.
 
 ### Single-location video refresh — 7 October 2026
 

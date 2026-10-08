@@ -161,6 +161,8 @@ History recording is an explicit encrypted Protection option and defaults off, i
 
 ## Remaining integration
 
+`npm run test:private-package:crash` exercises the untouched packaged host after terminating private renderers during password entry, unsaved editing and pending source selection. It verifies destruction, ordinary pause/menu retention until picker drainage, ignored late selection, saved-note recovery and fresh sessions. This is renderer-termination coverage; main-process crashes, in-flight publication failures, OS diagnostics and memory erasure remain separate acceptance work. See [the renderer failure record](./private-hubs-validation.md#private-renderer-failure-acceptance--8-october-2026).
+
 The first working password build additionally passed `npm run test:private-package:host`: it loads the untouched packaged main, invokes the real native menu, creates a private copy, saves notes, locks, password reopens, restores the ordinary workspace and closes with settings saved. See [the latest build record](./private-hubs-validation.md#first-working-password-based-macos-test-build--23-september-2026). Native picker/system adapters remain controlled by the fixture.
 
 The local test package and exact-material private fixture have passed. The native macOS entries are now connected for password-based review. Final acceptance of the complete packaged host workflow is recorded separately in the validation log; the module-level fixture does not replace that check.
@@ -176,3 +178,12 @@ The separate `npm run test:renderer-handoff:native` harness has passed six stage
 Continue extending the actual-host native checks to reconnection, in-flight generation/playback, pending confirmations and hardware IME. Extend filesystem-save and cleanup fault coverage, and test cancellation at each transition stage, real lock/sleep, navigation and forced crashes. Verify native edit-menu behavior, real clipboard behavior, single-instance arbitration and buffer/cache observations on supported platforms.
 
 Touch ID enrollment, removal and unlock choices remain implemented in the private documents and main-process session, with further work deferred while password-based review proceeds. See [the Touch ID guide](./private-hubs-touch-id.md) for the signing gate and the difference between synthetic-provider UI verification and real biometric acceptance.
+
+
+## Interrupted password change recovery
+
+The credential bridge exposes `resumePasswordChange` on the fixed `private-credentials-resume-password-change` channel. It accepts the same bounded two-password snapshot as ordinary password changes and returns only `changed`, `incorrect-password`, `not-found`, `cancelled`, `invalid`, `busy` or `unavailable`. The gallery uses its existing masked fields and an explicit secondary button; normal form submission still starts an ordinary password change. Draft, composition, focus, pending-operation and lock guards apply to both actions. Fields clear synchronously before IPC, and diagnostics are never displayed.
+
+The main handler reserves the existing credential drain before entering the session. Only after storage authenticates the current and staged envelopes does it show a native confirmation with Cancel as default. Authority is checked before and after that dialog. Window disposal revokes IPC immediately and waits for the confirmation/storage drain; a late accepted dialog cannot restore authority. Successful publication invalidates gallery access, locks the session and retires the browser independently of the renderer reply. The staged header never enters renderer IPC.
+
+Storage validates exactly one complete, regular, single-link staging file bound to the active hub key. It rechecks file identity, content and namespace after confirmation, flushes the staged file, atomically replaces the header and verifies publication. Ambiguous files are retained. This action does not implement generic catalogue recovery or automatic cleanup of credential files.

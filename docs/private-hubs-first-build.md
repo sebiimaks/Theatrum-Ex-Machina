@@ -14,11 +14,29 @@ The destination is a folder containing encrypted catalogue and preview records. 
 
 ## Browse, edit and lock
 
-Select a video to inspect its saved previews, rating, notes and tags. Save changes before locking. The private gallery also provides saved filmstrips and preview clips when present, original-video playback, per-video preview regeneration and metadata refresh, password changes, and automatic-lock settings under **Protection**.
+Select a video to inspect its saved previews, rating, notes and tags. Save changes before locking. The private gallery also provides saved filmstrips and preview clips when present, original-video playback, per-video preview regeneration and metadata refresh, custom JPEG and PNG thumbnails, password changes, and automatic-lock settings under **Protection**.
 
 Choose **Lock hub** to close the private workspace and return to the ordinary hub. To reopen it, choose **File → Open private hub…**, select the encrypted folder and enter its password. Private hubs are not added to the ordinary recent-catalogue list.
 
 An incorrect password or an unavailable folder returns to the ordinary workspace with a message. Choose **Open private hub…** again to retry. If cleanup cannot be confirmed, restart the app before continuing.
+
+If a private window crashes or stops responding, the app locks the hub and closes that window. Reopen the hub with its password to continue. Saved changes remain available; unsaved notes, tags and rating edits are lost. The ordinary workspace resumes only after private cleanup finishes. If it does not return, restart the app before reopening the hub.
+
+## If the app closes during a save
+
+Reopen the same private hub and check the last change before retrying it. A save may have finished before the app closed; unsaved drafts are not restored. The app authenticates the saved catalogue when opening it and does not silently load an older backup.
+
+Leave the hub’s encrypted files, including `.pending` files and backups, in place. This build has no gallery control for recovering a damaged catalogue. If the hub cannot reopen, keep the complete folder for diagnosis instead of renaming or deleting its files.
+
+## Change the hub password
+
+Save or discard video edits and any unsaved Protection settings. Open **Protection → Change password**, enter the current password, then enter and confirm a different new password. Choose **Change password and lock**. Reopen the hub with the new password after it locks. This changes this hub’s password; earlier copies still accept their earlier password.
+
+If the app exits during the change, reopen with the new password. If it is rejected, try the previous password. Keep both until you have checked which opens the hub. An interrupted change may have completed even if no success message appeared.
+
+If the previous password still opens the hub, open **Protection → Change password** again. Enter that working password, then enter and confirm the new password from the interrupted attempt. Choose **Finish interrupted password change**. The app checks both passwords before asking you to confirm. Choose **Finish password change** in the dialog to complete the change and lock the hub, or **Cancel** to leave it unfinished. After completion, reopen with the new password.
+
+Recovery requires one complete, authenticated file from the interrupted attempt and both passwords. If none is found, use **Change password and lock** for a new change. If the files are damaged or ambiguous, keep the complete hub folder and leave its internal files untouched. This action does not repair a damaged catalogue or recover a forgotten password.
 
 ## Choose collections and sorting
 
@@ -100,6 +118,18 @@ Original videos stay in place and remain unencrypted. Use **Add folder…** to s
 
 Choose **Cancel import** during **Add videos…**, or **Cancel** during **Find new videos…**, to stop further work once cancellation is observed. Close any open native picker to finish cancellation. Videos already added remain saved. A catalogue save already in progress may complete, so check the refreshed catalogue before retrying. Locking also cancels import and waits for its decoder and file access to finish. The automatic-lock timeout still applies during a batch; progress updates do not keep the hub unlocked. Interrupted work may leave unused encrypted preview records; it does not create readable preview files beside the source.
 
+## Choose a custom thumbnail
+
+Select a video and choose **Choose thumbnail** in its details. Select a JPEG or PNG file in the native picker. The original video does not need to be connected. This build accepts JPEG and static PNG images up to 32 MiB and 32 megapixels, with neither dimension exceeding 16,384 pixels. Animated PNG (APNG) and other image formats are not supported.
+
+The app fits the image into the hub’s thumbnail size, removes embedded metadata and saves an encrypted JPEG inside the private hub. Transparent areas use a black background. PNG metadata, including embedded color profiles, is removed before decoding; color-managed images may look different. The selected image, catalogue details, filmstrip, clip poster and preview clip remain unchanged. Unsaved notes, tag and rating drafts stay in the editor; choose **Save changes** separately to save them.
+
+Choose **Cancel** to stop and wait for outstanding work. Close any open native picker to finish cancellation. A thumbnail already being saved may finish, so check the displayed image before retrying. Locking cancels the operation and clears unsaved drafts.
+
+If image or preview processing fails, wait for the action to finish before trying again. Incomplete decoder output does not become the active preview. If the action remains unavailable, lock and reopen the hub; restart the app if cleanup cannot be confirmed.
+
+**Regenerate previews** or **Refresh video** replaces a custom thumbnail with a newly generated one. **Create unprotected copy** includes the currently chosen thumbnail as a regular JPEG. Earlier private-hub builds do not display custom thumbnails saved by this build. Replaced and interrupted encrypted records remain in the hub until a safe cleanup feature is available.
+
 ## Refresh a changed video
 
 Select a video and choose **Refresh video** in its details. Save or discard notes, tag and rating drafts first. Select the saved source folder if asked. The app reads that video’s technical details and creates fresh encrypted thumbnails, filmstrips and any preview clip enabled by the hub’s current preview settings. Original files remain unchanged.
@@ -164,7 +194,7 @@ Creating a private copy does not remove or encrypt the original `.scaena` file, 
 
 Run `npm run electron:mac:private:test` from the privacy worktree to build an unsigned Apple Silicon test app in `release-test-private/mac-arm64/Theatrum Ex Machina.app`. This command does not publish or install it. The output uses a separate directory from earlier test packages.
 
-The video-refresh test-build output is `release-test-private-refresh/mac-arm64/Theatrum Ex Machina.app`. Set `THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-refresh` when building or running `npm run test:private-package:host` to use this separate output folder. Folder selection accepts capitalization differences on case-insensitive drives. Catalogue metadata updates are accepted only when the catalogue contents remain unchanged; actual edits still stop conversion. If conversion fails, the message identifies the failed step, such as checking the source, creating encrypted storage, copying previews or verifying the copy.
+The latest reviewed test build is `release-test-private-password-recovery/mac-arm64/Theatrum Ex Machina.app`. It includes JPEG/PNG custom thumbnails and **Finish interrupted password change**. Set `THEATRUM_PRIVATE_TEST_OUTPUT=release-test-private-password-recovery` when running `npm run test:private-package:host` against this build. Use a new output-folder name when building another copy so earlier review builds remain available. Folder selection accepts capitalization differences on case-insensitive drives. Catalogue metadata updates are accepted only when the catalogue contents remain unchanged; actual edits still stop conversion. If conversion fails, the message identifies the failed step, such as checking the source, creating encrypted storage, copying previews or verifying the copy.
 
 Open that local app to review the workflow. Close other running copies of Theatrum Ex Machina first so that macOS does not forward the launch to a different running version. Normal catalogue settings are shared unless a separate portable settings directory is selected when launching; the automated acceptance tests use isolated disposable profiles.
 

@@ -14,6 +14,7 @@ const privateModules = Object.freeze([
   'node/private-hub-browser.js', 'node/private-conversion-workspace.js', 'node/private-application-workspace.js',
   'node/private-hub-menu.js', 'node/private-source-playback.js', 'node/private-preview-source.js',
   'node/private-video-import.js', 'node/private-source-scan.js', 'node/private-source-check.js', 'node/private-video-refresh.js', 'node/private-playback-history.js', 'node/private-source-relocation.js', 'node/private-source-addition.js',
+  'node/private-thumbnail-override.js', 'node/private-custom-thumbnail.js', 'node/private-thumbnail-png.js', 'node/private-preview-admission.js',
   'node/private-conversion-destination.js', 'node/private-conversion-errors.js',
 ]);
 function helperNames(platform) {

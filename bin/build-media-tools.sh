@@ -161,6 +161,7 @@ media_ffmpeg_source="$media_work_dir/ffmpeg-$ffmpeg_version"
       --enable-pic \
       --enable-gpl \
       --enable-libx264 \
+      --enable-zlib \
       --disable-debug \
       --disable-doc \
       --disable-ffplay \
@@ -169,6 +170,14 @@ media_ffmpeg_source="$media_work_dir/ffmpeg-$ffmpeg_version"
   make -s -j"$media_jobs"
   make -s install DESTDIR="$media_ffmpeg_stage"
 )
+
+# PNG depends on zlib even though all optional-library autodetection is off.
+# Refuse a toolchain lacking the feature before replacing any output binaries.
+if ! "$media_ffmpeg_stage$media_prefix/bin/ffmpeg" -hide_banner -decoders 2>/dev/null | \
+  awk '$2 == "png" { found = 1 } END { exit !found }'; then
+  echo "The built FFmpeg is missing its required PNG decoder; install system zlib development headers." >&2
+  exit 1
+fi
 
 cp "$media_ffmpeg_stage$media_prefix/bin/ffmpeg" "$media_output_dir/ffmpeg"
 cp "$media_ffmpeg_stage$media_prefix/bin/ffprobe" "$media_output_dir/ffprobe"
@@ -186,6 +195,7 @@ media_ffmpeg_configuration=$($media_output_dir/ffmpeg -version)
   printf '%s\n' "Target: $media_target"
   printf '%s\n' "Minimum operating system: $media_minimum_os"
   printf '%s\n' "Compiler: $media_compiler_line"
+  printf '%s\n' "PNG support: system zlib (dynamically linked; provided by the operating system)"
   printf '%s\n' "FFmpeg source: $ffmpeg_url"
   printf '%s\n' "FFmpeg SHA-256: $ffmpeg_sha256"
   printf '%s\n' "x264 source: $x264_url"

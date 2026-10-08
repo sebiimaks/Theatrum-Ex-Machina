@@ -125,6 +125,34 @@ test('bundles matching FFmpeg and FFprobe 8.1.2 executables', () => {
   const configuration = runTool(ffmpegPath, ['-version']).stdout;
   assert.match(configuration, /--enable-gpl/);
   assert.match(configuration, /--enable-libx264/);
+  assert.match(configuration, /--enable-zlib/);
+});
+
+test('bundled media tools decode PNG into a thumbnail', () => {
+  const decoders = runTool(ffmpegPath, ['-hide_banner', '-decoders']);
+  assert.equal(decoders.status, 0, decoders.stderr);
+  assert.match(decoders.stdout, /^\s*V[^\s]*\s+png\s/m);
+  const directory = createTemporaryDirectory();
+  const pngPath = path.join(directory, 'custom thumbnail.png');
+  const jpegPath = path.join(directory, 'converted thumbnail.jpg');
+  // Two RGBA rows with opaque red and translucent green pixels, produced
+  // independently of FFmpeg so the test cannot hide a broken PNG encoder.
+  fs.writeFileSync(pngPath, Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP4z8DwHwgbGGAMAEBXBvusDhdaAAAAAElFTkSuQmCC',
+    'base64',
+  ));
+  const conversion = runTool(ffmpegPath, [
+    '-nostdin', '-hide_banner', '-loglevel', 'error',
+    '-i', pngPath, '-frames:v', '1', '-vf', 'scale=256:144',
+    '-c:v', 'mjpeg', '-f', 'image2', '-y', jpegPath,
+  ]);
+  assert.equal(conversion.status, 0, conversion.stderr);
+  const probe = runTool(ffprobePath, [
+    '-v', 'error', '-select_streams', 'v:0',
+    '-show_entries', 'stream=codec_name,width,height', '-of', 'json', jpegPath,
+  ]);
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.deepEqual(JSON.parse(probe.stdout).streams, [{ codec_name: 'mjpeg', width: 256, height: 144 }]);
 });
 
 test('retains the extended thumbnail and filmstrip timeout allowances', () => {

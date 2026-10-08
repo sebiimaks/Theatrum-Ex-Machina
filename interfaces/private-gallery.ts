@@ -12,9 +12,10 @@ export const PRIVATE_GALLERY_CHANNELS = Object.freeze({
   playOriginal: 'private-gallery-play-original', stopOriginal: 'private-gallery-stop-original',
   ackOriginalPlayback: 'private-gallery-ack-original-playback',
   resetPlaybackHistory: 'private-gallery-reset-playback-history',
-  regenerate: 'private-gallery-regenerate', refreshVideo: 'private-gallery-refresh-video', cancelRegeneration: 'private-gallery-cancel-regeneration',
+  regenerate: 'private-gallery-regenerate', refreshVideo: 'private-gallery-refresh-video', setCustomThumbnail: 'private-gallery-set-custom-thumbnail', cancelRegeneration: 'private-gallery-cancel-regeneration',
   protection: 'private-gallery-protection', setProtection: 'private-gallery-set-protection',
   changePassword: 'private-credentials-change-password',
+  resumePasswordChange: 'private-credentials-resume-password-change',
   touchIdStatus: 'private-credentials-touch-id-status',
   enableTouchId: 'private-credentials-touch-id-enable',
   disableTouchId: 'private-credentials-touch-id-disable',
@@ -52,6 +53,7 @@ export interface PrivateGalleryDetail extends PrivateGalleryItem {
   revision: string;
   regenerable: boolean;
   refreshable: boolean;
+  thumbnailEditable: boolean;
   playable: boolean;
 }
 export type PrivateGalleryUnavailable = { status: 'busy' | 'unavailable' };
@@ -124,7 +126,11 @@ export type PrivateGalleryRegeneration = PrivateGalleryUnavailable
 export type PrivateGalleryRefresh = PrivateGalleryUnavailable
   | { status: 'cancelled' | 'conflict' | 'invalid' | 'source-unavailable' | 'wrong-folder' }
   | { status: 'refreshed'; item: PrivateGalleryDetail };
+export type PrivateGalleryCustomThumbnail = PrivateGalleryUnavailable
+  | { status: 'cancelled' | 'conflict' | 'invalid' | 'source-unavailable' }
+  | { status: 'updated'; item: PrivateGalleryDetail };
 export type PrivateCredentialsPasswordChange = { status: 'changed' | 'incorrect-password' | 'invalid' | 'busy' | 'unavailable' };
+export type PrivateCredentialsPasswordRecovery = { status: 'changed' | 'incorrect-password' | 'not-found' | 'cancelled' | 'invalid' | 'busy' | 'unavailable' };
 export type PrivateCredentialsUnprotectedCopy = {
   status: 'copied' | 'incorrect-password' | 'cancelled' | 'failed' | 'invalid' | 'busy' | 'unavailable';
 };

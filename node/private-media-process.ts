@@ -49,7 +49,7 @@ const values: Record<string, (value: string) => boolean> = {
   '-map_metadata': value => value === '-1', '-map_metadata:s': value => value === '-1', '-map_chapters': value => value === '-1',
   '-metadata': value => value === 'encoder=', '-metadata:s:v': value => ['encoder=', 'rotate=0'].includes(value),
   '-fflags': value => value === '+bitexact', '-flags:v': value => value === '+bitexact',
-  '-c:v': value => ['mjpeg', 'libx264', 'copy'].includes(value), '-c:a': value => ['aac', 'copy'].includes(value),
+  '-c:v': value => ['mjpeg', 'png', 'libx264', 'copy'].includes(value), '-c:a': value => ['aac', 'copy'].includes(value),
   '-c': value => value === 'copy', '-preset': value => value === 'veryfast',
   '-q:v': value => /^(?:[2-9]|[12]\d|3[01])$/.test(value),
   '-crf': value => /^\d{1,2}$/.test(value) && Number(value) <= 51,
@@ -67,9 +67,10 @@ const values: Record<string, (value: string) => boolean> = {
   '-show_entries': value => ['format=duration:stream=codec_type,width,height,duration',
     'format=duration:stream=codec_type,width,height,duration:stream_disposition=attached_pic',
     'format=duration:stream=codec_type,width,height,duration,avg_frame_rate:stream_disposition=attached_pic'].includes(value),
-  // These four filters do not open files. Disallow filter graphs, movie/subtitle
-  // sources, scripts, quotes, escapes and arbitrary filter names entirely.
-  '-vf': value => value.split(',').every(filter => /^(?:scale|pad|setsar|tile)=[a-zA-Z0-9_:.=()+*/ -]+$/.test(filter)),
+  // Fixed geometry filters and PNG transparency conversion never open files.
+  // No filter graphs, movie/subtitle sources, scripts or arbitrary arguments.
+  '-vf': value => value.split(',').every(filter => /^(?:scale|pad|setsar|tile)=[a-zA-Z0-9_:.=()+*/ -]+$/.test(filter)
+    || ['format=gbrap', 'premultiply=inplace=1', 'format=rgb24'].includes(filter)),
 };
 
 function validate(options: PrivateMediaProcessOptions): void {

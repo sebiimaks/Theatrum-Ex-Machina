@@ -7,6 +7,7 @@ import { createPrivateHubImageResponse } from './private-hub-image-response';
 import { createPrivateHubMediaResponse } from './private-hub-media-response';
 import { PRIVATE_HUB_MEDIA_CHUNK_BYTES } from './private-hub-media';
 import { generatePrivateHubPreviews, isPrivatePreviewGenerationCleanupFailure } from './private-hub-preview-generation';
+import { setPrivateCustomThumbnail } from './private-custom-thumbnail';
 import type { PrivatePreviewSet } from './private-hub-preview-set';
 import { isPrivatePreviewSource, privatePreviewSourceMatchesLocation, type PrivatePreviewSource, type PrivatePreviewSourceLocation } from './private-preview-source';
 import type { PrivateVideoMetadata } from './private-preview-plan';
@@ -388,6 +389,24 @@ export class PrivateHubSession {
 
   /** Reauthenticate and replace only the key envelope. The owning browser locks after success. */
   async changePassword(generation: number, value: unknown, isCurrent: () => boolean): Promise<'changed' | 'incorrect-password'> {
+    const work = this.replacePassword(generation, value, isCurrent);
+    value = undefined;
+    const result = await work;
+    if (result !== 'changed' && result !== 'incorrect-password') { throw unavailable(); }
+    return result;
+  }
+
+  /** Publish an authenticated interrupted key envelope only after native confirmation. */
+  async resumePasswordChange(generation: number, value: unknown, isCurrent: () => boolean, confirm: () => Promise<boolean>):
+  Promise<'changed' | 'incorrect-password' | 'not-found' | 'cancelled'> {
+    if (typeof confirm !== 'function') { throw unavailable(); }
+    const work = this.replacePassword(generation, value, isCurrent, confirm);
+    value = undefined;
+    return work;
+  }
+
+  private async replacePassword(generation: number, value: unknown, isCurrent: () => boolean, confirm?: () => Promise<boolean>):
+  Promise<'changed' | 'incorrect-password' | 'not-found' | 'cancelled'> {
     let admitted = false;
     let revoked = false;
     const credentials: Buffer[] = [];
@@ -420,7 +439,14 @@ export class PrivateHubSession {
       const result = await this.enqueue(generation, async store => {
         if (!current()) { throw unavailable(); }
         try {
-          const changing = store.changePassword(credentials[0].toString('utf8'), credentials[1].toString('utf8'), current, this.#options.touchId);
+          const changing = confirm
+            ? store.resumePasswordChange(credentials[0].toString('utf8'), credentials[1].toString('utf8'), current, async () => {
+              if (!current()) { throw unavailable(); }
+              const accepted = await confirm();
+              if (!current()) { throw unavailable(); }
+              return accepted === true;
+            }, this.#options.touchId)
+            : store.changePassword(credentials[0].toString('utf8'), credentials[1].toString('utf8'), current, this.#options.touchId);
           for (const bytes of credentials) { bytes.fill(0); }
           return await changing;
         } catch (error) {
@@ -1096,6 +1122,90 @@ export class PrivateHubSession {
         if (this.#pendingWrites.delete(outputBytes)) { this.#pendingWriteBytes -= outputBytes.length; }
       }
     }
+  }
+
+  /** The selected still-image capability grants no access to an original video or source folder. */
+  setCustomThumbnail(generation: number, source: PrivatePreviewSource, update: PrivateVideoRefreshUpdate,
+    options: { signal?: AbortSignal; isCurrent: () => boolean }): Promise<{ status: 'updated' | 'conflict' | 'invalid' | 'busy' }> {
+    let request: Readonly<PrivateVideoRefreshUpdate>;
+    let externalSignal: AbortSignal | undefined;
+    let authorized: () => boolean;
+    try {
+      this.assertCurrent(generation);
+      const snapshot = snapshotPrivateVideoRefreshUpdate(update);
+      if (!snapshot) { return Promise.resolve({ status: 'invalid' }); }
+      if (!isPrivatePreviewSource(source) || !options || typeof options.isCurrent !== 'function') { throw unavailable(); }
+      request = snapshot; externalSignal = options.signal; authorized = options.isCurrent;
+      if ((externalSignal !== undefined && !(externalSignal instanceof AbortSignal)) || externalSignal?.aborted
+        || !this.#hashes.has(source.hash)) { throw unavailable(); }
+      this.assertCurrent(generation);
+      if (this.#previewJob || this.#protectionSaving || this.#passwordChanging || this.#plaintextCopying
+        || this.#pendingWrites.size || this.#pendingOperations >= MAX_PENDING_OPERATIONS) { return Promise.resolve({ status: 'busy' }); }
+    } catch { return Promise.reject(unavailable()); }
+    const controller = new AbortController();
+    const abort = (): void => controller.abort();
+    this.#previewController = controller;
+    externalSignal?.addEventListener('abort', abort, { once: true });
+    const current = (): boolean => {
+      try {
+        if (!controller.signal.aborted && !externalSignal?.aborted && this.isCurrent(generation)
+          && source.isCurrent() && authorized() === true && this.isCurrent(generation)
+          && !controller.signal.aborted && !externalSignal?.aborted) { return true; }
+      } catch { /* Never expose native-path diagnostics. */ }
+      controller.abort(); return false;
+    };
+    const check = (): void => { if (!current()) { throw unavailable(); } };
+    // Reserve the preview writer before any callback/read can reenter the session.
+    const work = Promise.resolve().then(async (): Promise<{ status: 'updated' | 'conflict' | 'invalid' }> => {
+      let cleanupFailure: Error | undefined;
+      let failure: unknown;
+      let result: { status: 'updated' | 'conflict' | 'invalid' } | undefined;
+      try {
+        result = await (async (): Promise<{ status: 'updated' | 'conflict' | 'invalid' }> => {
+          check();
+          const catalogue = await this.readCatalogue(generation); check();
+          const image = catalogue.images[request.index];
+          if (!image || privateVideoRevision(image) !== request.revision || image.hash !== source.hash) { return { status: 'conflict' }; }
+          if (image.deleted || image.cleanName === '*FOLDER*' || catalogue.images.filter(row => row.hash === image.hash).length !== 1) {
+            return { status: 'invalid' };
+          }
+          await setPrivateCustomThumbnail(this.assertCurrent(generation), source, catalogue.screenshotSettings.height,
+            { signal: controller.signal, isCurrent: current });
+          check();
+          return { status: 'updated' };
+        })();
+      } catch (error) {
+        if (isPrivatePreviewGenerationCleanupFailure(error)) { cleanupFailure = error; }
+        failure = error;
+      } finally {
+        controller.abort(); externalSignal?.removeEventListener('abort', abort);
+        try { await source.close(); }
+        catch (error) { failure = cleanupFailure ?? error; }
+      }
+      if (failure !== undefined) { throw failure; }
+      if (!result) { throw unavailable(); }
+      return result;
+    }).catch(error => {
+      if (isPrivatePreviewGenerationCleanupFailure(error)) {
+        this.#previewCleanupFailure = error;
+        void this.lock('storage-error').catch(() => undefined);
+        throw error;
+      }
+      throw unavailable();
+    });
+    const drained = work.then(() => undefined, error => { if (isPrivatePreviewGenerationCleanupFailure(error)) { throw error; } });
+    this.#previewJob = drained;
+    const cleanup = (): void => {
+      if (this.#previewJob === drained) { this.#previewJob = undefined; }
+      if (this.#previewController === controller) { this.#previewController = undefined; }
+    };
+    void drained.then(cleanup, cleanup);
+    return work.then(result => {
+      this.assertCurrent(generation);
+      try { if (externalSignal?.aborted || authorized() !== true) { throw unavailable(); } }
+      catch { throw unavailable(); }
+      return result;
+    }, error => { throw isPrivatePreviewGenerationCleanupFailure(error) ? error : unavailable(); });
   }
 
   /**

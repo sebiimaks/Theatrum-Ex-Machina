@@ -2,6 +2,8 @@
 
 Theatrum Ex Machina includes separate `ffmpeg` and `ffprobe` command-line executables built from FFmpeg 8.1.2 and x264 commit `b35605ace3ddf7c1a5d67a2eb553f034aef41d55`.
 
+PNG decoding uses the operating system’s dynamically linked zlib library. The application does not bundle a separate zlib library. Debian packages declare `zlib1g` as a runtime dependency; native Linux builds require `zlib1g-dev`.
+
 These executables are licensed under the GNU General Public License, version 2 or any later version. They are not relicensed under the MIT License that applies to Theatrum Ex Machina itself.
 
 Release builds that distribute these executables must provide their exact corresponding source at the same download location. The release process creates a version-matched `theatrum-ex-machina-media-source-v<version>.tar.xz` archive containing the FFmpeg and x264 source archives, verified checksums, build manifest, licence texts, and complete build script. The matching source archive and checksum manifest are published beside each application binary on the same GitHub release page.

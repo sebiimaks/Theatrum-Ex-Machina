@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { PrivateHubPreviewKind } from './private-hub-catalogue';
 import type { PrivateHubStore } from './private-hub-store';
+import { readPrivateThumbnailOverride, privateThumbnailOverrideMemberId } from './private-thumbnail-override';
 
 const KINDS: readonly PrivateHubPreviewKind[] = ['thumbnail', 'filmstrip', 'clip-poster', 'clip'];
 const MAX_MANIFEST_BYTES = 1024;
@@ -78,6 +79,11 @@ export async function resolvePrivatePreviewId(store: PrivateHubStore, hash: stri
   if (!KINDS.includes(kind)) { throw invalid(); }
   const set = await readPrivatePreviewSet(store, hash);
   if (store.locked) { throw invalid(); }
+  if (kind === 'thumbnail') {
+    const thumbnail = await readPrivateThumbnailOverride(store, hash);
+    if (store.locked) { throw invalid(); }
+    if (thumbnail?.baseGeneration === (set?.generation ?? 'legacy')) { return privateThumbnailOverrideMemberId(thumbnail); }
+  }
   return set ? privatePreviewSetMemberId(set, kind) : `preview:${kind}:${hash}`;
 }
 

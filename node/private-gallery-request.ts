@@ -11,8 +11,8 @@ import { PRIVATE_GALLERY_CHANNELS as channels, PRIVATE_GALLERY_PAGE_SIZE, PRIVAT
   type PrivateGalleryImportCounts, type PrivateGalleryImportProgress,
   type PrivateGalleryDetail, type PrivateGalleryItem, type PrivateGalleryPage, type PrivateGalleryQuery,
   type PrivateGalleryEdit, type PrivateGallerySave, type PrivateGallerySelection,
-  type PrivateGalleryRegeneration, type PrivateGalleryRefresh, type PrivateGalleryProtection, type PrivateGalleryProtectionSave,
-  type PrivateCredentialsPasswordChange, type PrivateCredentialsUnprotectedCopy,
+  type PrivateGalleryRegeneration, type PrivateGalleryRefresh, type PrivateGalleryCustomThumbnail, type PrivateGalleryProtection, type PrivateGalleryProtectionSave,
+  type PrivateCredentialsPasswordChange, type PrivateCredentialsPasswordRecovery, type PrivateCredentialsUnprotectedCopy,
   type PrivateCredentialsTouchIdStatus, type PrivateCredentialsTouchIdEnable, type PrivateCredentialsTouchIdDisable } from '../interfaces/private-gallery';
 import { snapshotPrivateHubPasswordChange, snapshotPrivateHubPlaintextCopyRequest, snapshotPrivateHubTouchIdEnable,
   type PrivateHubPasswordChangeRequest, type PrivateHubPlaintextCopyRequest } from '../interfaces/private-hub-credentials';
@@ -48,6 +48,8 @@ export interface PrivateGalleryRequestOptions {
   readonly onLock: () => void;
   /** Applies a saved setting to the main-owned timer; never a renderer heartbeat. */
   readonly onProtectionChanged: (settings: PrivateHubProtection) => boolean;
+  /** Native confirmation after both supplied passwords authenticate the interrupted envelope. */
+  readonly confirmPasswordRecovery?: () => Promise<boolean>;
   /** Count-only native confirmation for resetting one metric in the encrypted catalogue. */
   readonly confirmPlaybackHistoryReset?: (metric: PrivateGalleryPlaybackHistoryMetric, count: number) => Promise<boolean>;
   /** Native main-owned picker. Never accept a path from the renderer. */
@@ -60,6 +62,8 @@ export interface PrivateGalleryRequestOptions {
   readonly chooseNewSourceDirectory?: () => Promise<string | undefined>;
   /** Native bounded file selection beneath a saved source. No renderer paths. */
   readonly chooseImportVideo?: (root: string) => Promise<string | readonly string[] | undefined>;
+  /** One explicitly chosen image only; does not grant access to its containing folder. */
+  readonly chooseCustomThumbnail?: () => Promise<string | undefined>;
   /** Count-only native confirmation of one bounded discovered batch. */
   readonly confirmSourceScan?: (count: number, more: boolean) => Promise<boolean>;
   /** Native confirmation after the selected folder's referenced videos pass review. */
@@ -153,7 +157,7 @@ function timestamp(value: unknown): number | undefined {
 function positiveMetric(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= Number.MAX_SAFE_INTEGER ? value : undefined;
 }
-function project(image: ImageElement, index: number, regenerable = false, playable = false, refreshable = false): Row {
+function project(image: ImageElement, index: number, regenerable = false, playable = false, refreshable = false, thumbnailEditable = false): Row {
   if (!HASH.test(image.hash)) { throw new Error(); }
   const title = text(image.cleanName, 2048) || 'Untitled video';
   const notes = text(image.notes, 65_536);
@@ -170,7 +174,7 @@ function project(image: ImageElement, index: number, regenerable = false, playab
       duration: positiveMetric(image.duration),
       rating: [0.5, 1.5, 2.5, 3.5, 4.5, 5.5].includes(image.stars) ? rating : undefined },
     display: { title, notes, tags, duration: number(image.duration), width: number(image.width), height: number(image.height),
-      rating, favourite: image.stars === 5.5, editable: privateVideoMetadataEditable(image), regenerable, playable, refreshable,
+      rating, favourite: image.stars === 5.5, editable: privateVideoMetadataEditable(image), regenerable, playable, refreshable, thumbnailEditable,
       revision: randomBytes(16).toString('hex'),
       thumbnailUrl: createTheatrumMediaUrl('thumbnails', image.hash, false, previewKey),
       clipUrl: createTheatrumMediaUrl('clips', image.hash, true, previewKey),
@@ -438,6 +442,8 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     !!options.chooseSourceDirectory && hashes.has(image.hash) && !!sourceLocation(catalogue, image);
   const refreshable = (catalogue: FinalObject, image: ImageElement, hashes = refreshHashes(catalogue)): boolean =>
     !!options.chooseSourceDirectory && hashes.has(image.hash) && !!refreshLocation(catalogue, image);
+  const thumbnailEditable = (catalogue: FinalObject, image: ImageElement, hashes = refreshHashes(catalogue)): boolean =>
+    !!options.chooseCustomThumbnail && hashes.has(image.hash);
   const playable = (catalogue: FinalObject, image: ImageElement): boolean => {
     const location = playbackLocation(catalogue, image);
     return !!options.playback && !!options.chooseSourceDirectory && !!location
@@ -457,7 +463,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     for (const [index, image] of catalogue.images.entries()) {
       if (image.deleted || image.cleanName === '*FOLDER*') { continue; }
       if (projected.length >= MAX_ROWS) { throw new Error(); }
-      projected.push(project(image, index, eligible(catalogue, image, hashes), playable(catalogue, image), refreshable(catalogue, image, refreshableHashes)));
+      projected.push(project(image, index, eligible(catalogue, image, hashes), playable(catalogue, image), refreshable(catalogue, image, refreshableHashes), thumbnailEditable(catalogue, image, refreshableHashes)));
     }
     if (!current()) { throw new Error(); }
     rows = projected;
@@ -948,7 +954,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
         if (!image || image.deleted || image.cleanName === '*FOLDER*' || identity(image) !== row.identity) {
           return { status: 'unavailable' };
         }
-        const latest = project(image, row.index, eligible(catalogue, image), playable(catalogue, image), refreshable(catalogue, image));
+        const latest = project(image, row.index, eligible(catalogue, image), playable(catalogue, image), refreshable(catalogue, image), thumbnailEditable(catalogue, image));
         // Re-reading the same record does not invalidate another unchanged draft.
         if (latest.persistedRevision === row.persistedRevision) { latest.display.revision = row.display.revision; }
         Object.assign(row, latest);
@@ -977,7 +983,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
         if (!trusted(event)) { return { status: 'unavailable' }; }
         if (result.status !== 'saved') { return { status: result.status }; }
         if (identity(result.image) !== row.identity) { return { status: 'unavailable' }; }
-        Object.assign(row, project(result.image, row.index, row.display.regenerable, row.display.playable, row.display.refreshable));
+        Object.assign(row, project(result.image, row.index, row.display.regenerable, row.display.playable, row.display.refreshable, row.display.thumbnailEditable));
         return { status: 'saved', item: { ...row.display, id: request.id, tags: [...row.display.tags] } };
       } finally { pending = false; }
     } catch { return { status: 'unavailable' }; }
@@ -1209,7 +1215,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
         if (!authorized() || !grant.isCurrent()) { return stopped(); }
         await hub.generatePreviews(generation, source, { signal: controller.signal });
         if (!authorized()) { return stopped(); }
-        Object.assign(row, project(refreshed, row.index, true, playable(latest, refreshed), refreshable(latest, refreshed)));
+        Object.assign(row, project(refreshed, row.index, true, playable(latest, refreshed), refreshable(latest, refreshed), thumbnailEditable(latest, refreshed)));
         return { status: 'generated', item: { ...row.display, id, tags: [...row.display.tags] } };
       } catch (error) {
         if (isPrivatePreviewGenerationCleanupFailure(error)) {
@@ -1328,7 +1334,7 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
           && JSON.stringify({ ...savedLocation, hash: location.hash }) === JSON.stringify(location);
         if (!saved || saved.deleted || saved.cleanName === '*FOLDER*'
           || (identity(saved) !== oldIdentity && !replacedHere)) { retire(); return { status: 'conflict' }; }
-        Object.assign(row, project(saved, row.index, eligible(latest, saved), playable(latest, saved), refreshable(latest, saved)));
+        Object.assign(row, project(saved, row.index, eligible(latest, saved), playable(latest, saved), refreshable(latest, saved), thumbnailEditable(latest, saved)));
         if (controller.signal.aborted) { return stopped(); }
         if (refreshed && replacedHere) {
           return { status: 'refreshed', item: { ...row.display, id, tags: [...row.display.tags] } };
@@ -1341,6 +1347,98 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     try {
       const result = await work;
       if (granted && result.status !== 'refreshed' && location) { access.disconnect(location.root); }
+      return cleanupFailed || !trusted(event) ? { status: 'unavailable' } : result;
+    } finally {
+      pending = false;
+      if (regeneration === controller) { regeneration = undefined; }
+      if (regenerationDrain === drain) { regenerationDrain = undefined; }
+    }
+  };
+  const setCustomThumbnail = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateGalleryCustomThumbnail> => {
+    if (!trusted(event) || !options.chooseCustomThumbnail) { return { status: 'unavailable' }; }
+    const value = args.length === 1 ? refreshRequest(args[0]) : undefined;
+    if (!value) { return { status: 'invalid' }; }
+    if (pending) { return { status: 'busy' }; }
+    const { id } = value;
+    const row = issued.get(id);
+    if (!row || !row.display.thumbnailEditable) { return { status: 'unavailable' }; }
+    if (value.revision !== row.display.revision) { return { status: 'conflict' }; }
+    pending = true;
+    const controller = new AbortController();
+    regeneration = controller;
+    const authorized = (): boolean => !controller.signal.aborted && trusted(event) && !controller.signal.aborted;
+    const stopped = (): PrivateGalleryCustomThumbnail => trusted(event) && controller.signal.aborted
+      ? { status: 'cancelled' } : { status: 'unavailable' };
+    const oldIdentity = row.identity, oldRevision = row.persistedRevision;
+    const retire = (): void => { rows = undefined; issued.clear(); ids.clear(); };
+    // Install the drain before native callbacks can reenter Lock. The selected
+    // image is an exact-file capability, never a saved source-folder grant.
+    const work = Promise.resolve().then(async (): Promise<PrivateGalleryCustomThumbnail> => {
+      let source: PrivatePreviewSource | undefined;
+      let updated = false;
+      let outcome: PrivateGalleryCustomThumbnail = { status: 'unavailable' };
+      try {
+        outcome = await (async (): Promise<PrivateGalleryCustomThumbnail> => {
+          if (!authorized() || (options.playback && !await stopForOperation(event)) || !authorized()) { return stopped(); }
+          const catalogue = await hub.readCatalogue(generation);
+          if (!authorized()) { return stopped(); }
+          const image = catalogue.images[row.index];
+          if (!image || identity(image) !== oldIdentity || privateVideoRevision(image) !== oldRevision
+            || !thumbnailEditable(catalogue, image)) { return { status: 'conflict' }; }
+          const selectedPath = await options.chooseCustomThumbnail!();
+          if (!authorized()) { return stopped(); }
+          if (selectedPath === undefined) { return { status: 'cancelled' }; }
+          if (typeof selectedPath !== 'string' || selectedPath.length > 32_768 || selectedPath.includes('\0')
+            || !path.isAbsolute(selectedPath) || !/\.(?:jpe?g|png)$/i.test(selectedPath)) { return { status: 'invalid' }; }
+          const latest = await hub.readCatalogue(generation);
+          if (!authorized()) { return stopped(); }
+          const selected = latest.images[row.index];
+          if (!selected || identity(selected) !== oldIdentity || privateVideoRevision(selected) !== oldRevision
+            || !thumbnailEditable(latest, selected)) { return { status: 'conflict' }; }
+          try {
+            source = await capturePrivatePreviewSource({ hash: selected.hash, root: path.dirname(selectedPath),
+              partialPath: '/', fileName: path.basename(selectedPath), inputSource: 0,
+              signal: controller.signal, isCurrent: authorized });
+          } catch (error) {
+            if (isPrivatePreviewSourceCleanupFailure(error)) { quarantine(); }
+            return authorized() && !cleanupFailed ? { status: 'source-unavailable' } : stopped();
+          }
+          if (!authorized()) { return stopped(); }
+          const result = await hub.setCustomThumbnail(generation, source, { index: row.index, revision: oldRevision },
+            { signal: controller.signal, isCurrent: authorized });
+          if (!authorized()) { return stopped(); }
+          updated = result.status === 'updated';
+          return !updated && ['conflict', 'invalid', 'busy'].includes(result.status)
+            ? { status: result.status as 'conflict' | 'invalid' | 'busy' } : { status: 'unavailable' };
+        })();
+      } catch (error) {
+        if (isPrivatePreviewGenerationCleanupFailure(error) || isPrivatePreviewSourceCleanupFailure(error)) { quarantine(); }
+        outcome = stopped();
+      } finally {
+        try { await source?.close(); } catch { quarantine(); }
+      }
+      try {
+        if (!trusted(event)) { return { status: 'unavailable' }; }
+        const latest = await hub.readCatalogue(generation);
+        if (!trusted(event)) { return { status: 'unavailable' }; }
+        const saved = latest.images[row.index];
+        if (!saved || saved.deleted || saved.cleanName === '*FOLDER*' || identity(saved) !== oldIdentity) {
+          retire(); return { status: 'conflict' };
+        }
+        if (privateVideoRevision(saved) !== oldRevision || !thumbnailEditable(latest, saved)) {
+          return { status: 'conflict' };
+        }
+        // Metadata and its draft authority are unchanged. Only the thumbnail
+        // route receives a fresh token, including after uncertain publication.
+        row.display.thumbnailUrl = createTheatrumMediaUrl('thumbnails', saved.hash, false, randomBytes(16).toString('hex'));
+        if (controller.signal.aborted) { return stopped(); }
+        return updated ? { status: 'updated', item: { ...row.display, id, tags: [...row.display.tags] } } : outcome;
+      } catch { retire(); return stopped(); }
+    });
+    const drain = work.then(() => undefined, () => undefined);
+    regenerationDrain = drain;
+    try {
+      const result = await work;
       return cleanupFailed || !trusted(event) ? { status: 'unavailable' } : result;
     } finally {
       pending = false;
@@ -1383,10 +1481,10 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     } catch { return { status: 'unavailable' }; }
     finally { pending = false; }
   };
-  const changePassword = async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateCredentialsPasswordChange> => {
+  const replacePassword = async (resume: boolean, event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateCredentialsPasswordRecovery> => {
     let request: PrivateHubPasswordChangeRequest | undefined;
     try {
-      if (!trusted(event)) { return { status: 'unavailable' }; }
+      if (!trusted(event) || (resume && typeof options.confirmPasswordRecovery !== 'function')) { return { status: 'unavailable' }; }
       request = args.length === 1 ? snapshotPrivateHubPasswordChange(args[0]) : undefined;
       args.fill(undefined);
       if (!request) { return { status: 'invalid' }; }
@@ -1395,14 +1493,21 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
       // Install the drain before invoking session code, which can synchronously
       // revoke this window. Lock never awaits this handler from inside the work.
       let successfulLock = false;
-      const work = Promise.resolve().then(async (): Promise<PrivateCredentialsPasswordChange> => {
+      const work = Promise.resolve().then(async (): Promise<PrivateCredentialsPasswordRecovery> => {
         try {
           if (options.playback && !await stopForOperation(event)) { return { status: 'unavailable' }; }
-          const changing = hub.changePassword(generation, request!, () => trusted(event));
+          if (!trusted(event)) { return { status: 'unavailable' }; }
+          const changing = resume
+            ? hub.resumePasswordChange(generation, request!, () => trusted(event), async () => {
+              if (!trusted(event)) { return false; }
+              const accepted = await options.confirmPasswordRecovery!();
+              return trusted(event) && accepted === true;
+            })
+            : hub.changePassword(generation, request!, () => trusted(event));
           request!.currentPassword = ''; request!.newPassword = '';
           const result = await changing;
           if (!trusted(event)) { return { status: 'unavailable' }; }
-          if (result === 'incorrect-password') { return { status: 'incorrect-password' }; }
+          if (result === 'incorrect-password' || (resume && (result === 'not-found' || result === 'cancelled'))) { return { status: result }; }
           if (result !== 'changed') { return { status: 'unavailable' }; }
           invalidate(); // End gallery authority before any lock callback reentry.
           let hubDrain: Promise<void> | undefined;
@@ -1447,6 +1552,16 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
       args.fill(undefined);
       if (request) { request.currentPassword = ''; request.newPassword = ''; }
     }
+  };
+  const changePassword = (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateCredentialsPasswordChange> => {
+    const work = replacePassword(false, event, ...args);
+    args.fill(undefined);
+    return work.then(({ status }) => ({ status: status === 'not-found' || status === 'cancelled' ? 'unavailable' : status }));
+  };
+  const resumePasswordChange = (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PrivateCredentialsPasswordRecovery> => {
+    const work = replacePassword(true, event, ...args);
+    args.fill(undefined);
+    return work;
   };
   const touchIdOperation = async <T>(event: IpcMainInvokeEvent, work: () => Promise<T>): Promise<T | undefined> => {
     if (!trusted(event) || pending) { return; }
@@ -1597,9 +1712,11 @@ export function registerPrivateGalleryRequest(options: PrivateGalleryRequestOpti
     ipcMain.handle(channels.resetPlaybackHistory, resetPlaybackHistory); installed.push(channels.resetPlaybackHistory);
     ipcMain.handle(channels.regenerate, regenerate); installed.push(channels.regenerate);
     ipcMain.handle(channels.refreshVideo, refreshVideo); installed.push(channels.refreshVideo);
+    ipcMain.handle(channels.setCustomThumbnail, setCustomThumbnail); installed.push(channels.setCustomThumbnail);
     ipcMain.handle(channels.protection, protection); installed.push(channels.protection);
     ipcMain.handle(channels.setProtection, setProtection); installed.push(channels.setProtection);
     ipcMain.handle(channels.changePassword, changePassword); installed.push(channels.changePassword);
+    ipcMain.handle(channels.resumePasswordChange, resumePasswordChange); installed.push(channels.resumePasswordChange);
     ipcMain.handle(channels.touchIdStatus, touchIdStatus); installed.push(channels.touchIdStatus);
     ipcMain.handle(channels.enableTouchId, enableTouchId); installed.push(channels.enableTouchId);
     ipcMain.handle(channels.disableTouchId, disableTouchId); installed.push(channels.disableTouchId);

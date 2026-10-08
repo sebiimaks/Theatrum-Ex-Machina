@@ -55,7 +55,8 @@ jobs:
             xauth \
             xdg-utils \
             xvfb \
-            xz-utils
+            xz-utils \
+            zlib1g-dev
 
       - name: Install JavaScript dependencies
         run: npm ci

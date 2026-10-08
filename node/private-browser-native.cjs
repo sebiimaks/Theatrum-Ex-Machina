@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { app, BrowserWindow, dialog, Menu, powerMonitor, protocol, session } = require('electron');
-const { createHash } = require('node:crypto');
+const { createHash, randomBytes } = require('node:crypto');
+const { deflateSync } = require('node:zlib');
 
 const repository = fs.realpathSync(path.resolve(__dirname, '..'));
 const argument = name => process.argv.find(value => value.startsWith(name + '='))?.slice(name.length + 1);
@@ -32,7 +33,8 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'theatrum', privileges: {
 
 require('ts-node').register({ project: path.join(repository, 'tsconfig.persistence-tests.json'),
   transpileOnly: true, preferTsExts: true, compilerOptions: { module: 'commonjs', target: 'es2022' } });
-const { PrivateHubStore } = require('./private-hub-store.ts');
+const { PRIVATE_HUB_HEADER_FILE, PrivateHubStore } = require('./private-hub-store.ts');
+const { changePrivateHubPassword, unlockPrivateHub, validatePrivateHubHeader } = require('./private-hub-crypto.ts');
 const { PrivateHubSession } = require('./private-hub-session.ts');
 const { PrivateHubBrowser } = require('./private-hub-browser.ts');
 const { PrivateSourcePlayback } = require('./private-source-playback.ts');
@@ -1504,8 +1506,8 @@ async function workspaceOpening(directory, password, newPassword, marker) {
     unlock: typeof window.privateUnlock, node: typeof window.require, process: typeof window.process,
   })`);
   assert.deepEqual(surface, { methods: ['ackOriginalPlayback', 'addSource', 'cancelImport', 'cancelRegeneration', 'cancelSourceConnection', 'checkSource', 'connectSource', 'detail', 'disconnectSource', 'importProgress', 'importVideo', 'list', 'lock',
-    'playOriginal', 'protection', 'refreshVideo', 'regenerate', 'relocateSource', 'resetPlaybackHistory', 'save', 'scanSource', 'setProtection', 'sources', 'stopOriginal'],
-    credentials: ['cancelUnprotectedCopy', 'changePassword', 'createUnprotectedCopy', 'disableTouchId', 'enableTouchId', 'touchIdStatus'], ordinary: 'undefined', unlock: 'undefined', node: 'undefined', process: 'undefined' });
+    'playOriginal', 'protection', 'refreshVideo', 'regenerate', 'relocateSource', 'resetPlaybackHistory', 'save', 'scanSource', 'setCustomThumbnail', 'setProtection', 'sources', 'stopOriginal'],
+    credentials: ['cancelUnprotectedCopy', 'changePassword', 'createUnprotectedCopy', 'disableTouchId', 'enableTouchId', 'resumePasswordChange', 'touchIdStatus'], ordinary: 'undefined', unlock: 'undefined', node: 'undefined', process: 'undefined' });
   setStage('gallery-list');
   await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 48");
   const collectionChecks = await collectionSortingAcceptance(window, directory, marker);
@@ -2072,6 +2074,119 @@ async function workspaceOpening(directory, password, newPassword, marker) {
     credentialPasteAllowed: true, wrongPassword: 'unavailable', retryAvailable: true }, previewPatterns);
 }
 
+async function passwordRecoveryAcceptance(sourceDirectory, currentPassword, interruptedPassword) {
+  setStage('password-recovery-fixture');
+  const directory = path.join(fixture, 'password-recovery-hub');
+  assert.equal(path.dirname(sourceDirectory), fixture);
+  assert.equal(fs.realpathSync(sourceDirectory), sourceDirectory);
+  const fingerprint = folder => Object.fromEntries(fs.readdirSync(folder).sort().map(name => {
+    const file = path.join(folder, name); const stats = fs.lstatSync(file);
+    assert.ok(stats.isFile() && !stats.isSymbolicLink() && stats.nlink === 1);
+    return [name, createHash('sha256').update(fs.readFileSync(file)).digest('hex')];
+  }));
+  const sourceBefore = fingerprint(sourceDirectory);
+  fs.mkdirSync(directory, { mode: 0o700 });
+  for (const name of Object.keys(sourceBefore)) {
+    fs.copyFileSync(path.join(sourceDirectory, name), path.join(directory, name), fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(path.join(directory, name), 0o600);
+  }
+  const headerPath = path.join(directory, PRIVATE_HUB_HEADER_FILE);
+  const pendingName = PRIVATE_HUB_HEADER_FILE + '.' + randomBytes(24).toString('hex') + '.pending';
+  const stagedPath = path.join(directory, pendingName);
+  const header = validatePrivateHubHeader(JSON.parse(fs.readFileSync(headerPath, 'utf8')));
+  const key = await unlockPrivateHub(header, currentPassword);
+  let stagedBytes;
+  try {
+    stagedBytes = Buffer.from(JSON.stringify(await changePrivateHubPassword(header, key, interruptedPassword)), 'utf8');
+    fs.writeFileSync(stagedPath, stagedBytes, { flag: 'wx', mode: 0o600 });
+  } finally { key.fill(0); stagedBytes?.fill(0); }
+  const before = fingerprint(directory);
+  const stagedIdentity = fs.lstatSync(stagedPath);
+  const savedConfirmation = dialog.showMessageBox;
+  let confirmations = 0;
+  let accept = false;
+  let window;
+  workspace = createPrivateHubWorkspace({ appDirectory: path.join(repository, 'private-gallery'), promptVisible: false });
+  dialog.showMessageBox = async (owner, options) => {
+    assert.equal(owner, window);
+    assert.equal(options.title, 'Finish interrupted password change?');
+    assert.equal(options.message, 'Finish interrupted password change?');
+    assert.deepEqual(options.buttons, ['Finish password change', 'Cancel']);
+    assert.equal(options.defaultId, 1); assert.equal(options.cancelId, 1); assert.equal(options.noLink, true);
+    const text = JSON.stringify(options);
+    for (const secret of [currentPassword, interruptedPassword, sourceDirectory, directory, pendingName]) {
+      assert.equal(text.includes(secret), false, 'The confirmation must not disclose credentials or storage paths.');
+    }
+    confirmations++;
+    return { response: accept ? 0 : 1, checkboxChecked: false };
+  };
+  try {
+    assert.equal(await completeWorkspacePrompt(workspace.open({ directory, isAuthorized: () => true }), currentPassword), 'opened');
+    window = currentWindow(); window.show(); window.focus(); await delay(100);
+    assertPrivateMenu();
+    const isolated = window.webContents.session;
+    await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 48");
+    await evaluate(window, "document.getElementById('protection-button').click(); true");
+    await waitForRenderer(window, "!document.getElementById('auto-lock-minutes').disabled");
+    await evaluate(window, "document.getElementById('change-password-toggle').click(); true");
+    window.setSize(600, 400); await delay(100);
+    await evaluate(window, "document.getElementById('resume-password-submit').scrollIntoView({ block: 'end' }); true");
+    assert.equal(await evaluate(window, `(() => {
+      const panel = document.getElementById('protection-panel').getBoundingClientRect();
+      const button = document.getElementById('resume-password-submit').getBoundingClientRect();
+      return panel.left >= 0 && panel.top >= 0 && panel.right <= innerWidth && panel.bottom <= innerHeight
+        && button.left >= panel.left && button.right <= panel.right
+        && button.top >= panel.top && button.bottom <= panel.bottom && !document.getElementById('resume-password-submit').disabled;
+    })()`), true);
+    const submit = async (old, next) => evaluate(window, `(() => {
+      for (const [id, value] of ${JSON.stringify([['current-password', old], ['new-password', next], ['confirm-password', next]])}) {
+        const input = document.getElementById(id); input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      document.getElementById('resume-password-submit').click();
+      return ['current-password', 'new-password', 'confirm-password'].every(id => document.getElementById(id).value === '');
+    })()`);
+    setStage('password-recovery-wrong-password');
+    assert.equal(await submit(currentPassword, interruptedPassword + ' incorrect'), true);
+    await waitForRenderer(window, "document.getElementById('password-status').textContent.includes('interrupted change is incorrect')");
+    assert.equal(confirmations, 0); assert.deepEqual(fingerprint(directory), before);
+    setStage('password-recovery-cancel');
+    assert.equal(await submit(currentPassword, interruptedPassword), true);
+    await waitForRenderer(window, "document.getElementById('password-status').textContent.includes('left unfinished')");
+    assert.equal(confirmations, 1); assert.deepEqual(fingerprint(directory), before);
+    assert.equal(window.isDestroyed(), false); assertPrivateMenu();
+    setStage('password-recovery-confirm');
+    accept = true;
+    const settled = workspace.settled;
+    assert.equal(await submit(currentPassword, interruptedPassword), true);
+    await settled;
+    assert.equal(confirmations, 2); assert.equal(window.isDestroyed(), true);
+    assert.deepEqual(workspace.status, { state: 'idle', cleanupFailed: false });
+    assert.equal(await isolated.getCacheSize(), 0); assertRestoredMenu();
+    const after = fingerprint(directory);
+    const expected = { ...before, [PRIVATE_HUB_HEADER_FILE]: before[pendingName] }; delete expected[pendingName];
+    assert.deepEqual(after, expected, 'Only the authenticated pending envelope replaces the header; all encrypted records remain byte-identical.');
+    assert.equal(fs.lstatSync(headerPath).ino, stagedIdentity.ino);
+    assert.equal(fs.lstatSync(headerPath).dev, stagedIdentity.dev);
+    assert.equal(fs.existsSync(headerPath + '.bak'), false);
+    assert.deepEqual(fingerprint(sourceDirectory), sourceBefore, 'The original synthetic hub must remain unchanged.');
+    setStage('password-recovery-reopen');
+    assert.equal(await completeWorkspacePrompt(workspace.open({ directory, isAuthorized: () => true }), currentPassword), 'unavailable');
+    assert.equal(await completeWorkspacePrompt(workspace.open({ directory, isAuthorized: () => true }), interruptedPassword), 'opened');
+    window = currentWindow(); assertPrivateMenu(); assert.notEqual(window.webContents.session, isolated);
+    await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 48");
+    assert.equal(await window.webContents.session.getCacheSize(), 0);
+    assert.deepEqual(fingerprint(directory), after);
+    await workspace.cancel(); assertRestoredMenu();
+    await checkpoint('password-change-resumed', { passwordRecoveryCredentialsCleared: true,
+      passwordRecoveryWrongPasswordNoConfirmation: true, passwordRecoveryCancelUnchanged: true,
+      passwordRecoveryDefaultCancel: true, passwordRecoveryCompactFits: true, passwordRecoveryLocked: true,
+      passwordRecoveryAdoptedStagingInode: true, passwordRecoveryRecordsUnchanged: true,
+      passwordRecoverySourceUnchanged: true, passwordRecoveryOldPasswordRejected: true,
+      passwordRecoveryNewPasswordReopened: true, passwordRecoveryFreshPartition: true, passwordRecoveryCacheEmpty: true });
+  } finally { dialog.showMessageBox = savedConfirmation; await workspace.cancel(); }
+}
+
 // This provider is fixture-only memory. It never loads the native addon, uses a
 // real Keychain, prompts for biometrics or claims to verify OS authentication.
 async function syntheticTouchIdControls(directory, password) {
@@ -2503,6 +2618,226 @@ async function videoRefreshAcceptance(password, marker) {
   } finally { releasePublication?.(); dialog.showOpenDialog=oldPicker; PrivateHubSession.prototype.refreshVideo=oldRefresh; }
 }
 
+async function customThumbnailAcceptance(password, marker) {
+  setStage('custom-thumbnail-setup');
+  const directory = path.join(fixture, 'custom-thumbnail-hub');
+  const sourceRoot = path.join(fixture, 'custom-thumbnail-originals');
+  const reviewRoot = path.join(repository, 'tmp/private-png-thumbnail-stage');
+  fs.mkdirSync(sourceRoot); fs.mkdirSync(reviewRoot, { recursive: true });
+  const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+  const fingerprint = folder => Object.fromEntries(fs.readdirSync(folder).sort().map(name =>
+    [name, digest(fs.readFileSync(path.join(folder, name)))]));
+  // The fixtures are created locally: a metadata-bearing JPEG and an RGBA PNG.
+  // PNG construction avoids depending on an encoder that the app does not need.
+  const pngChunk = (type, body) => {
+    const typeBytes = Buffer.from(type, 'ascii');
+    let crc = 0xffffffff;
+    for (const byte of Buffer.concat([typeBytes, body])) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit++) { crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1)); }
+    }
+    const header = Buffer.alloc(8); header.writeUInt32BE(body.length); typeBytes.copy(header, 4);
+    const footer = Buffer.alloc(4); footer.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+    return Buffer.concat([header, body, footer]);
+  };
+  const images = ['jpg', 'png'].map((extension, index) => {
+    const file = path.join(sourceRoot, 'chosen-' + index + '.' + extension);
+    if (extension === 'jpg') {
+      const encoded = spawnSync(getMediaToolPath('ffmpeg'), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
+        '-i', 'color=c=gold:size=64x36', '-frames:v', '1', '-threads', '1', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1'],
+      { cwd: repository, timeout: 15_000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+      assert.equal(encoded.status, 0); validatePrivateJpeg(encoded.stdout, 64, 36);
+      const comment = Buffer.from(marker); const header = Buffer.alloc(4);
+      header.writeUInt16BE(0xfffe, 0); header.writeUInt16BE(comment.length + 2, 2);
+      const jpeg = Buffer.concat([encoded.stdout.subarray(0, 2), header, comment, encoded.stdout.subarray(2)]);
+      try { fs.writeFileSync(file, jpeg); } finally { jpeg.fill(0); comment.fill(0); encoded.stdout.fill(0); }
+    } else {
+      const header = Buffer.alloc(13); header.writeUInt32BE(64, 0); header.writeUInt32BE(36, 4);
+      header[8] = 8; header[9] = 6; // RGBA, 8-bit samples, non-interlaced.
+      const pixels = Buffer.alloc((64 * 4 + 1) * 36);
+      for (let y = 0; y < 36; y++) {
+        for (let x = 0; x < 64; x++) {
+          const position = y * (64 * 4 + 1) + 1 + x * 4;
+          pixels[position] = 128; pixels[position + 2] = 128;
+          pixels[position + 3] = x < 16 ? 0 : x < 24 ? 128 : 255;
+        }
+      }
+      const metadata = Buffer.from('Description\0' + marker);
+      const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+        pngChunk('IHDR', header), pngChunk('tEXt', metadata), pngChunk('IDAT', deflateSync(pixels)), pngChunk('IEND', Buffer.alloc(0))]);
+      try { fs.writeFileSync(file, png); } finally { png.fill(0); pixels.fill(0); metadata.fill(0); }
+    }
+    return file;
+  });
+  const originals = fingerprint(sourceRoot);
+  const original = { ...NewImageElement(), hash: 'custom-thumbnail-video', cleanName: 'Synthetic custom thumbnail video',
+    fileName: 'unavailable.mp4', partialPath: '/', inputSource: 0, fileSize: 123, screens: 3, duration: 42,
+    width: 1920, height: 1080, notes: marker, tags: ['Retained tag'], stars: 4.5, timesPlayed: 7,
+    lastPlayed: 1700000000000, extraSynthetic: { retained: marker } };
+  const catalogue = { addTags: [], removeTags: [], hubName: marker, version: 3, numOfFolders: 1,
+    images: [original], inputDirs: { 0: { path: path.join(fixture, 'missing-custom-thumbnail-video-source'), watch: false } },
+    screenshotSettings: { clipHeight: 144, clipSnippetLength: 1, clipSnippets: 1, fixed: true, height: 144, n: 3 },
+    extraSynthetic: { retained: marker } };
+  const catalogueBytes = Buffer.from(JSON.stringify(catalogue));
+  const reference = await PrivateHubStore.open(path.join(fixture, 'private-hub'), password);
+  const previews = new Map();
+  try {
+    for (const kind of ['thumbnail', 'filmstrip', 'clip-poster', 'clip']) {
+      previews.set(kind, await readPrivateHubPreview(reference, kind, 'native-video'));
+    }
+  } finally { await reference.lock(); }
+  const store = await PrivateHubStore.create(directory, password);
+  try {
+    await store.writeRecord('catalogue', catalogueBytes);
+    for (const [kind, bytes] of previews) { await writePrivateHubPreview(store, kind, original.hash, bytes); }
+    const activation = Buffer.from(JSON.stringify({ format: 'theatrum-private-hub-activation', version: 1, hubId: store.hubId }));
+    try { await store.writeNewRecord('session:activation', activation); } finally { activation.fill(0); }
+  } finally { await store.lock(); }
+  const before = fingerprint(directory);
+  const oldPicker = dialog.showOpenDialog;
+  const oldSetThumbnail = PrivateHubSession.prototype.setCustomThumbnail;
+  let mode = 'cancel'; let selected = images[0]; let picks = 0; let imports = 0; let releasePicker;
+  dialog.showOpenDialog = async (owner, options) => {
+    assert.equal(owner, currentWindow());
+    assert.deepEqual(options.properties, ['openFile', 'noResolveAliases', 'dontAddToRecent']);
+    assert.equal(options.securityScopedBookmarks, false);
+    assert.deepEqual(options.filters.flatMap(filter => filter.extensions).sort(), ['jpeg', 'jpg', 'png']);
+    picks++;
+    if (mode === 'hold') { await new Promise(resolve => { releasePicker = resolve; }); }
+    return { canceled: mode === 'cancel', filePaths: mode === 'cancel' ? [] : [selected] };
+  };
+  PrivateHubSession.prototype.setCustomThumbnail = async function(...args) {
+    const result = await oldSetThumbnail.apply(this, args); imports++; return result;
+  };
+  let window; const previewPatterns = [];
+  const ready = () => waitForRenderer(window, "!document.getElementById('choose-thumbnail').disabled && document.getElementById('cancel-regeneration').hidden");
+  const open = async () => {
+    assert.equal(await completeWorkspacePrompt(workspace.open({ directory, isAuthorized: () => true }), password), 'opened');
+    window = currentWindow();
+    await waitForRenderer(window, "document.querySelectorAll('#gallery-grid .video-card').length === 1");
+    await evaluate(window, "document.querySelector('#gallery-grid .video-card').click(); true"); await ready();
+    await waitForRenderer(window, "document.querySelector('#gallery-grid .video-card img')?.naturalWidth === 256 && document.getElementById('detail-poster').naturalWidth === 256");
+  };
+  const displayedColour = (horizontalFraction = 0.5) => evaluate(window, `(() => { const image=document.querySelector('#gallery-grid .video-card img');
+    const canvas=document.createElement('canvas'); canvas.width=1; canvas.height=1; const context=canvas.getContext('2d');
+    context.drawImage(image,Math.floor(image.naturalWidth*${horizontalFraction}),Math.floor(image.naturalHeight/2),1,1,0,0,1,1);
+    return Array.from(context.getImageData(0,0,1,1).data); })()`);
+  const purpleDisplayed = async () => {
+    const pixel = await displayedColour(); assert.ok(pixel[0] > 100 && pixel[1] < 30 && pixel[2] > 100);
+    const transparent = await displayedColour(8 / 64);
+    assert.ok(transparent.slice(0, 3).every(channel => channel < 12) && transparent[3] === 255,
+      'Transparent PNG pixels must be flattened onto black, without exposing hidden RGB.');
+    const translucent = await displayedColour(20 / 64);
+    assert.ok(translucent[0] > 52 && translucent[0] < 76 && translucent[1] < 12
+      && translucent[2] > 52 && translucent[2] < 76 && translucent[3] === 255,
+    'Partially transparent PNG pixels must be composited over black.');
+  };
+  const inspect = async (copy = false) => {
+    const stored = await PrivateHubStore.open(directory, password);
+    try {
+      const currentCatalogue = await stored.readRecord('catalogue');
+      try { assert.deepEqual(currentCatalogue, catalogueBytes, 'Choosing a thumbnail must preserve the exact raw catalogue.'); }
+      finally { currentCatalogue.fill(0); }
+      for (const [kind, expected] of previews) {
+        const bytes = await readPrivateHubPreview(stored, kind, original.hash);
+        try {
+          if (kind === 'thumbnail') {
+            validatePrivateJpeg(bytes, 256, 144); assert.notDeepEqual(bytes, expected);
+            assert.equal(bytes.includes(Buffer.from(marker)), false, 'Custom image metadata must be stripped.');
+            previewPatterns.push(bytes.toString('base64'));
+          } else { assert.deepEqual(bytes, expected, 'Choosing a thumbnail must preserve other preview bytes.'); }
+        } finally { bytes.fill(0); }
+      }
+      if (copy) {
+        const destination = path.join(fixture, 'custom-thumbnail-plaintext-copy');
+        const { exportPrivateHubToPlaintext } = require('./private-hub-plaintext-export.ts');
+        const exported = await exportPrivateHubToPlaintext(stored, { destinationDirectory: destination, assertSourceQuiescent: () => {} });
+        assert.equal(exported.previewCount, 4);
+        const copiedCatalogue = fs.readFileSync(path.join(destination, marker + '.scaena'));
+        try { assert.deepEqual(copiedCatalogue, catalogueBytes); } finally { copiedCatalogue.fill(0); }
+        const copied = fs.readFileSync(path.join(destination, 'vha-' + marker, 'thumbnails', original.hash + '.jpg'));
+        try { assert.equal(copied.toString('base64'), previewPatterns.at(-1)); } finally { copied.fill(0); }
+        fs.writeFileSync(path.join(fixture, 'custom-thumbnail-expected.json'), JSON.stringify({
+          catalogue: digest(catalogueBytes), thumbnail: digest(Buffer.from(previewPatterns.at(-1), 'base64')),
+          filmstrip: digest(previews.get('filmstrip')), poster: digest(previews.get('clip-poster')), clip: digest(previews.get('clip')),
+        }));
+      }
+    } finally { await stored.lock(); }
+  };
+  try {
+    await open();
+    const sources = await evaluate(window, 'window.privateGallery.sources()');
+    assert.equal(sources.items[0].connected, false);
+    await evaluate(window, "document.getElementById('toggle-filmstrip').click(); true");
+    await waitForRenderer(window, "document.getElementById('detail-filmstrip').naturalWidth === 768 && !document.getElementById('detail-filmstrip').hidden");
+    const oldMedia = await evaluate(window, `({ thumbnail: document.querySelector('#gallery-grid .video-card img').currentSrc,
+      filmstrip: document.getElementById('detail-filmstrip').currentSrc, poster: document.getElementById('detail-poster').currentSrc })`);
+    setStage('custom-thumbnail-picker-cancel');
+    await evaluate(window, "document.getElementById('choose-thumbnail').click(); true"); await ready();
+    assert.equal(picks, 1); assert.equal(imports, 0); assert.deepEqual(fingerprint(directory), before);
+    const draft = marker + ' unsaved custom thumbnail';
+    await evaluate(window, `(() => { const el=document.getElementById('details-notes'); el.value=${JSON.stringify(draft)};
+      el.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+    setStage('custom-thumbnail-jpeg'); mode = 'choose';
+    await evaluate(window, "document.getElementById('choose-thumbnail').click(); true"); await ready();
+    assert.equal(await evaluate(window, "document.getElementById('generation-status').textContent"), 'Thumbnail updated.');
+    assert.equal(imports, 1);
+    await waitForRenderer(window, `document.querySelector('#gallery-grid .video-card img')?.naturalWidth === 256 && document.querySelector('#gallery-grid .video-card img').currentSrc !== ${JSON.stringify(oldMedia.thumbnail)}`);
+    const goldPixel = await displayedColour(); assert.ok(goldPixel[0]>220 && goldPixel[1]>150 && goldPixel[2]<30);
+    assert.equal(await evaluate(window, "document.getElementById('details-notes').value"), draft);
+    assert.equal(await evaluate(window, "document.getElementById('save-details').disabled"), false);
+    assert.deepEqual(await evaluate(window, `({ filmstrip: document.getElementById('detail-filmstrip').currentSrc,
+      poster: document.getElementById('detail-poster').currentSrc })`), { filmstrip: oldMedia.filmstrip, poster: oldMedia.poster });
+    const rendererText = await evaluate(window, "document.body.textContent");
+    assert.ok(!rendererText.includes(sourceRoot) && !rendererText.includes(images[0]));
+    window.setSize(600, 400); window.show(); await delay(100);
+    await evaluate(window, "document.getElementById('choose-thumbnail').scrollIntoView({block:'center'}); true");
+    await evaluate(window, "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    assert.equal(await evaluate(window, `(() => { const el=document.getElementById('choose-thumbnail'); const r=el.getBoundingClientRect();
+      return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight && el.contains(document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2)); })()`), true);
+    fs.writeFileSync(path.join(reviewRoot, 'compact-custom-thumbnail.png'), (await window.webContents.capturePage()).toPNG());
+    window.setSize(1200, 800);
+    await workspace.cancel(); assertRestoredMenu(); await inspect();
+    setStage('custom-thumbnail-png'); await open();
+    assert.equal(await evaluate(window, "document.getElementById('details-notes').value"), marker);
+    const firstUrl = await evaluate(window, "document.querySelector('#gallery-grid .video-card img').currentSrc");
+    selected = images[1];
+    await evaluate(window, "document.getElementById('choose-thumbnail').click(); true"); await ready();
+    assert.equal(await evaluate(window, "document.getElementById('generation-status').textContent"), 'Thumbnail updated.');
+    assert.equal(imports, 2);
+    await waitForRenderer(window, `document.querySelector('#gallery-grid .video-card img')?.naturalWidth === 256 && document.querySelector('#gallery-grid .video-card img').currentSrc !== ${JSON.stringify(firstUrl)}`);
+    await purpleDisplayed();
+    const afterReplacement = fingerprint(directory);
+    setStage('custom-thumbnail-lock-picker'); mode = 'hold';
+    await evaluate(window, "document.getElementById('choose-thumbnail').click(); true");
+    for (let attempt = 0; attempt < 500 && !releasePicker; attempt++) { await delay(10); }
+    assert.equal(typeof releasePicker, 'function');
+    const settled = workspace.settled; let finished = false; void settled.then(() => { finished = true; });
+    void evaluate(window, "document.getElementById('lock-hub').click(); true").catch(() => undefined);
+    await delay(30); assert.equal(finished, false);
+    releasePicker(); releasePicker = undefined; await settled;
+    assert.equal(window.isDestroyed(), true); assertRestoredMenu();
+    assert.equal(picks, 4); assert.equal(imports, 2);
+    assert.deepEqual(fingerprint(directory), afterReplacement); assert.deepEqual(fingerprint(sourceRoot), originals);
+    await inspect(true); assert.notEqual(previewPatterns[0], previewPatterns[1]);
+    setStage('custom-thumbnail-reopen'); await open(); await purpleDisplayed();
+    assert.equal(await evaluate(window, "document.getElementById('details-notes').value"), marker);
+    assert.equal((await evaluate(window, 'window.privateGallery.sources()')).items[0].connected, false);
+    await workspace.cancel(); assertRestoredMenu();
+    await checkpoint('custom-thumbnail-saved', { thumbnailPickerCancelledNoWrite: true, thumbnailJpegDecoded: true,
+      thumbnailReplacementDecoded: true, thumbnailPngDecoded: true, thumbnailPngTransparencyFlattened: true, thumbnailDraftPreserved: true, thumbnailMetadataStripped: true,
+      thumbnailOtherPreviewsPreserved: true, thumbnailCatalogueByteIdentical: true, thumbnailOriginalsUnchanged: true,
+      thumbnailPathsMainOnly: true, thumbnailNoSourceConnection: true, thumbnailCompactFits: true,
+      thumbnailLockDrainedPicker: true, thumbnailLateChoiceRefused: true, thumbnailReopened: true,
+      thumbnailPlaintextCopyCurrent: true }, previewPatterns);
+  } catch (error) {
+    fs.writeFileSync(path.join(reviewRoot, 'native-failure.txt'), String(error?.stack || error)); throw error;
+  } finally {
+    releasePicker?.(); dialog.showOpenDialog = oldPicker; PrivateHubSession.prototype.setCustomThumbnail = oldSetThumbnail;
+    catalogueBytes.fill(0); for (const bytes of previews.values()) { bytes.fill(0); }
+  }
+}
+
 async function makeHub(password, marker) {
   const directory = path.join(fixture, 'private-hub');
   if (phase === 'initial') {
@@ -2678,9 +3013,23 @@ async function run() {
         try { validatePrivateJpeg(strip, 768, 144); } finally { strip.fill(0); }
       } finally { catalogueBytes.fill(0); }
     } finally { await refreshedStore.lock(); }
+    const customStore = await PrivateHubStore.open(path.join(fixture, 'custom-thumbnail-hub'), newPassword);
+    try {
+      const expected = JSON.parse(fs.readFileSync(path.join(fixture, 'custom-thumbnail-expected.json'), 'utf8'));
+      const currentCatalogue = await customStore.readRecord('catalogue');
+      try { assert.equal(createHash('sha256').update(currentCatalogue).digest('hex'), expected.catalogue); }
+      finally { currentCatalogue.fill(0); }
+      for (const [kind, name] of [['thumbnail', 'thumbnail'], ['filmstrip', 'filmstrip'], ['clip-poster', 'poster'], ['clip', 'clip']]) {
+        const bytes = await readPrivateHubPreview(customStore, kind, 'custom-thumbnail-video');
+        try {
+          assert.equal(createHash('sha256').update(bytes).digest('hex'), expected[name]);
+          if (kind === 'thumbnail') { validatePrivateJpeg(bytes, 256, 144); assert.equal(bytes.includes(Buffer.from(marker)), false); }
+        } finally { bytes.fill(0); }
+      }
+    } finally { await customStore.lock(); }
     await checkpoint('restarted', { fresh, persistent: isolated.isPersistent(), cacheBytes: await isolated.getCacheSize(),
       savedMetadataPersisted: true, generatedSetPersisted: true, protectionPersisted: true, changedPasswordPersisted: true,
-      videoRefreshPersisted: true, unrelatedMetadataPreserved: true, playbackHistoryResetPersisted: true, playbackHistoryDisabledPersisted: true, ratingPersisted: true, sourceScanImportsPersisted: true, sourceRelocationPersisted: true, importedVideoPersisted: true, addedSourcePersisted: true, batchImportsPersisted: true, cancelledBatchKnownCompletionPersisted: true, defaultRequests });
+      customThumbnailPersisted: true, videoRefreshPersisted: true, unrelatedMetadataPreserved: true, playbackHistoryResetPersisted: true, playbackHistoryDisabledPersisted: true, ratingPersisted: true, sourceScanImportsPersisted: true, sourceRelocationPersisted: true, importedVideoPersisted: true, addedSourcePersisted: true, batchImportsPersisted: true, cancelledBatchKnownCompletionPersisted: true, defaultRequests });
     await capsule.close();
     await hub.close();
     assert.equal(capsule.status.cleanupFailed, false);
@@ -2866,8 +3215,10 @@ async function run() {
   assert.equal(capsule.status.cleanupFailed, false);
   assertRestoredMenu();
   await workspaceOpening(opened.directory, password, newPassword, marker);
+  await passwordRecoveryAcceptance(opened.directory, newPassword, password);
   await sourceCheckAcceptance(newPassword, marker);
   await videoRefreshAcceptance(newPassword, marker);
+  await customThumbnailAcceptance(newPassword, marker);
   await syntheticTouchIdControls(opened.directory, newPassword);
   await send({ type: 'complete' });
   app.quit();
