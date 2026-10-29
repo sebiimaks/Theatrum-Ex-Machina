@@ -42,6 +42,8 @@ Test packages are not production releases.
 
 The manual [Linux Debian package workflow](https://github.com/sebiimaks/Theatrum-Ex-Machina/actions/workflows/linux-deb.yml) builds natively on GitHub's Ubuntu 22.04 AMD64 runner. It compiles the reviewed FFmpeg and x264 sources, runs the static and automated test suites, builds and installs the `.deb`, verifies architecture and linkage, checks application contents and desktop integration, validates licensing and corresponding source, exercises media extraction, starts the packaged app under Xvfb, and verifies SHA-256 checksums.
 
+The workflow also installs the package in fresh Debian 12 (Bookworm) and Debian 13 (Trixie) containers. It checks library linkage using only the package’s declared dependencies before adding Xvfb for a startup check. These container startup checks disable Chromium sandboxing and GPU acceleration; they do not replace normal desktop testing.
+
 The expiring Actions artifact contains the `.deb`, its platform-qualified media-source archive, and `SHA256SUMS-linux-amd64`. The workflow has read-only repository permissions and cannot publish a GitHub release. Its output is a CI test build, not an official release. Desktop installation, catalogue opening, scanning, playback, Trash, network volumes, and `.scaena` file association still require testing on a normal Debian/Ubuntu desktop before public distribution.
 
 For a local development package, run `npm run electron:linux:test` on an AMD64 Linux host. A designated native Linux AMD64 production worktree can run `npm run electron:linux:release` for the release package and verification path.

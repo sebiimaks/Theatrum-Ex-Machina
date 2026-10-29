@@ -97,6 +97,20 @@ jobs:
           test "$(dpkg-query --show --showformat='${Version}' theatrum-ex-machina)" = "${release_version}"
           test "$(dpkg-query --show --showformat='${Architecture}' theatrum-ex-machina)" = 'amd64'
 
+      - name: Verify clean Debian 12 and 13 installations
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_version="$(node -p "require('./package.json').version")"
+          for suite in bookworm trixie; do
+            docker run --rm --platform linux/amd64 --shm-size=256m \
+              --volume "$PWD/release:/packages:ro" \
+              --volume "$PWD/bin/verify-debian-install.sh:/verify-debian-install.sh:ro" \
+              "debian:${suite}-slim" \
+              sh /verify-debian-install.sh \
+              "/packages/theatrum-ex-machina-v${release_version}-linux-amd64.deb"
+          done
+
       - name: Create and verify checksums
         id: artifacts
         shell: bash

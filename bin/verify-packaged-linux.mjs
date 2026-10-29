@@ -755,7 +755,12 @@ function verifyDebianMetadata(debPath) {
   assert.match(description, /^Personal fork of Video Hub App$/mu);
   assert.match(description, /Theatrum Ex Machina is a personal fork of Video Hub App/u);
   const dependencies = field('Depends');
-  for (const expectedDependency of ['libnss3', 'libxss1', 'xdg-utils']) {
+  assert.match(
+    dependencies,
+    /(?:^|,\s*)libasound2t64\s*\|\s*libasound2(?:\s*,|$)/u,
+    'Debian metadata must supply ALSA on both Debian 12 and newer t64 systems.',
+  );
+  for (const expectedDependency of ['libnss3', 'libxss1', 'xdg-utils', 'libgbm1']) {
     assert.match(
       dependencies,
       new RegExp(`(?:^|[, ])${expectedDependency}(?:\\s|,|$)`, 'u'),

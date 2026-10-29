@@ -97,7 +97,13 @@
   "deb": {
     "packageName": "theatrum-ex-machina",
     "packageCategory": "video",
-    "priority": "optional"
+    "priority": "optional",
+    "fpm": [
+      "--depends",
+      "libasound2t64 | libasound2",
+      "--depends",
+      "libgbm1"
+    ]
   },
   "nsis": {
     "oneClick": false,
