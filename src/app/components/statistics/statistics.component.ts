@@ -67,7 +67,6 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
 
   readonly inputFolderChosen = input<Observable<string>>();
   readonly numberScreenshotsDeleted = input<Observable<number>>();
-  readonly oldFolderReconnected = input<Observable<{ source: number; path: string; }>>();
 
   eventSubscriptionMap: Map<string, Subscription> = new Map();
 
@@ -118,12 +117,6 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
     this.eventSubscriptionMap.set('inputFolder', this.inputFolderChosen().subscribe((folderPath: string) => {
       if (folderPath) { // first emit from subscription is `undefined`
         this.handleInputFolderChosen(folderPath);
-      }
-    }));
-
-    this.eventSubscriptionMap.set('folderReconnect', this.oldFolderReconnected().subscribe((data) => {
-      if (data) { // first emit from subscription is `undefined`
-        this.handleOldFolderReconnected(data.source, data.path);
       }
     }));
 
@@ -194,35 +187,6 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
       }, 3000);
 
     }, 1000); // make sure it doesn't appear instantly -- feels like an error if it happens to quickly :P
-  }
-
-  /**
-   * Handle when old folder reconnects
-   * @param sourceIndex
-   * @param newPath
-   */
-  handleOldFolderReconnected(sourceIndex: number, newPath: string) {
-    console.log('NEW FOLDER CHOSEN !!!');
-    console.log(sourceIndex);
-    console.log(newPath);
-    this.inputFolders()[sourceIndex] = {
-      ...this.inputFolders()[sourceIndex],
-      path: newPath,
-      watch: false,
-    };
-    this.sourceFolderService.clearSourceState(sourceIndex);
-    this.sourceFolderService.sourceFolderConnected[sourceIndex] = false;
-    this.finalArrayNeedsSaving.emit(true);
-    this.electronService.ipcRenderer.send(
-      'configure-source-folder',
-      sourceIndex,
-      newPath,
-      true,
-      this.appState().generatePreviewsOnFolderAddition,
-    );
-    setTimeout(() => {
-      this.cd.detectChanges();
-    }, 1);
   }
 
   /**
@@ -466,6 +430,16 @@ export class StatisticsComponent implements DoCheck, OnInit, OnDestroy {
     setTimeout(() => {
       this.cd.detectChanges(); // to update template whether to show "Rescan" or not
     }, 1);
+  }
+
+  cancelFolderScan(target: FolderScopeTarget): void {
+    const sourcePath = this.sourceFolderService.selectedSourceFolder[target.sourceIndex]?.path;
+    if (!sourcePath || !this.folderScopeIsScanning(target)) {
+      return;
+    }
+    this.electronService.ipcRenderer.send(
+      'cancel-source-folder-scan', target.sourceIndex, sourcePath, target.relativePath,
+    );
   }
 
   /**

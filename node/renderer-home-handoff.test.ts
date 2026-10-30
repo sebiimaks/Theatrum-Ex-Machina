@@ -358,6 +358,10 @@ test('ordinary workspace handback clears drained progress while retaining catalo
   const directoryRevision = h.sourceFolders.getDiscoveredDirectoryRevision();
   h.sourceFolders.currentlyScanning.set(0, true);
   h.sourceFolders.setActiveScanScope(0, 'Birds');
+  h.sourceFolders.scanProgress.set(0, {
+    sourceIndex: 0, sourcePath: '/synthetic/media', relativeScope: 'Birds',
+    phase: 'validating', completed: 4, total: 10,
+  });
   const sources = h.sourceFolders.selectedSourceFolder;
   const connected = h.sourceFolders.sourceFolderConnected;
   Object.assign(h.home, {
@@ -376,6 +380,7 @@ test('ordinary workspace handback clears drained progress while retaining catalo
   h.emit('normal-workspace-resumed');
   assert.equal(h.home.importStage, 'extracting', 'even progress-only events wait for handback');
   assert.equal(h.sourceFolders.currentlyScanning.get(0), true);
+  assert.equal(h.sourceFolders.scanProgress.get(0)?.completed, 4, 'scan progress stays frozen until handback');
   h.release(false, otherId);
   assert.equal(h.home.thumbnailRegenerationActive, true);
   h.release(false);
@@ -387,6 +392,7 @@ test('ordinary workspace handback clears drained progress while retaining catalo
   assert.equal(h.home.timeExtractionRemaining, undefined);
   assert.equal(h.home.allFinishedScanning, true);
   assert.equal(h.sourceFolders.currentlyScanning.size, 0);
+  assert.equal(h.sourceFolders.scanProgress.size, 0);
   assert.equal(h.sourceFolders.getActiveScanScope(0), undefined);
   assert.equal(h.home.thumbnailRegenerationActive, false);
   assert.equal(h.home.thumbnailRegenerationStartedAt, 0);

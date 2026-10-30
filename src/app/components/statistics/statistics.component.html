@@ -241,9 +241,21 @@
           >
             @if (folderScopeIsScanning(target)) {
               {{ 'STATISTICS.scanningFolder' | translate }}
+              @if (sourceFolderService.scanProgress.get(sourceIndex); as progress) {
+                <span role="status" aria-live="polite">
+                  {{ progress.completed }}@if (progress.total !== undefined) { / {{ progress.total }} }
+                  {{ (progress.phase === 'discovering' ? 'STATISTICS.scanDirectories' : 'STATISTICS.files') | translate }}
+                </span>
+              }
             } @else {
               {{ 'STATISTICS.rescanFolder' | translate }}
             }
+          </button>
+        }
+
+        @if (!catalogueReadOnly() && folderScopeIsScanning(target) && !item.value.watch) {
+          <button type="button" class="folder-text-action" (click)="cancelFolderScan(target)">
+            {{ 'STATISTICS.cancelScan' | translate }}
           </button>
         }
 

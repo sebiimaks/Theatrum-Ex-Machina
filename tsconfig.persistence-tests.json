@@ -230,6 +230,15 @@
     "node/private-touch-id.test.ts",
     "node/private-hub-touch-id.test.ts",
     "node/private-hub-touch-id-session.test.ts",
-    "node/theatrum-protocol.test.ts"
+    "node/theatrum-protocol.test.ts",
+    "node/source-folder-relink.ts",
+    "node/source-folder-relink.test.ts",
+    "node/source-scan-validation.ts",
+    "node/source-scan-validation.test.ts",
+    "node/source-folder-cache.ts",
+    "interfaces/source-folder-scan.ts",
+    "node/source-folder-reconnect-ipc.test.ts",
+    "node/source-scan-io.ts",
+    "node/source-work-lifecycle.ts"
   ]
 }

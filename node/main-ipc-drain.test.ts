@@ -1,5 +1,6 @@
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
+import { promises as nativeFs } from 'node:fs';
 import * as path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { normalOperationScope } from './normal-operation-scope';
@@ -87,8 +88,10 @@ async function fixture(t: TestContext) {
 
 for (const channel of ['choose-input', 'choose-output', 'reconnect-this-folder', 'select-default-video-player']) {
   test(`${channel} holds the drain until its native dialog returns and grants no late authority`, async t => {
-    const f = await fixture(t); const dialog = deferred<any>(); openDialog = () => dialog.promise;
+    const f = await fixture(t); const dialog = deferred<any>(); const entered = deferred();
+    openDialog = () => { entered.resolve(); return dialog.promise; };
     const running = f.on.get(channel)!(f.event, 0);
+    await entered.promise;
     assert.equal(nativeCalls, 1); assert.equal(normalOperationScope.pendingCount, 1);
     const draining = normalOperationScope.seal(); let drained = false;
     void draining.then(() => { drained = true; });
@@ -180,3 +183,47 @@ test('a current native selection still grants its explicit source and wizard out
   assert.equal(GLOBALS.pendingOutputDirectorySelections.has(f.directory), true);
   assert.deepEqual(f.messages, [['input-folder-chosen', f.directory]]);
 });
+
+for (const stage of ['catalogue', 'source'] as const) {
+  test(`timed-out reconnect ${stage} I/O remains in the private-transition drain until native completion`, async t => {
+    const f = await fixture(t);
+    const replacement = path.join(f.directory, 'replacement'); await fs.mkdir(replacement);
+    const cataloguePath = GLOBALS.currentlyOpenVhaFile;
+    const originalSource = GLOBALS.selectedSourceFolders[0];
+    const originalAuthority = GLOBALS.authorizedCatalogueMediaLocations;
+    const entered = deferred(); const completing = deferred<string>();
+    const heldPath = stage === 'catalogue' ? cataloguePath : replacement;
+    const realpath = nativeFs.realpath.bind(nativeFs);
+    const stat = nativeFs.stat.bind(nativeFs);
+    let held = false; let stats = 0;
+    t.mock.method(nativeFs, 'realpath', (async (target: string) => {
+      if (!held && target === heldPath) {
+        held = true; entered.resolve(); return completing.promise;
+      }
+      return realpath(target);
+    }) as typeof nativeFs.realpath);
+    t.mock.method(nativeFs, 'stat', (async (target: string) => {
+      stats++; return stat(target);
+    }) as typeof nativeFs.stat);
+    openDialog = async () => ({ canceled: false, filePaths: [replacement] });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const running = f.on.get('reconnect-this-folder')!(f.event, 0);
+    await entered.promise;
+    t.mock.timers.tick(30_001);
+    await running;
+    assert.equal(normalOperationScope.pendingCount, 1, 'Native I/O outlives the timed-out IPC request');
+    assert.equal(f.messages.length, 1);
+    assert.equal(f.messages[0][0], 'show-msg-dialog');
+    assert.match(String(f.messages[0][2]), /did not respond in time/);
+    const draining = normalOperationScope.seal(); let drained = false;
+    void draining.then(() => { drained = true; });
+    await turn(); assert.equal(drained, false);
+    completing.resolve(heldPath);
+    normalOperationScope.assertDrained(await draining);
+    assert.equal(stats, 0, 'Revocation prevents subsequent root checks');
+    assert.equal(GLOBALS.selectedSourceFolders[0], originalSource);
+    assert.equal(GLOBALS.authorizedCatalogueMediaLocations, originalAuthority);
+    assert.equal(GLOBALS.authorizedSourceFolderPaths.has(replacement), false);
+    assert.equal(f.messages.length, 1, 'Late completion cannot reply or grant authority');
+  });
+}

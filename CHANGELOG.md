@@ -7,6 +7,12 @@ Changes to Theatrum Ex Machina after the [Video Hub App baseline](https://github
 `v1.0.0` begins the independent Theatrum Ex Machina version line. Earlier entries preserve the fork's pre-1.0 development history.
 
 <details>
+<summary><strong>Unreleased — source reconnection and network scanning</strong></summary>
+<p>Reconnecting a moved source now changes its path without scanning media or regenerating previews. Existing catalogue metadata, per-video filmstrip counts and media access restrictions are retained. An explicit rescan reuses the updated source paths.</p>
+<p>Manual scans use bounded asynchronous network checks, show progress and support cancellation. Incomplete or cancelled traversals cannot publish a missing-file snapshot, and late work from a previous source location is rejected.</p>
+</details>
+
+<details>
 <summary><strong><a href="https://github.com/sebiimaks/Theatrum-Ex-Machina/releases/tag/v2.0.1">v2.0.1</a> — 26 September 2026</strong></summary>
 
 <details>

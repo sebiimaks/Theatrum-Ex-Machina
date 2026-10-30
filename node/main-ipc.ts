@@ -8,6 +8,7 @@ const spawn = require('child_process').spawn;
 import { GLOBALS } from './main-globals';
 import { requireNormalCatalogueStorage } from './catalogue-storage';
 import { normalOperationScope, type NormalOperationContext } from './normal-operation-scope';
+import { reconnectSourceFolder, resolveReconnectSourceRoot } from './source-folder-relink';
 import { ImageElement, FinalObject } from '../interfaces/final-object.interface';
 import { SettingsObject } from '../interfaces/settings-object.interface';
 import {
@@ -24,6 +25,8 @@ import {
 import type { PreviewCleanupBarrier } from './main-extract';
 import {
   closeWatcher,
+  cancelSourceFolderScan,
+  rebaseSourceFolderCaches,
   cancelFolderThumbnailRegeneration,
   cancelThumbnailRegeneration,
   startWatcher,
@@ -144,6 +147,7 @@ export function setUpIpcMessages(
     'add-missing-thumbnails',
     'clean-old-thumbnails',
     'configure-source-folder',
+    'cancel-source-folder-scan',
     'delete-video-file',
     'reconnect-this-folder',
     'regenerate-folder-thumbnails',
@@ -1346,22 +1350,75 @@ export function setUpIpcMessages(
    * Summon system modal to choose NEW input directory for a now-disconnected folder
    * where all the videos are located
    */
-  trustedIpcOn('reconnect-this-folder', (event, inputSource: number) => {
-    return showOpenDialog({
-      properties: ['openDirectory']
-    }).then(result => {
-      const inputDirPath: string = result.filePaths[0];
-      if (inputDirPath) {
-        const selectedDirectory = rememberNativeDirectorySelection(
-          inputDirPath,
-          GLOBALS.pendingInputDirectorySelections,
-          'Source folder',
-        );
-        event.sender.send('old-folder-reconnected', inputSource, selectedDirectory);
+  const pendingSourceReconnects = new Set<string>();
+  trustedIpcOn('reconnect-this-folder', async (event, inputSource: number) => {
+    const generation = GLOBALS.catalogueSessionGeneration;
+    const requestKey = `${generation}:${inputSource}`;
+    if (pendingSourceReconnects.has(requestKey)) {
+      return;
+    }
+    pendingSourceReconnects.add(requestKey);
+    try {
+      const result = await reconnectSourceFolder(inputSource, GLOBALS, {
+        chooseDirectory: async () => {
+          const selection = await showOpenDialog({ properties: ['openDirectory'] });
+          return selection.canceled ? undefined : selection.filePaths[0];
+        },
+        // Track the real native operation independently of the helper's timeout.
+        // A timed-out UI request must still drain before a private hub can open.
+        resolveCatalogueIdentity: cataloguePath => normalOperationScope.run(async () => {
+          assertOperationCurrent();
+          const canonical = await fs.promises.realpath(cataloguePath);
+          assertOperationCurrent();
+          return canonical;
+        }),
+        resolveRoot: selectedPath => normalOperationScope.run(() => (
+          resolveReconnectSourceRoot(selectedPath, assertOperationCurrent)
+        )),
+        rememberAccess: (cataloguePath, sourcePath) => {
+          rememberSourceAccessDecision(GLOBALS.settingsPath, cataloguePath, sourcePath, true);
+        },
+        stopSource: closeWatcher,
+        rebaseSource: rebaseSourceFolderCaches,
+        isBusy: () => !operationIsCurrent() || isThumbnailRegenerationActive()
+          || thumbnailCleanupInProgress || activeCustomThumbnailReplacements > 0,
+      });
+      if (result.status === 'reconnected'
+        && generation === GLOBALS.catalogueSessionGeneration
+        && GLOBALS.currentlyOpenVhaFile === result.cataloguePath
+        && GLOBALS.selectedSourceFolders[result.sourceIndex]?.path === result.newPath
+        && !event.sender.isDestroyed()) {
+        event.sender.send('old-folder-reconnected', result.sourceIndex, result.newPath, result.oldPath, result.cataloguePath);
+        event.sender.send('directory-now-connected', result.sourceIndex, result.newPath, false);
       }
-    }).catch(error => {
-      warn('Unable to choose a replacement source folder:', error);
-    });
+    } catch (error) {
+      if (generation === GLOBALS.catalogueSessionGeneration && !event.sender.isDestroyed()) {
+        event.sender.send(
+          'show-msg-dialog', 'Unable to reconnect source folder',
+          error instanceof Error ? error.message : 'The folder could not be reconnected.', '',
+        );
+      }
+    } finally {
+      pendingSourceReconnects.delete(requestKey);
+    }
+  });
+
+  trustedIpcOn('cancel-source-folder-scan', (
+    event, sourceIndex: number, sourcePath: unknown, relativeScope: unknown,
+  ) => {
+    if (!Number.isSafeInteger(sourceIndex) || sourceIndex < 0
+      || typeof sourcePath !== 'string'
+      || GLOBALS.selectedSourceFolders[sourceIndex]?.path !== sourcePath) {
+      return;
+    }
+    try {
+      const scope = normalizeSourceFolderRelativePath(relativeScope);
+      if (cancelSourceFolderScan(sourceIndex, scope)) {
+        event.sender.send('folder-scan-cancelled', sourceIndex, sourcePath, scope);
+      }
+    } catch {
+      // Malformed or obsolete cancellation cannot affect another source scan.
+    }
   });
 
   /**
@@ -1466,13 +1523,13 @@ export function setUpIpcMessages(
    */
   trustedIpcOn(
     'configure-source-folder',
-    (
+    async (
       event,
       sourceIndex: number,
       absoluteRoot: unknown,
       scanImmediately: unknown,
       generateAutomaticPreviews: unknown = true,
-    ): void => {
+    ): Promise<void> => {
       let normalizedRoot: string;
       try {
         if (!Number.isSafeInteger(sourceIndex) || sourceIndex < 0) {
@@ -1514,7 +1571,7 @@ export function setUpIpcMessages(
 
       if (scanImmediately) {
         try {
-          rescanSourceFolderScope(sourceIndex, '', generateAutomaticPreviews);
+          await rescanSourceFolderScope(sourceIndex, '', generateAutomaticPreviews);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           event.sender.send('folder-scan-failed', sourceIndex, message, '');
@@ -1526,12 +1583,12 @@ export function setUpIpcMessages(
   /** Recursively rescan one validated root-relative source subtree. */
   trustedIpcOn(
     'rescan-source-folder-scope',
-    (
+    async (
       event,
       sourceIndex: number,
       relativePath: unknown,
       generateAutomaticPreviews: unknown = true,
-    ): void => {
+    ): Promise<void> => {
       let reportedScope = '';
       try {
         if (typeof relativePath !== 'string') {
@@ -1545,12 +1602,7 @@ export function setUpIpcMessages(
         if (!sourceFolder) {
           throw new Error('The source folder is not configured for this catalogue.');
         }
-        requireAuthorizedSourceRoot(
-          sourceFolder.path,
-          configuredSourcePaths(),
-          GLOBALS.authorizedSourceFolderRealPaths,
-        );
-        rescanSourceFolderScope(
+        await rescanSourceFolderScope(
           sourceIndex,
           relativePath,
           generateAutomaticPreviews,

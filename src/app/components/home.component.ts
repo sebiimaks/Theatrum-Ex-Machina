@@ -1,3 +1,4 @@
+import { isSourceFolderScanProgress } from '../../../interfaces/source-folder-scan';
 import type { AfterViewInit, ElementRef, OnDestroy, OnInit } from '@angular/core';
 import { ChangeDetectorRef, NgZone, viewChild } from '@angular/core';
 import { Component, HostListener } from '@angular/core';
@@ -568,7 +569,6 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
   inputSorceChosenBehaviorSubject: BehaviorSubject<string> = new BehaviorSubject(undefined);
   numberScreenshotsDeletedBehaviorSubject: BehaviorSubject<number> = new BehaviorSubject(undefined);
-  oldFolderReconnectedBehaviorSubject: BehaviorSubject<{source: number, path: string}> = new BehaviorSubject(undefined);
   renameFileResponseBehaviorSubject: BehaviorSubject<RenameFileResponse> = new BehaviorSubject(undefined);
   // ========================================================================
   // \/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/
@@ -771,11 +771,25 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       this.numberScreenshotsDeletedBehaviorSubject.next(undefined); // allways remove right away
     });
 
-    // for statistics.component
-    this.electronService.ipcRenderer.on('old-folder-reconnected', (event, sourceIndex: number, newPath: string) => {
-      this.oldFolderReconnectedBehaviorSubject.next({ source: sourceIndex, path: newPath });
-      this.oldFolderReconnectedBehaviorSubject.next(undefined); // allways remove right away
-    });
+    // Apply the main-process acknowledgement even if Settings has been closed.
+    this.electronService.ipcRenderer.on('old-folder-reconnected', (
+      event, sourceIndex: number, newPath: string, oldPath: string, cataloguePath: string,
+    ) => this.zone.run(() => {
+      const source = this.sourceFolderService.selectedSourceFolder[sourceIndex];
+      if (!source || source.path !== oldPath || typeof newPath !== 'string'
+        || typeof cataloguePath !== 'string'
+        || path.normalize(this.appState.currentVhaFile || '') !== path.normalize(cataloguePath)) {
+        return;
+      }
+      this.sourceFolderService.selectedSourceFolder[sourceIndex] = {
+        ...source, path: newPath, watch: false,
+      };
+      this.sourceFolderService.clearSourceState(sourceIndex);
+      this.sourceFolderService.sourceFolderConnected[sourceIndex] = true;
+      this.allFinishedScanning = this.sourceFolderService.areAllFinishedScanning();
+      this.imageElementService.finalArrayNeedsSaving = true;
+      this.resetFinalArrayRef();
+    }));
 
     // Returning Input
     this.electronService.ipcRenderer.on('input-folder-chosen', (event, filePath) => {
@@ -983,6 +997,12 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
         this.sourceFolderService.selectedSourceFolder[sourceIndex].watch = watching;
       }
 
+      // A relink acknowledgement already marks the source connected without
+      // changing any media locations. Duplicate availability events must not
+      // promote alternate locations or otherwise mutate catalogue rows.
+      if (!connectionChanged) {
+        return;
+      }
       let preferredLocationChanged = false;
       this.imageElementService.imageElements.forEach((element: ImageElement) => {
         try {
@@ -1132,6 +1152,23 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       }
     });
 
+    this.electronService.ipcRenderer.on('folder-scan-progress', (event, progress: unknown) => this.zone.run(() => {
+      if (!isSourceFolderScanProgress(progress)
+        || !this.folderScanPathMatches(progress.sourceIndex, progress.sourcePath)
+        || this.sourceFolderService.getActiveScanScope(progress.sourceIndex) !== progress.relativeScope) {
+        return;
+      }
+      this.sourceFolderService.scanProgress.set(progress.sourceIndex, progress);
+    }));
+
+    this.electronService.ipcRenderer.on('folder-scan-cancelled', (
+      event, sourceIndex: number, sourcePath: string, relativeScope: string,
+    ) => this.zone.run(() => {
+      if (this.folderScanPathMatches(sourceIndex, sourcePath)) {
+        this.finishFolderScan(sourceIndex, relativeScope);
+      }
+    }));
+
     this.electronService.ipcRenderer.on('folder-scan-failed', (
       event,
       sourceIndex: number,
@@ -1145,7 +1182,11 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       } catch {
         return;
       }
+      const wasActive = this.sourceFolderService.getActiveScanScope(sourceIndex) === normalizedScope;
       this.finishFolderScan(sourceIndex, normalizedScope);
+      if (wasActive) {
+        this.modalService.openSnackbar(`${this.translate.instant('STATISTICS.scanFailed')} ${message}`);
+      }
     });
 
     this.electronService.ipcRenderer.on('folder-watch-error', (

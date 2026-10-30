@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 
+import type { SourceFolderScanProgress } from '../../../../interfaces/source-folder-scan';
 import type { InputSources } from '../../../../interfaces/final-object.interface';
 import {
   isSourceFolderWithinScope,
@@ -16,6 +17,7 @@ export class SourceFolderService {
   sourceFolderConnected: InputSourceConnected = {};
 
   currentlyScanning: Map<number, boolean> = new Map();
+  readonly scanProgress = new Map<number, SourceFolderScanProgress>();
 
   private readonly activeRelativeScanScopes = new Map<number, string>();
   private readonly discoveredDirectoryPaths = new Map<number, Set<string>>();
@@ -109,6 +111,7 @@ export class SourceFolderService {
   clearActiveScanScope(sourceIndex: number): void {
     if (this.isValidSourceIndex(sourceIndex)) {
       this.activeRelativeScanScopes.delete(sourceIndex);
+      this.scanProgress.delete(sourceIndex);
     }
   }
 
@@ -122,6 +125,7 @@ export class SourceFolderService {
     }
     this.activeRelativeScanScopes.delete(sourceIndex);
     this.currentlyScanning.delete(sourceIndex);
+    this.scanProgress.delete(sourceIndex);
   }
 
   /** Clear transient state when switching catalogues or starting over. */
@@ -132,12 +136,14 @@ export class SourceFolderService {
     this.discoveredDirectoryPaths.clear();
     this.activeRelativeScanScopes.clear();
     this.currentlyScanning.clear();
+    this.scanProgress.clear();
   }
 
   /** A drained private transition stops scans, but retains discovered folders. */
   finishInterruptedScans(): void {
     this.activeRelativeScanScopes.clear();
     this.currentlyScanning.clear();
+    this.scanProgress.clear();
   }
 
   /**

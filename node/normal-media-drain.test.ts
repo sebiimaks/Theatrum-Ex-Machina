@@ -72,6 +72,7 @@ function load() {
     duration: 1, height: 18, screens: 1, missing: false };
   addCatalogueMediaLocationAuthority(globals.authorizedCatalogueMediaLocations, image);
   const metadata = deferred<any>();
+  const metadataStarted = deferred<void>();
   let probes = 0;
   const watcherClose = deferred<void>();
   const watcher = Object.assign(new EventEmitter(), { close: () => watcherClose.promise });
@@ -79,10 +80,10 @@ function load() {
   const nativeProbeChild = new Child();
   let nativeProbeCallback: (error: Error | null, data: string, stderr: string) => void;
   const originalLoad = NodeModule._load;
-  const owned = ['./main-extract', './main-extract-async', './main-support'].map(name => require.resolve(name));
+  const owned = ['./main-extract', './main-extract-async', './main-support', './source-scan-validation', './source-scan-io'].map(name => require.resolve(name));
   owned.forEach(name => delete require.cache[name]);
   NodeModule._load = function(request: string, ...args: unknown[]) {
-    if (request === 'fs') { return filesystem; }
+    if (request === 'fs' || request === 'node:fs') { return filesystem; }
     if (request === 'electron') {
       return { nativeImage: {}, powerSaveBlocker: { start: () => 1, stop: () => undefined } };
     }
@@ -90,7 +91,7 @@ function load() {
     if (request === './media-tool-paths') { return { ffmpegPath: 'unused-test-decoder' }; }
     if (request === './main-support') {
       return {
-        extractMetadataAsync: () => { probes++; return metadata.promise; },
+        extractMetadataAsync: () => { probes++; metadataStarted.resolve(); return metadata.promise; },
         sendCurrentProgress: (...args: unknown[]) => notifications.push(args),
         insertTemporaryFieldsSingle: (value: unknown) => value,
         cleanUpFileName: (value: string) => value,
@@ -113,7 +114,7 @@ function load() {
     queues = require('./main-extract-async');
     support = require(require.resolve('./main-support'));
   } finally { NodeModule._load = originalLoad; }
-  return { directory, source, asset, video, globals, image, notifications, metadata, watcherClose, watcher,
+  return { directory, source, asset, video, globals, image, notifications, metadata, metadataStarted, watcherClose, watcher,
     filesystem, nativeProbeChild,
     finishNativeProbe: (error: Error | null, data = '') => nativeProbeCallback(error, data, ''),
     extraction: extraction!, queues: queues!, support: support!, get probes() { return probes; },
@@ -174,11 +175,12 @@ test('crawler abort cancels queued requests but awaits the actual active filesys
   const callback = (error: NodeJS.ErrnoException, entries: unknown): void => { callbacks.push({ error, entries }); };
   crawler.readdir(c.source, { withFileTypes: true }, callback);
   crawler.readdir(c.source, { withFileTypes: true }, callback);
+  await tick();
   controller.abort();
   const drain = c.queues.beginNormalMediaDrain();
   await remainsPending(drain);
   assert.equal(calls, 1);
-  assert.equal(callbacks.length, 1);
+  assert.equal(callbacks.length, 2, 'Both public waits cancel promptly while native lifetime remains owned');
   finishRead!(null, [{ name: 'late-source-file' }]);
   await drain;
   assert.equal(callbacks.length, 2);
@@ -188,6 +190,7 @@ test('crawler abort cancels queued requests but awaits the actual active filesys
 test('metadata callback without a scan session cannot publish into replacement queues', async () => fixture(async c => {
   let done = 0;
   c.queues.metadataQueueRunner({ dateAdded: 1, fullPath: c.video, inputSource: 0, name: 'video.mp4', partialPath: '/' }, () => { done++; });
+  await c.metadataStarted.promise;
   assert.equal(c.probes, 1);
   c.queues.resetAllQueues();
   c.notifications.length = 0;
@@ -201,6 +204,7 @@ test('metadata callback without a scan session cannot publish into replacement q
 test('drain waits for a metadata worker and suppresses its late publication', async () => fixture(async c => {
   let done = 0;
   c.queues.metadataQueueRunner({ dateAdded: 1, fullPath: c.video, inputSource: 0, name: 'video.mp4', partialPath: '/' }, () => { done++; });
+  await c.metadataStarted.promise;
   assert.equal(c.probes, 1);
   const drain = c.queues.beginNormalMediaDrain();
   c.notifications.length = 0;
@@ -395,4 +399,55 @@ test('metadata source stat callback remains owned after its probe child closes',
   finishStat!(null, fs.statSync(c.video));
   await rejected;
   await drain;
+}));
+
+for (const cancelBeforeTransition of [false, true]) {
+  test(`private transition drains pending scan root IO after ${cancelBeforeTransition ? 'explicit cancellation' : 'admission revocation'}`, async () => fixture(async c => {
+    const started = deferred<void>();
+    const native = deferred<string>();
+    let nativeCalls = 0;
+    c.filesystem.promises.realpath = (): Promise<string> => {
+      nativeCalls++;
+      started.resolve();
+      return native.promise;
+    };
+    const scan = c.queues.rescanSourceFolderScope(0, '', false);
+    await started.promise;
+    if (cancelBeforeTransition) {
+      assert.equal(c.queues.cancelSourceFolderScan(0, ''), true);
+      await scan;
+    }
+    const drain = c.queues.beginNormalMediaDrain();
+    c.notifications.length = 0;
+    await scan;
+    await remainsPending(drain);
+    assert.throws(() => c.queues.resetAllQueues(), /still stopping/);
+    native.resolve(c.source);
+    await drain;
+    assert.equal(nativeCalls, 1, 'Revoked scan cannot start follow-on root or media checks');
+    assert.deepEqual(c.notifications, [], 'No completed snapshot or metadata escapes into the private session');
+  }));
+}
+
+test('metadata validation native IO remains drained after its cancelled worker settles', async () => fixture(async c => {
+  const started = deferred<void>();
+  const native = deferred<string>();
+  let checks = 0;
+  c.filesystem.promises.realpath = (): Promise<string> => {
+    checks++;
+    started.resolve();
+    return native.promise;
+  };
+  let done = 0;
+  c.queues.metadataQueueRunner({ dateAdded: 1, fullPath: c.video, inputSource: 0, name: 'video.mp4', partialPath: '/' }, () => { done++; });
+  await started.promise;
+  const drain = c.queues.beginNormalMediaDrain();
+  c.notifications.length = 0;
+  await remainsPending(drain);
+  native.resolve(c.source);
+  await drain;
+  assert.equal(done, 1);
+  assert.equal(c.probes, 0);
+  assert.equal(checks, 1);
+  assert.deepEqual(c.notifications, []);
 }));
