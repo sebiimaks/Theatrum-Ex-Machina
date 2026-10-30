@@ -62,6 +62,10 @@ Previously approved folders reconnect automatically. **Hide offline** results re
 
 If a source still appears offline, check that it is mounted at the saved location and is readable by your account. The app's folder approval does not replace operating-system or network access permissions.
 
+In development builds, use **Settings → Library & sources → Not connected** to select a source folder’s new location. Choose the folder corresponding to the original source root, with the same relative subfolders. Reconnecting updates the source path and keeps existing videos, notes, tags and previews. It does not scan or regenerate previews, and automatic watching stays off until you enable it.
+
+To look for new or missing videos, select **Rescan** separately. The scan displays progress and offers **Cancel scan**. If the network becomes unavailable, the scan reports an error without treating a partial result as a complete catalogue update.
+
 ## Use Video Hub App catalogues
 
 Open a legacy `.vha2` catalogue to choose between browsing it **read only** and creating an editable `.scaena` duplicate. The original catalogue remains unchanged.

@@ -85,6 +85,15 @@
     "node/normal-operation-scope.test.ts",
     "node/normal-preview-validation.ts",
     "node/normal-preview-validation-worker.ts",
-    "node/normal-preview-validation.test.ts"
+    "node/normal-preview-validation.test.ts",
+    "node/source-folder-relink.ts",
+    "node/source-folder-relink.test.ts",
+    "node/source-scan-validation.ts",
+    "node/source-scan-validation.test.ts",
+    "node/source-folder-cache.ts",
+    "interfaces/source-folder-scan.ts",
+    "node/source-folder-reconnect-ipc.test.ts",
+    "node/source-scan-io.ts",
+    "node/source-work-lifecycle.ts"
   ]
 }
